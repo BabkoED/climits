@@ -19,7 +19,11 @@ jobs:
   macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      # Действия закреплены по хешу коммита, а не по подвижному тегу v4.
+      # Тег можно перевести на другой коммит, и тогда чужой код попадёт
+      # в сборку, которую скачивают люди. Для репозитория, раздающего
+      # бинарники, это единственный вход, который стоит закрыть заранее.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Логика проверяется до сборки: если разбор ответа API сломан,
       # собранное приложение всё равно показывало бы неверные цифры.
@@ -49,18 +53,35 @@ jobs:
       - name: Упаковка
         run: ditto -c -k --sequesterRsrc --keepParent build/climits.app climits.zip
 
-      - uses: actions/upload-artifact@v4
+      # Контрольная сумма в тексте релиза: приложение не подписано
+      # сертификатом Apple, и это единственный способ для человека убедиться,
+      # что он скачал то же, что собрал CI.
+      - name: Контрольная сумма
+        id: sum
+        run: |
+          SUM=$(shasum -a 256 climits.zip | awk '{print $1}')
+          echo "sha256=$SUM" >> "$GITHUB_OUTPUT"
+          echo "SHA-256: $SUM"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: climits-app
           path: climits.zip
 
       - name: Релиз по тегу
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: climits.zip
           body: |
             Скачай `climits.zip`, распакуй, перетащи `climits.app` в «Программы».
+
+            SHA-256 архива:
+            ```
+            ${{ steps.sum.outputs.sha256 }}
+            ```
+            Проверить у себя: `shasum -a 256 climits.zip`
+
 
             При первом запуске macOS скажет, что разработчик не подтверждён -
             это ожидаемо: приложение не подписано сертификатом Apple.

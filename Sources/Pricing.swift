@@ -40,6 +40,14 @@ enum Pricing {
     // Ноль был бы хуже - он молча занижает итог.
     static let fallbackFamily = "sonnet"
 
+    // Цена за миллион токенов: неотрицательная, конечная, не абсурдная.
+    // Верхняя граница с большим запасом - она отсекает опечатку в разрядах,
+    // а не осмысленное подорожание.
+    private static func sane(_ v: Double?) -> Double? {
+        guard let v = v, v.isFinite, v >= 0, v <= 100_000 else { return nil }
+        return v
+    }
+
     static var overrideURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask)[0]
@@ -57,9 +65,15 @@ enum Pricing {
                 guard let d = value as? [String: Any],
                       let i = jsonNumber(d["input"]),
                       let o = jsonNumber(d["output"]) else { continue }
-                var p = ModelPrice.standard(input: i, output: o)
-                if let cw = jsonNumber(d["cache_write"]) { p.cacheWrite = cw }
-                if let cr = jsonNumber(d["cache_read"]) { p.cacheRead = cr }
+                // Файл правит человек, и в нём может оказаться что угодно:
+                // отрицательное число, ноль, «nan», значение на порядки
+                // больше правдоподобного. Молча принять такое - значит
+                // показать бессмыслицу как расчёт. Ограничиваем разумным
+                // диапазоном и отбрасываем непригодное.
+                guard let vi = sane(i), let vo = sane(o) else { continue }
+                var p = ModelPrice.standard(input: vi, output: vo)
+                if let cw = sane(jsonNumber(d["cache_write"])) { p.cacheWrite = cw }
+                if let cr = sane(jsonNumber(d["cache_read"])) { p.cacheRead = cr }
                 t[family.lowercased()] = p
             }
         }

@@ -209,12 +209,34 @@ struct Keychain {
         throw KeychainError.unparsable(previewRedacted: redact(raw))
     }
 
-    // Для --doctor: показать структуру записи, не раскрывая секретов.
-    // Любая длинная последовательность букв и цифр - это потенциально токен.
+    // Для --doctor: показать СТРОЕНИЕ записи, не печатая ни одного значения.
+    //
+    // Прежняя версия печатала первые 300 байт с заменой длинных
+    // последовательностей на <REDACTED>. Это опасная схема: токены бывают
+    // в base64url, где встречаются знаки вне класса символов, и тогда длинная
+    // строка распадается на короткие куски, каждый из которых замену
+    // не проходит. Часть секрета утекала бы в вывод, который человек
+    // спокойно копирует в чат.
+    //
+    // Поэтому теперь печатаются только имена ключей. Для ответа на вопрос
+    // «что вообще лежит в записи» этого достаточно, а утечь тут нечему.
     static func redact(_ s: String) -> String {
-        let head = String(s.prefix(300))
-        guard let re = try? NSRegularExpression(pattern: "[A-Za-z0-9_.-]{16,}") else { return head }
-        return re.stringByReplacingMatches(
-            in: head, range: NSRange(head.startIndex..., in: head), withTemplate: "<REDACTED>")
+        guard let data = s.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return "не JSON, " + String(s.count) + " байт" }
+
+        func keys(_ d: [String: Any], prefix: String = "") -> [String] {
+            var out: [String] = []
+            for k in d.keys.sorted() {
+                let path = prefix.isEmpty ? k : prefix + "." + k
+                if let nested = d[k] as? [String: Any] {
+                    out += keys(nested, prefix: path)
+                } else {
+                    out.append(path)
+                }
+            }
+            return out
+        }
+        return keys(obj).joined(separator: "  ")
     }
 }

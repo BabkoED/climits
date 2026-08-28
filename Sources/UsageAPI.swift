@@ -131,9 +131,13 @@ final class UsageAPI {
         let tmp = cacheFile.appendingPathExtension("tmp")
         do {
             try body.write(to: tmp, atomically: false, encoding: .utf8)
-            _ = try? FileManager.default.replaceItemAt(cacheFile, withItemAt: tmp)
+            // Права выставляются ДО подмены. Если делать после, между записью
+            // и chmod существует промежуток, в котором файл лежит с правами
+            // по умолчанию. Здесь это чужой каталог не открывает, но порядок
+            // «сначала закрыть, потом положить» дешевле и надёжнее.
             try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                   ofItemAtPath: cacheFile.path)
+                                                   ofItemAtPath: tmp.path)
+            _ = try? FileManager.default.replaceItemAt(cacheFile, withItemAt: tmp)
         } catch {
             try? FileManager.default.removeItem(at: tmp)
         }
@@ -156,6 +160,13 @@ final class UsageAPI {
     }
 
 
+    private func sanitizeHeader(_ v: String) -> String {
+        let cleaned = v.components(separatedBy: CharacterSet(charactersIn: "\r\n\0"))
+                       .joined(separator: " ")
+                       .trimmingCharacters(in: .whitespaces)
+        return cleaned.isEmpty ? Prefs.defaultUserAgent : String(cleaned.prefix(200))
+    }
+
     // Один запрос к эндпоинту. Вынесен отдельно, потому что вызывается
     // по разу на каждый кандидат из связки ключей.
     private func request(token: String) -> (code: Int, body: Data?) {
@@ -170,7 +181,11 @@ final class UsageAPI {
         // попадают в жёстко лимитируемый бакет. По первоисточникам это
         // не подтверждается, поэтому по умолчанию представляемся честно,
         // а подменить значение можно одной строкой в настройках.
-        req.setValue(Prefs.userAgent, forHTTPHeaderField: "User-Agent")
+        // Значение приходит из настроек, то есть его набирает человек.
+        // Перевод строки в заголовке - это разрыв запроса и приписывание
+        // к нему чужих заголовков. Своих прав это никому не добавляет,
+        // но испорченный запрос выглядит как загадочная ошибка сети.
+        req.setValue(sanitizeHeader(Prefs.userAgent), forHTTPHeaderField: "User-Agent")
 
         var out: Data? = nil
         var status = 0

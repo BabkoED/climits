@@ -181,6 +181,13 @@ let cacheHeavy = TokenTally(input: 0, output: 0, cacheWrite: 0,
 check("десять миллионов из кэша - это $5, а не $50",
       MoneyView.money(cacheHeavy.cost(opus)), "$5.00")
 
+// pricing.json правит человек - значит там может оказаться что угодно.
+check("отрицательная цена отбрасывается", Pricing.builtin["opus"] != nil)
+check("прайс всегда конечный и неотрицательный",
+      Pricing.builtin.values.allSatisfy { $0.input.isFinite && $0.input >= 0
+                                       && $0.output.isFinite && $0.output >= 0
+                                       && $0.cacheRead.isFinite && $0.cacheWrite.isFinite })
+
 check("семейство из claude-opus-5", Pricing.family(of: "claude-opus-5"), "opus")
 check("семейство из Claude Fable 5", Pricing.family(of: "Claude Fable 5"), "fable")
 check("незнакомая модель считается по запасной", Pricing.family(of: "claude-nimbus-9"), "sonnet")
