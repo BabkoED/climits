@@ -167,7 +167,7 @@ final class Updater {
                 case .success(let newApp):
                     self.swap(newApp, over: bundle)
                 case .failure(let e):
-                    self.say(L("Обновиться не вышло", "Update failed"), e)
+                    self.say(L("Обновиться не вышло", "Update failed"), e.text)
                 case .none:
                     break
                 }
@@ -175,16 +175,22 @@ final class Updater {
         }
     }
 
+    // Строка сама по себе не Error, а Result требует именно Error. Заводить
+    // ради этого перечисление незачем: наверх уходит только текст для окна.
+    struct Trouble: Error { let text: String }
+
+    private func fail(_ text: String) -> Result<URL, Trouble> { return .failure(Trouble(text: text)) }
+
     // Скачивание, сверка суммы, распаковка. Всё в каталоге на ТОМ ЖЕ томе,
     // что и приложение: подмена через replaceItemAt между томами не работает.
-    private func download(_ r: Release, near bundle: URL) -> Result<URL, String> {
+    private func download(_ r: Release, near bundle: URL) -> Result<URL, Trouble> {
         let fm = FileManager.default
         let work: URL
         do {
             work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask,
                               appropriateFor: bundle, create: true)
         } catch {
-            return .failure(error.localizedDescription)
+            return fail(error.localizedDescription)
         }
 
         // Синхронно, потому что мы уже на фоновой очереди, и потому что
@@ -205,10 +211,10 @@ final class Updater {
             done.signal()
         }.resume()
         if done.wait(timeout: .now() + 300) == .timedOut {
-            return .failure(L("не скачалось: слишком долго", "download failed: too slow"))
+            return fail(L("не скачалось: слишком долго", "download failed: too slow"))
         }
         guard let body = data, netError == nil else {
-            return .failure(L("не скачалось: \(netError ?? "пусто")",
+            return fail(L("не скачалось: \(netError ?? "пусто")",
                               "download failed: \(netError ?? "empty")"))
         }
 
@@ -216,7 +222,7 @@ final class Updater {
         // это уже поздно, ditto к тому времени разложил файлы на диск.
         let got = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
         guard let want = r.sha256, got == want else {
-            return .failure(L("сумма не сошлась - скачанное выброшено",
+            return fail(L("сумма не сошлась - скачанное выброшено",
                               "checksum mismatch - the download was discarded"))
         }
 
@@ -226,16 +232,16 @@ final class Updater {
             try body.write(to: zipPath)
             try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)
         } catch {
-            return .failure(error.localizedDescription)
+            return fail(error.localizedDescription)
         }
 
         if let e = shell("/usr/bin/ditto", ["-x", "-k", zipPath.path, unpacked.path]) {
-            return .failure(L("не распаковалось: \(e)", "unpacking failed: \(e)"))
+            return fail(L("не распаковалось: \(e)", "unpacking failed: \(e)"))
         }
 
         let newApp = unpacked.appendingPathComponent("climits.app")
         guard fm.fileExists(atPath: newApp.appendingPathComponent("Contents/MacOS/climits").path) else {
-            return .failure(L("в архиве нет climits.app", "no climits.app in the archive"))
+            return fail(L("в архиве нет climits.app", "no climits.app in the archive"))
         }
 
         // Карантин снимаем сами: иначе после подмены система спросит про
@@ -246,7 +252,7 @@ final class Updater {
         // спрашивает доступ к связке ключей заново и чаще, а битый бандл
         // выглядит точно так же, как целый.
         if let e = shell("/usr/bin/codesign", ["--verify", "--quiet", newApp.path]) {
-            return .failure(L("подпись не проходит проверку: \(e)",
+            return fail(L("подпись не проходит проверку: \(e)",
                               "signature does not verify: \(e)"))
         }
 
