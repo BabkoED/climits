@@ -37,6 +37,19 @@ struct WindowUsage {
     }
 
     var isEmpty: Bool { return byFamily.isEmpty }
+
+    // Сложение окон с разных машин. Лимит у аккаунта один, а расшифровки
+    // лежат на каждой машине свои - без этого сложения приложение считает
+    // только тот кусок расхода, который видит под собой.
+    static func + (a: WindowUsage, b: WindowUsage) -> WindowUsage {
+        var out = a
+        for (family, tally) in b.byFamily {
+            out.byFamily[family] = (out.byFamily[family] ?? TokenTally()) + tally
+        }
+        out.unknownModels.formUnion(b.unknownModels)
+        out.truncated = a.truncated || b.truncated
+        return out
+    }
 }
 
 enum Transcripts {
@@ -128,6 +141,11 @@ enum Transcripts {
             // ни одной, но если появятся - лучше посчитать, чем потерять.
 
             let model = (message["model"] as? String) ?? ""
+            // «<synthetic>» и прочее в угловых скобках - служебные записи
+            // самого Claude Code: отказ, ошибка, локальное сообщение. Это
+            // не работа модели, считать их по запасной цене значит выдумывать
+            // расход, а оговорка «нет цены для <synthetic>» в меню - шум.
+            if model.hasPrefix("<") { continue }
             let family = Pricing.family(of: model)
 
             let add = TokenTally(input: intOf(usage["input_tokens"]),
@@ -204,6 +222,37 @@ struct MoneyView {
 
     var spentText: String { return MoneyView.money(spent) }
     var fullText: String? { return fullLimit.map { MoneyView.money($0) } }
+
+    // «$258/281» - знак валюты только слева: он уже сказан, и повторять его
+    // в паре значит тратить знак впустую.
+    var pairText: String {
+        guard let full = fullLimit else { return spentText }
+        var tail = MoneyView.money(full)
+        if tail.hasPrefix("$") { tail.removeFirst() }
+        return spentText + "/" + tail
+    }
+}
+
+// Токены по одному лимиту - тем же способом, что и деньги: прямо считается
+// только потраченное, весь лимит выводится делением на процент.
+//
+// Зачем вообще: подписка не говорит, сколько токенов тебе выдали, - ни в
+// тарифе, ни в справке, ни админом в Enterprise. Единственный способ узнать -
+// поделить свой расход на свой же процент. Заодно видно, когда Anthropic
+// меняет лимит: цифра полного лимита поедет, а расход останется прежним.
+struct TokensView {
+    let spent: Int
+    let full: Int?
+
+    static func make(spent: Int, percent: Int) -> TokensView {
+        guard percent >= MoneyView.minPercentForExtrapolation, spent > 0 else {
+            return TokensView(spent: spent, full: nil)
+        }
+        return TokensView(spent: spent, full: Int(Double(spent) / (Double(percent) / 100.0)))
+    }
+
+    var isEmpty: Bool { return spent <= 0 }
+    var text: String { return Fmt.pair(Fmt.compact(spent), full.map { Fmt.compact($0) }) }
 }
 
 
@@ -243,5 +292,20 @@ enum Money {
         return MoneyView.make(spent: spent(for: b, in: window),
                               percent: b.pct,
                               partial: true)
+    }
+
+    // Токены той же долей расшифровок, что и деньги: у модельных лимитов -
+    // только своя модель, у общих - всё окно.
+    static func spentTokens(for b: Bucket, in window: WindowUsage) -> Int {
+        if b.key.hasPrefix("seven_day_") {
+            let family = String(b.key.dropFirst("seven_day_".count))
+            return window.byFamily[family]?.total ?? 0
+        }
+        if b.key == UsageParser.fableKey { return window.byFamily["fable"]?.total ?? 0 }
+        return window.totals.total
+    }
+
+    static func tokens(for b: Bucket, in window: WindowUsage) -> TokensView {
+        return TokensView.make(spent: spentTokens(for: b, in: window), percent: b.pct)
     }
 }

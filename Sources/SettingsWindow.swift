@@ -11,7 +11,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private var previewLabel: NSTextField!
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
-    private var uaField: NSTextField!
+    private var remoteField: NSTextField!
+    private var remoteResult: NSTextField!
 
     private let intervals: [(String, Int)] = [
         (L("каждую минуту", "every minute"), 60),
@@ -21,7 +22,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     ]
 
     convenience init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 880),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 940),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = L("Настройки climits", "climits settings")
@@ -56,8 +57,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         addCheck(stack, "showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra)
         addCheck(stack, "showMoney", L("Деньги: во сколько обошлось бы по прайсу API",
                                        "Money: what it would cost at API prices"), Prefs.showMoney)
-        stack.addArrangedSubview(small(L("Оценка по расшифровкам этой машины. Работа с других машин сюда не попадает.",
-                                         "Estimated from this machine's transcripts. Work done elsewhere is not counted.")))
+        addCheck(stack, "showTokens", L("Токены: потрачено и весь лимит - «1,2м/2,2м»",
+                                        "Tokens: spent and full limit - \"1.2M/2.2M\""), Prefs.showTokens)
+        stack.addArrangedSubview(small(L("Сколько токенов в тарифе, не говорит никто - ни справка, ни админ. Второе число выведено из своего же расхода и процента.",
+                                         "Nobody states how many tokens a plan has. The second number is derived from your own usage and percentage.")))
 
         stack.addArrangedSubview(spacer(6))
         customToggle = NSButton(checkboxWithTitle: L("Свой формат вместо галочек",
@@ -76,10 +79,16 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         templateField.widthAnchor.constraint(equalToConstant: 470).isActive = true
         stack.addArrangedSubview(templateField)
 
+        let rebuild = NSButton(title: L("Собрать заново из галочек", "Rebuild from checkboxes"),
+                               target: self, action: #selector(rebuildTemplate))
+        rebuild.bezelStyle = .rounded
+        rebuild.controlSize = .small
+        stack.addArrangedSubview(rebuild)
+
         let hint = BarTitle.macros.map { $0.0 }.joined(separator: "  ")
         stack.addArrangedSubview(small(hint))
-        stack.addArrangedSubview(small(L("Пустые макросы убираются вместе с разделителем.",
-                                         "Empty macros are dropped along with their separator.")))
+        stack.addArrangedSubview(small(L("Пока «свой формат» выключен, поле повторяет галочки - включил и правь готовое. Пустые макросы убираются вместе с разделителем.",
+                                         "While custom format is off, the field mirrors the checkboxes - switch it on and edit what is already there. Empty macros are dropped along with their separator.")))
 
         stack.addArrangedSubview(spacer(6))
         previewLabel = NSTextField(labelWithString: "")
@@ -121,14 +130,6 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         checkboxes["notifyEnabled"] = notify
         stack.addArrangedSubview(notify)
 
-        let twoLine = NSButton(checkboxWithTitle: L("Пункты меню в две строки",
-                                                    "Two-line menu rows"),
-                               target: self, action: #selector(toggleCheck(_:)))
-        twoLine.state = Prefs.twoLineRows ? .on : .off
-        twoLine.identifier = NSUserInterfaceItemIdentifier("twoLineRows")
-        checkboxes["twoLineRows"] = twoLine
-        stack.addArrangedSubview(twoLine)
-
         stack.addArrangedSubview(fieldRow([
             field(L("порог уведомления, %", "notify at, %"), "notifyAt", "\(Prefs.notifyAt)", width: 40),
         ]))
@@ -161,20 +162,64 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Пороги в процентах; severity от сервера всё равно главнее.",
                                          "Empty means the system monospaced font. Thresholds in percent; server severity still wins.")))
 
-        stack.addArrangedSubview(spacer(6))
-        stack.addArrangedSubview(NSTextField(labelWithString: "User-Agent"))
-        uaField = NSTextField()
-        uaField.stringValue = Prefs.userAgent
-        uaField.delegate = self
-        uaField.identifier = NSUserInterfaceItemIdentifier("userAgent")
-        uaField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        uaField.translatesAutoresizingMaskIntoConstraints = false
-        uaField.widthAnchor.constraint(equalToConstant: 470).isActive = true
-        stack.addArrangedSubview(uaField)
-        stack.addArrangedSubview(small(L("Трогать стоит, только если эндпоинт постоянно отвечает 429. Пусто - значение по умолчанию.",
-                                         "Only worth touching if the endpoint keeps answering 429. Empty means the default.")))
+        stack.addArrangedSubview(spacer(10))
+        stack.addArrangedSubview(header(L("Вторая машина", "Second machine")))
+        stack.addArrangedSubview(small(L("Лимит у аккаунта один, а расшифровки лежат на каждой машине свои. Если работа идёт ещё и по ssh, без этого адреса деньги и токены занижены в разы.",
+                                         "The account has one limit, but transcripts live on each machine separately. If you also work over ssh, money and tokens are understated several-fold without this.")))
+
+        let remoteRow = NSStackView()
+        remoteRow.orientation = .horizontal
+        remoteRow.spacing = 8
+        remoteField = NSTextField()
+        remoteField.stringValue = Prefs.remoteHost
+        remoteField.delegate = self
+        remoteField.identifier = NSUserInterfaceItemIdentifier("remoteHost")
+        remoteField.placeholderString = L("имя из ~/.ssh/config или user@host",
+                                          "a Host from ~/.ssh/config, or user@host")
+        remoteField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        remoteField.translatesAutoresizingMaskIntoConstraints = false
+        remoteField.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        remoteRow.addArrangedSubview(remoteField)
+        let checkBtn = NSButton(title: L("Проверить", "Test"), target: self,
+                                action: #selector(testRemote))
+        checkBtn.bezelStyle = .rounded
+        checkBtn.controlSize = .small
+        remoteRow.addArrangedSubview(checkBtn)
+        stack.addArrangedSubview(remoteRow)
+
+        remoteResult = NSTextField(labelWithString: "")
+        remoteResult.font = NSFont.systemFont(ofSize: 10)
+        remoteResult.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(remoteResult)
+        stack.addArrangedSubview(small(L("Пароль спросить негде: нужен ключ без пароля и один заход из терминала, чтобы хост попал в known_hosts.",
+                                         "There is nowhere to ask for a password: you need a key and one terminal login so the host lands in known_hosts.")))
+
+        stack.addArrangedSubview(spacer(10))
+        stack.addArrangedSubview(versionLine())
 
         updatePreview()
+    }
+
+    // Версия и адрес репозитория вместо поля User-Agent.
+    //
+    // Поле убрано намеренно: менять то, чем приложение представляется, полезно
+    // ровно в одном редком случае - когда эндпоинт упёрся в 429, - а стоит
+    // оно строки в окне и вопроса «а что сюда писать». Запасной выход остался:
+    //     defaults write com.babko.climits userAgent "..."
+    private func versionLine() -> NSView {
+        let t = NSTextField(labelWithString: "")
+        let s = NSMutableAttributedString(
+            string: "climits \(Prefs.appVersion) \u{00B7} ",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor])
+        s.append(NSAttributedString(string: "github.com/BabkoED/climits", attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .link: Prefs.repoURL,
+        ]))
+        t.attributedStringValue = s
+        t.isSelectable = true
+        t.allowsEditingTextAttributes = true   // без этого ссылка не нажимается
+        return t
     }
 
     // Компактное поле с подписью слева. Всё оформление настраивается
@@ -243,8 +288,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         case "showModels": Prefs.showModels = on
         case "showExtra": Prefs.showExtra = on
         case "showMoney": Prefs.showMoney = on
+        case "showTokens": Prefs.showTokens = on
         case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
-        case "twoLineRows": Prefs.twoLineRows = on; applied(); return
         default: break
         }
         // Правка галочек означает, что человек хочет быстрый выбор, а не
@@ -255,7 +300,59 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
             customToggle.state = .off
             templateField.isEnabled = false
         }
+        // Поле шаблона повторяет галочки, пока свой формат выключен. Иначе
+        // человек включает его и видит либо пустоту, либо то, что собиралось
+        // галочками неделю назад, - и правит не то, что у него в трее.
+        mirrorTemplate()
         applied()
+    }
+
+    private func mirrorTemplate() {
+        guard !Prefs.useCustomTemplate else { return }
+        let t = Prefs.defaultTemplateFromCheckboxes()
+        templateField.stringValue = t
+        Prefs.customTemplate = t
+    }
+
+    @objc private func rebuildTemplate() {
+        let t = Prefs.defaultTemplateFromCheckboxes()
+        templateField.stringValue = t
+        Prefs.customTemplate = t
+        applied()
+    }
+
+    // Проверка второй машины: показать, что оттуда реально приехало. Без
+    // этого настройка проверяется только тем, что цифры в меню «как будто
+    // побольше стали».
+    @objc private func testRemote() {
+        let host = remoteField.stringValue.trimmingCharacters(in: .whitespaces)
+        Prefs.remoteHost = host
+        guard !host.isEmpty else {
+            remoteResult.stringValue = L("адрес пуст - считаю только эту машину",
+                                         "empty - counting this machine only")
+            return
+        }
+        remoteResult.stringValue = L("спрашиваю \(host)\u{2026}", "asking \(host)\u{2026}")
+        let path = Prefs.remotePath
+        let since = Date().addingTimeInterval(-5 * 3600)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = RemoteScan.usage(host: host, path: path, cutoffs: [since])
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch r {
+                case .success(let windows) where !windows.isEmpty:
+                    let w = windows[0]
+                    let t = w.totals
+                    self.remoteResult.stringValue = L(
+                        "за 5 часов оттуда: \(Fmt.compact(t.total)) токенов, \(t.requests) запросов, \u{2248}\(MoneyView.money(w.cost))",
+                        "last 5 hours there: \(Fmt.compact(t.total)) tokens, \(t.requests) requests, \u{2248}\(MoneyView.money(w.cost))")
+                case .success:
+                    self.remoteResult.stringValue = L("ответ пуст", "empty answer")
+                case .failure(let e):
+                    self.remoteResult.stringValue = L("не вышло: \(e.text)", "failed: \(e.text)")
+                }
+            }
+        }
     }
 
     @objc private func toggleCustom() {
@@ -271,32 +368,35 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         applied()
     }
 
-    // Числа применяются по окончании ввода, а не на каждое нажатие.
+    // Эти поля применяются по окончании ввода, а не на каждое нажатие.
     //
     // Иначе, набирая порог 50, человек на мгновение ставит 5 - и получает
-    // настоящее уведомление о «пороге», которого не задавал. С цветами
-    // и шаблоном наоборот: там живой отклик и есть весь смысл.
-    private static let numericKeys: Set<String> = [
+    // настоящее уведомление о «пороге», которого не задавал. Адрес второй
+    // машины здесь по той же причине: на каждой букве приложение лезло бы
+    // по ssh на несуществующий хост. С цветами и шаблоном наоборот: там
+    // живой отклик и есть весь смысл.
+    private static let deferredKeys: Set<String> = [
         "barWidth", "fontSize", "menuFontSize", "warnAt", "alertAt", "notifyAt",
+        "remoteHost",
     ]
 
     func controlTextDidChange(_ obj: Notification) {
         guard let f = obj.object as? NSTextField else { return }
         let key = f.identifier?.rawValue ?? ""
-        if SettingsWindowController.numericKeys.contains(key) { return }
+        if SettingsWindowController.deferredKeys.contains(key) { return }
         apply(key: key, value: f.stringValue)
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let f = obj.object as? NSTextField else { return }
         let key = f.identifier?.rawValue ?? ""
-        guard SettingsWindowController.numericKeys.contains(key) else { return }
+        guard SettingsWindowController.deferredKeys.contains(key) else { return }
         apply(key: key, value: f.stringValue)
     }
 
     private func apply(key: String, value v: String) {
         switch key {
-        case "userAgent":    Prefs.userAgent = v; return   // вида не меняет
+        case "remoteHost":   Prefs.remoteHost = v; applied(); return
         case "colorCalm":    Prefs.colorCalm = v
         case "colorWarn":    Prefs.colorWarn = v
         case "colorAlarm":   Prefs.colorAlarm = v
@@ -348,10 +448,12 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         // и человек решает, что она сломана.
         previewLabel.stringValue = BarTitle.render(Prefs.effectiveTemplate,
                                                    usage: SettingsWindowController.sample,
-                                                   money: SettingsWindowController.sampleMoney)
+                                                   money: SettingsWindowController.sampleMoney,
+                                                   tokens: SettingsWindowController.sampleTokens)
     }
 
     static let sampleMoney = MoneyView.make(spent: 12.40, percent: 37, partial: true)
+    static let sampleTokens = TokensView.make(spent: 1_240_000, percent: 37)
 
     static let sample: Usage = {
         let now = Date()

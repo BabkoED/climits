@@ -55,6 +55,17 @@ struct Bucket {
     let severity: String
 
     var pct: Int { return safeInt(percent) }   // как в /usage, но без trap
+
+    // Недельный лимит по модели, а не окно целиком.
+    var isModel: Bool { return key.hasPrefix("seven_day_") || key == UsageParser.fableKey }
+
+    // Однобуквенное имя для строки меню: Opus -> «O», Sonnet -> «S»,
+    // Fable -> «F», Mythos -> «M». У окон сокращать нечего - «5ч» и «7д»
+    // и так короткие.
+    var tiny: String {
+        guard isModel, let first = short.first else { return short }
+        return String(first).uppercased()
+    }
 }
 
 struct Extra {
@@ -71,10 +82,16 @@ struct Extra {
     // всё равно может прийти null, и тогда $168 из $200 - это 84% - выглядели
     // бы спокойным нулём и зелёным цветом. Поэтому если поля нет, считаем сами.
     // Единицы у used и limit одинаковые (минорные), они сокращаются.
+    // Присланное utilization режется по сотне: при $200.17 из $100.00 оно
+    // приезжает как спокойные 100%, и перерасход вдвое выглядит как ровно
+    // упёрся. Поэтому когда есть обе суммы, считаем сами, а присланное
+    // берём только там, где считать не из чего.
     var percent: Int? {
+        if let u = usedMinor, let l = limitMinor, l > 0, l.isFinite, u.isFinite {
+            return safeInt(u / l * 100.0)
+        }
         if let p = percentGiven { return safeInt(p) }
-        guard let u = usedMinor, let l = limitMinor, l > 0, l.isFinite else { return nil }
-        return safeInt(u / l * 100.0)
+        return nil
     }
 
     var symbol: String {
@@ -142,7 +159,7 @@ struct Usage {
 
     // Недельные лимиты по моделям, в порядке отображения.
     var modelBuckets: [Bucket] {
-        return buckets.filter { $0.key.hasPrefix("seven_day_") || $0.key == UsageParser.fableKey }
+        return buckets.filter { $0.isModel }
     }
 }
 

@@ -18,26 +18,36 @@ func styleLevel(percent: Int, severity: String) -> Int {
 }
 
 enum Fmt {
-    // «2ч 14м», «1д 4ч», «вот-вот». Секунды не показываем никогда: на экране,
+    // «2ч 14м», «1д 4ч», «~1м». Секунды не показываем никогда: на экране,
     // который обновляется раз в пять минут, они всё равно врут.
+    //
+    // Последняя минута - «~1м», а не «вот-вот»: тильда говорит ровно то же
+    // самое, но числом, а по числу можно решать, успеваешь ты дописать
+    // запрос или нет.
+    //
+    // Дробь ОТБРАСЫВАЕТСЯ, а не округляется: это остаток, и завышать его
+    // нельзя. «1м» при 119 секундах - правда с запасом в свою пользу,
+    // «2м» - обещание минуты, которой нет.
     static func left(_ date: Date?) -> String {
         guard let d = date else { return "\u{2014}" }
-        let diff = Int(d.timeIntervalSinceNow)
-        if diff <= 60 { return L("вот-вот", "any moment") }
-        let days = diff / 86400
-        let hours = (diff % 86400) / 3600
-        let mins = (diff % 3600) / 60
+        let secs = Int(d.timeIntervalSinceNow)
+        if secs < 60 { return L("~1м", "~1m") }
+        let days = secs / 86400
+        let hours = (secs % 86400) / 3600
+        let mins = (secs % 3600) / 60
         if days > 0 { return "\(days)\(L("д", "d")) \(hours)\(L("ч", "h"))" }
         if hours > 0 { return String(format: "%d%@ %02d%@", hours, L("ч", "h"), mins, L("м", "m")) }
         return "\(mins)\(L("м", "m"))"
     }
 
-    // «через 2ч 14м» / «сброс вот-вот» - чтобы не получилось «через вот-вот».
-    static func resetPhrase(_ date: Date?) -> String {
-        guard let d = date else { return L("сброс \u{2014}", "reset \u{2014}") }
-        let s = left(d)
-        if s == L("вот-вот", "any moment") { return L("сброс вот-вот", "resets any moment") }
-        return L("через ", "in ") + s
+    // Голый отсчёт до сброса: «2ч 14м», «~1м». Слова «через» здесь нет
+    // намеренно - строка стоит рядом со шкалой лимита, и что это остаток,
+    // видно из места. Слово занимало знак, который нужнее цифрам.
+    // Там, где места много и контекста нет - в уведомлении, - «через»
+    // приписывается на месте.
+    static func untilReset(_ date: Date?) -> String {
+        guard let d = date else { return "\u{2014}" }
+        return left(d)
     }
 
     // «пн 03:00» - когда именно. Полезно для недельных окон: «через 4д 2ч»
@@ -58,12 +68,25 @@ enum Fmt {
         return f.string(from: date)
     }
 
-    // 1_234_567 -> «1.2M». В меню важно оценить порядок, а не пересчитать
+    // 1_234_567 -> «1,2м». В меню важно оценить порядок, а не пересчитать
     // до штуки.
+    //
+    // Разделитель дробной части берётся по языку: «1.2м» в русской строке
+    // читается как опечатка, а не как число.
     static func compact(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000 { return "\(n / 1000)K" }
+        if n >= 1_000_000 {
+            let s = String(format: "%.1f", Double(n) / 1_000_000)
+            return L(s.replacingOccurrences(of: ".", with: ","), s) + L("м", "M")
+        }
+        if n >= 1_000 { return "\(n / 1000)" + L("к", "K") }
         return "\(n)"
+    }
+
+    // «1,2м/2,2м» - потрачено и весь лимит одной парой. Косая черта вместо
+    // «из»: в строке меню каждый знак на счету, а смысл тот же.
+    static func pair(_ spent: String, _ full: String?) -> String {
+        guard let full = full else { return spent }
+        return spent + "/" + full
     }
 
     static func bar(_ pct: Int, width: Int? = nil) -> String {
@@ -117,7 +140,8 @@ enum BarTitle {
         ("{sonnet}",     L("Sonnet за неделю", "Sonnet this week")),
         ("{fable}",      L("Fable за неделю", "Fable this week")),
         ("{haiku}",      L("Haiku за неделю", "Haiku this week")),
-        ("{models}",     L("все модели подряд", "all models in a row")),
+        ("{models}",     L("все модели подряд: O, S, F", "all models in a row: O, S, F")),
+        ("{tokens}",     L("токены: потрачено/весь лимит", "tokens: spent/full limit")),
         ("{worst}",      L("самый нагруженный лимит", "the busiest limit")),
         ("{active}",     L("лимит, который упрётся первым", "the limit that hits first")),
         ("{extra}",      L("потрачено сверх лимита", "extra usage spent")),
@@ -126,7 +150,8 @@ enum BarTitle {
         ("{money.limit}",L("во сколько обойдётся весь лимит", "what the full limit is worth")),
     ]
 
-    static func render(_ template: String, usage: Usage, money: MoneyView? = nil) -> String {
+    static func render(_ template: String, usage: Usage,
+                       money: MoneyView? = nil, tokens: TokensView? = nil) -> String {
         var s = template
 
         func put(_ macro: String, _ value: String) {
@@ -154,8 +179,10 @@ enum BarTitle {
             put("{" + name + "}", pctText(b))
         }
 
+        // В строке меню модель - одна буква: «O 81% · S 12%». Полное имя
+        // съедает половину ширины трея, а различить их хватает буквы.
         let models = usage.modelBuckets
-            .map { "\($0.short) \($0.pct)%" }
+            .map { "\($0.tiny) \($0.pct)%" }
             .joined(separator: " \u{00B7} ")
         put("{models}", models)
 
@@ -166,6 +193,7 @@ enum BarTitle {
         // смысл (это оценка), а в отчёте рядом уже есть подпись словами.
         put("{money}", money.map { $0.spent > 0 ? "\u{2248}" + $0.spentText : "" } ?? "")
         put("{money.limit}", money?.fullText.map { "\u{2248}" + $0 } ?? "")
+        put("{tokens}", tokens.map { $0.isEmpty ? "" : $0.text } ?? "")
 
         let e = usage.extra
         put("{extra}", (e.enabled && e.usedMinor != nil) ? e.usedText : "")

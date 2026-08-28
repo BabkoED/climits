@@ -116,7 +116,7 @@ enum CLI {
             print("  \(bold)\(Fmt.pad(b.long, 20))\(reset)"
                 + " \(col)\(Fmt.padLeft("\(b.pct)", 3))%\(reset)"
                 + "  \(col)\(Fmt.bar(b.pct))\(reset)"
-                + "  \(dim)\(Fmt.resetPhrase(b.resetsAt))\(tail)\(moneyTail)\(reset)")
+                + "  \(dim)\(Fmt.untilReset(b.resetsAt))\(tail)\(moneyTail)\(reset)")
         }
         let e = u.extra
         print("")

@@ -32,6 +32,8 @@ struct Prefs {
         get { bool("showModels", false) } set { d.set(newValue, forKey: "showModels") } }
     static var showExtra: Bool {
         get { bool("showExtra", true) } set { d.set(newValue, forKey: "showExtra") } }
+    static var showTokens: Bool {
+        get { bool("showTokens", false) } set { d.set(newValue, forKey: "showTokens") } }
 
     // --- свой формат ---
     static var useCustomTemplate: Bool {
@@ -63,9 +65,14 @@ struct Prefs {
     // а если 429 будет мешать, значение меняется в настройках без пересборки.
     // Версия берётся из бандла, а не пишется здесь строкой: иначе она
     // расходится с настоящей ровно в тот момент, когда её забыли обновить.
+    static let repoURL = "https://github.com/BabkoED/climits"
+    // Версия берётся из бандла, а не пишется строкой: иначе она расходится
+    // с настоящей ровно в тот момент, когда её забыли обновить.
+    static var appVersion: String {
+        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
     static var defaultUserAgent: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-        return "climits/\(v) (macOS; +https://github.com/BabkoED/climits)"
+        return "climits/\(appVersion) (macOS; +\(repoURL))"
     }
     static var userAgent: String {
         get {
@@ -75,6 +82,23 @@ struct Prefs {
         set { d.set(newValue, forKey: "userAgent") }
     }
 
+    // --- вторая машина ---
+    //
+    // Проценты лимита сервер считает по всему аккаунту, а расшифровки лежат
+    // на каждой машине свои. Если работа идёт ещё и по ssh на сервере, то
+    // локальный счёт видит меньшую часть расхода - и деньги, и токены
+    // занижаются молча, в разы. Здесь адрес второй машины: приложение
+    // считает её расшифровки тем же способом и складывает с местными.
+    //
+    // Пусто - считаем только себя, как раньше.
+    static var remoteHost: String {
+        get { str("remoteHost", "").trimmingCharacters(in: .whitespaces) }
+        set { d.set(newValue, forKey: "remoteHost") } }
+    // Каталог расшифровок на той машине. Пусто - «~/.claude/projects».
+    static var remotePath: String {
+        get { str("remotePath", "").trimmingCharacters(in: .whitespaces) }
+        set { d.set(newValue, forKey: "remotePath") } }
+
     // --- деньги, уведомления, вид строк ---
     //
     // Деньги выключены по умолчанию намеренно: это оценка по локальным
@@ -82,8 +106,6 @@ struct Prefs {
     // цифру, которую он примет за счёт.
     static var showMoney: Bool {
         get { bool("showMoney", false) } set { d.set(newValue, forKey: "showMoney") } }
-    static var twoLineRows: Bool {
-        get { bool("twoLineRows", true) } set { d.set(newValue, forKey: "twoLineRows") } }
     static var notifyEnabled: Bool {
         get { bool("notifyEnabled", false) } set { d.set(newValue, forKey: "notifyEnabled") } }
     static var notifyAt: Int {
@@ -143,10 +165,17 @@ struct Prefs {
 
     static func defaultTemplateFromCheckboxes() -> String {
         var parts: [String] = []
-        if showSession { parts.append("{5h}") }
-        if showLeft    { parts.append("{5h.left}") }
-        if showWeekly  { parts.append(L("7д ", "7d ") + "{7d}") }
+        // Процент и остаток времени идут одним куском, без разделителя между
+        // ними: «57% 5м · 92% 1д3ч» читается как два окна, а «57% · 5м · 92%
+        // · 1д3ч» - как четыре числа подряд.
+        //
+        // Подпись «7д» убрана намеренно: то, что недельный лимит недельный,
+        // человек знает и без неё, а место она занимает. Какое окно где,
+        // говорит время до сброса - минуты у одного, дни у другого.
+        if showSession { parts.append(showLeft ? "{5h} {5h.left}" : "{5h}") }
+        if showWeekly  { parts.append(showLeft ? "{7d} {7d.left}" : "{7d}") }
         if showModels  { parts.append("{models}") }
+        if showTokens  { parts.append("{tokens}") }
         if showExtra   { parts.append("{extra}") }
         if showMoney   { parts.append("{money}") }
         var body = parts.joined(separator: " \u{00B7} ")

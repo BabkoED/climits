@@ -302,5 +302,154 @@ let negExp = Extra(enabled: true, usedMinor: 13963, limitMinor: 20000,
 check("отрицательный exponent не даёт невалидный спецификатор",
       !negExp.usedText.isEmpty)
 
+
+// ---- отсчёт до сброса ------------------------------------------------------
+//
+// «вот-вот» заменено числом: по «~1м» видно, успеваешь ты дописать запрос
+// или нет, а по «вот-вот» - нет. Дробь по-прежнему ОТБРАСЫВАЕТСЯ: это
+// остаток, и завышать его нельзя.
+print("\nотсчёт до сброса")
+func at(_ secs: Int) -> Date { return Date().addingTimeInterval(TimeInterval(secs) + 0.5) }
+check("полминуты - это «~1м», а не «вот-вот»", Fmt.left(at(30)), L("~1м", "~1m"))
+check("59 секунд тоже", Fmt.left(at(59)), L("~1м", "~1m"))
+check("минута с секундами не округляется вверх", Fmt.left(at(119)), L("1м", "1m"))
+check("две минуты", Fmt.left(at(120)), L("2м", "2m"))
+check("часы с минутами", Fmt.left(at(2 * 3600 + 14 * 60)), L("2ч 14м", "2h 14m"))
+check("сутки с часами", Fmt.left(at(27 * 3600)), L("1д 3ч", "1d 3h"))
+check("нет времени сброса - прочерк, а не выдумка", Fmt.left(nil), "\u{2014}")
+check("перед шкалой стоит голый отсчёт, без «через»",
+      Fmt.untilReset(at(2 * 3600 + 14 * 60)), L("2ч 14м", "2h 14m"))
+
+// ---- короткая запись чисел -------------------------------------------------
+print("\nкороткая запись чисел")
+check("миллионы с одним знаком после запятой", Fmt.compact(1_234_567), L("1,2м", "1.2M"))
+check("тысячи целыми", Fmt.compact(12_345), L("12к", "12K"))
+check("сотни как есть", Fmt.compact(999), "999")
+check("пара «потрачено/всего»", Fmt.pair("1,2м", "2,2м"), "1,2м/2,2м")
+check("без второго числа пара не появляется", Fmt.pair("1,2м", nil), "1,2м")
+
+// ---- буква вместо имени модели ---------------------------------------------
+print("\nбуквы моделей")
+check("Opus - это O", a.bucket("seven_day_opus")?.tiny ?? "", "O")
+check("Sonnet - это S", a.bucket("seven_day_sonnet")?.tiny ?? "", "S")
+check("Fable - это F", a.bucket(UsageParser.fableKey)?.tiny ?? "", "F")
+check("окно не сокращается: сокращать нечего",
+      a.bucket("five_hour")?.tiny ?? "", L("5ч", "5h"))
+// Порядок моделей - по алфавиту короткого имени, как и был: он не зависит
+// от того, чем сегодня больше пользовались, и потому строка в трее не
+// переставляется на глазах.
+check("макрос моделей идёт буквами",
+      BarTitle.render("{models}", usage: a),
+      "F 0% \u{00B7} O 81% \u{00B7} S 12%")
+
+// ---- токены ----------------------------------------------------------------
+//
+// Сколько токенов в тарифе, не публикует никто - ни справка, ни админ
+// в Enterprise. Единственный способ узнать: поделить свой расход на свой же
+// процент. Отсюда и осторожность - ниже пяти процентов деление бессмысленно.
+print("\nтокены")
+let tv = TokensView.make(spent: 1_240_000, percent: 50)
+check("полный лимит выведен из процента", tv.text, L("1,2м/2,5м", "1.2M/2.5M"))
+check("на одном проценте экстраполяции нет", TokensView.make(spent: 1000, percent: 1).full == nil)
+check("без расхода экстраполяции нет", TokensView.make(spent: 0, percent: 50).full == nil)
+check("макрос токенов подставляется",
+      BarTitle.render("{tokens}", usage: a, tokens: tv), L("1,2м/2,5м", "1.2M/2.5M"))
+check("без токенов макрос не оставляет мусора",
+      BarTitle.render("{5h} \u{00B7} {tokens}", usage: a), "37%")
+
+let mvPair = MoneyView.make(spent: 12.0, percent: 10, partial: true)
+check("деньги парой: знак валюты только слева", mvPair.pairText, "$12/120")
+check("без экстраполяции пара - это одно число",
+      MoneyView.make(spent: 12.0, percent: 1, partial: true).pairText, "$12")
+
+// ---- перерасход выше потолка -----------------------------------------------
+//
+// Присланное utilization режется по сотне. Живой случай 28.08.2026:
+// $200.17 из $100.00 приезжали как спокойные 100%.
+print("\nперерасход")
+let over = Extra(enabled: true, usedMinor: 20017, limitMinor: 10000,
+                 exponent: 2, currency: "USD", percentGiven: 100)
+check("двукратный перерасход не выглядит как ровно упёрся", "\(over.percent ?? -1)", "200")
+let noLimit = Extra(enabled: true, usedMinor: 20017, limitMinor: nil,
+                    exponent: 2, currency: "USD", percentGiven: 42)
+check("без потолка берётся присланное", "\(noLimit.percent ?? -1)", "42")
+
+// ---- шаблон из галочек -----------------------------------------------------
+print("\nшаблон из галочек")
+Prefs.showIcon = false; Prefs.showSession = true; Prefs.showLeft = true
+Prefs.showWeekly = true; Prefs.showModels = false; Prefs.showTokens = false
+Prefs.showExtra = false; Prefs.showMoney = false
+let built = Prefs.defaultTemplateFromCheckboxes()
+check("процент и остаток идут одним куском", built, "{5h} {5h.left} \u{00B7} {7d} {7d.left}")
+// Проверяем по тому, что видно в трее, а не по тексту шаблона: «7d» есть
+// и в самом макросе {7d}, и такая проверка прошла бы, ничего не проверив.
+check("подписи «7д» перед процентом больше нет",
+      !BarTitle.render(built, usage: a).contains(L("7д ", "7d ")))
+check("галочка остатка действует на оба окна",
+      BarTitle.render(built, usage: a).contains("62%"))
+Prefs.showLeft = false
+check("без остатка остаются одни проценты",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} \u{00B7} {7d}")
+Prefs.showLeft = true
+
+// ---- две машины ------------------------------------------------------------
+//
+// Лимит у аккаунта один, а расшифровки на каждой машине свои. Замер
+// 28.08.2026: за одно недельное окно мак насчитал $258, сервер - $924.
+print("\nдве машины")
+var machineA = WindowUsage()
+machineA.byFamily["opus"] = TokenTally(input: 100, output: 10, cacheWrite: 0, cacheRead: 0, requests: 1)
+var machineB = WindowUsage()
+machineB.byFamily["opus"] = TokenTally(input: 200, output: 20, cacheWrite: 0, cacheRead: 0, requests: 2)
+machineB.byFamily["fable"] = TokenTally(input: 5, output: 5, cacheWrite: 0, cacheRead: 0, requests: 1)
+machineB.truncated = true
+let both = machineA + machineB
+check("токены одной модели сложились", "\(both.byFamily["opus"]?.input ?? -1)", "300")
+check("запросы тоже", "\(both.byFamily["opus"]?.requests ?? -1)", "3")
+check("модель, которой не было у первой, добавилась", both.byFamily["fable"] != nil)
+check("обрезание переносится: итог занижен у обоих", both.truncated)
+
+let answer = """
+{"windows": [{"families": {"opus": {"input": 1, "output": 2, "cache_write": 3,
+ "cache_read": 4, "requests": 5}}, "unknown": ["<весёлая>"], "truncated": false}]}
+"""
+switch RemoteScan.parse(Data(answer.utf8), expected: 1) {
+case .success(let w):
+    check("ответ второй машины разобран", w.count == 1)
+    check("чтение из кэша не потерялось", "\(w[0].byFamily["opus"]?.cacheRead ?? -1)", "4")
+    check("незнакомые модели доехали", w[0].unknownModels.contains("<весёлая>"))
+case .failure(let e):
+    check("ответ второй машины разобран: \(e.text)", false)
+}
+switch RemoteScan.parse(Data("не json".utf8), expected: 1) {
+case .success: check("мусор вместо ответа не принимается за ноль", false)
+case .failure: check("мусор вместо ответа не принимается за ноль", true)
+}
+switch RemoteScan.parse(Data("{\"windows\": []}".utf8), expected: 2) {
+case .success: check("ответ не на то число окон отвергается", false)
+case .failure: check("ответ не на то число окон отвергается", true)
+}
+
+// ---- обновление ------------------------------------------------------------
+print("\nобновление")
+check("v убирается из тега", Version.number("v1.2.0"), "1.2.0")
+check("1.2.0 новее 1.1.9", Version.isNewer("1.2.0", than: "1.1.9"))
+check("1.10.0 новее 1.9.0, а не наоборот", Version.isNewer("1.10.0", than: "1.9.0"))
+check("1.9.0 не новее 1.10.0", !Version.isNewer("1.9.0", than: "1.10.0"))
+check("та же версия не новее себя", !Version.isNewer("1.1.2", than: "1.1.2"))
+check("1.2 новее 1.1.9", Version.isNewer("1.2", than: "1.1.9"))
+check("сборку из исходников релизом не подменяем", !Version.isNewer("1.2.0", than: "dev"))
+let notes = """
+Скачай `climits.zip`.
+
+SHA-256 архива:
+```
+E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
+```
+"""
+check("сумма найдена в тексте релиза", Version.sha256(inNotes: notes) ?? "",
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+check("нет суммы - нет и обновления", Version.sha256(inNotes: "просто текст") == nil)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

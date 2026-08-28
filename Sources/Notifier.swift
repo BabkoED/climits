@@ -39,7 +39,11 @@ enum Notifier {
                 if firedFor != stamp {
                     d.set(stamp, forKey: key)
                     send(title: L("Лимит на исходе", "Limit running out"),
-                         body: "\(b.long): \(b.pct)% \u{00B7} \(Fmt.resetPhrase(b.resetsAt))")
+                         // В уведомлении «через» уместно: оно приходит само,
+                         // без шкалы рядом, и «1д 3ч» без предлога читается
+                         // как длительность, а не как остаток.
+                         body: "\(b.long): \(b.pct)% \u{00B7} "
+                             + L("через ", "in ") + Fmt.untilReset(b.resetsAt))
                 }
             } else if firedFor == stamp {
                 // Ушли ниже порога внутри того же окна - взводим заново.

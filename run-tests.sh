@@ -20,6 +20,8 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/Format.swift \
   Sources/Pricing.swift \
   Sources/Transcripts.swift \
+  Sources/Version.swift \
+  Sources/RemoteScan.swift \
   Tests/main.swift
 
 "$OUT"

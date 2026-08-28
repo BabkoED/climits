@@ -21,6 +21,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var sessionKey = "five_hour"
     private var scanning = false
     private var lastScan: Date?
+    // Вторая машина: сколько машин попало в счёт и чем кончилась попытка.
+    // Молча считать одну, когда настроены две, нельзя - цифра занижается
+    // в разы, а выглядит так же убедительно.
+    private var machines = 1
+    private var remoteError: String?
+    // Новая версия, если фоновая проверка её нашла.
+    private var pendingUpdate: String?
 
     override init() {
         super.init()
@@ -36,6 +43,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self, selector: #selector(prefsChanged), name: .climitsPrefsChanged, object: nil)
         refresh(force: false)
         rearmTimer()
+        checkUpdatesQuietly()
     }
 
     // --- обновление ---------------------------------------------------------
@@ -92,7 +100,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let rescanGap: TimeInterval = 120
 
     private func rescanTranscripts(for u: Usage, force: Bool = false) {
-        guard Prefs.showMoney else { return }
+        guard Prefs.showMoney || Prefs.showTokens else { return }
         if scanning { return }
         if !force, let last = lastScan, Date().timeIntervalSince(last) < MenuBarController.rescanGap {
             return
@@ -104,12 +112,35 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ?? Date().addingTimeInterval(-7 * 86400)
 
         scanning = true
+        let host = Prefs.remoteHost
+        let remotePath = Prefs.remotePath
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let w = Transcripts.usage(cutoffs: [sessionStart, weeklyStart])
+            var w = Transcripts.usage(cutoffs: [sessionStart, weeklyStart])
+            var err: String? = nil
+            var machines = 1
+
+            // Вторая машина считается тем же способом на своей стороне и
+            // складывается сюда. Ошибку не глотаем: без неё «считаю обе»
+            // и «одна не ответила» выглядят на экране одинаково.
+            if !host.isEmpty {
+                switch RemoteScan.usage(host: host, path: remotePath,
+                                        cutoffs: [sessionStart, weeklyStart]) {
+                case .success(let r) where r.count == w.count:
+                    for i in w.indices { w[i] = w[i] + r[i] }
+                    machines = 2
+                case .success:
+                    err = L("ответ не по форме", "malformed answer")
+                case .failure(let e):
+                    err = e.text
+                }
+            }
+
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.scanning = false
                 self.lastScan = Date()
+                self.machines = machines
+                self.remoteError = err
                 guard w.count == 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
@@ -142,7 +173,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         rearmTimer()
         // Включили «Деньги» - считаем сразу, не дожидаясь таймера. Иначе
         // галочка выглядит так, будто ничего не делает.
-        if Prefs.showMoney, let u = usage { rescanTranscripts(for: u, force: true) }
+        if Prefs.showMoney || Prefs.showTokens, let u = usage {
+            rescanTranscripts(for: u, force: true)
+        }
         updateTitle()
     }
 
@@ -156,7 +189,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         let money = (Prefs.showMoney ? u.session.map { Money.view(for: $0, in: sessionWindow) } : nil)
-        let text = BarTitle.render(Prefs.effectiveTemplate, usage: u, money: money ?? nil)
+        let tokens = (Prefs.showTokens ? u.session.map { Money.tokens(for: $0, in: sessionWindow) } : nil)
+        let text = BarTitle.render(Prefs.effectiveTemplate, usage: u,
+                                   money: money ?? nil, tokens: tokens ?? nil)
         // Строка меню остаётся нейтральной, пока всё спокойно: цветом
         // в строке меню стоит тревожить только по делу.
         let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
@@ -190,9 +225,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra))
-            if Prefs.showMoney {
-                menu.addItem(dim(L("Деньги - оценка по расшифровкам этой машины, а не счёт",
-                                   "Money is an estimate from this machine's transcripts, not a bill")))
+            if Prefs.showMoney || Prefs.showTokens {
+                menu.addItem(dim(estimateNote()))
+                if let e = remoteError {
+                    menu.addItem(dim(L("\(Prefs.remoteHost) не ответил: \(e)",
+                                       "\(Prefs.remoteHost) did not answer: \(e)")))
+                }
                 // Флаги, которые до этого собирались и никуда не попадали.
                 // Собирать и не показывать - хуже, чем не собирать: в коде
                 // выглядит как учтённое, а человек об этом не узнаёт.
@@ -244,7 +282,28 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(action(L("Настройки\u{2026}", "Settings\u{2026}"), #selector(openSettings), key: ","))
         menu.addItem(action(L("Открыть claude.ai/usage", "Open claude.ai/usage"), #selector(openWeb), key: ""))
         menu.addItem(.separator())
+        if let v = pendingUpdate {
+            menu.addItem(dim(L("вышла версия \(v)", "version \(v) is out")))
+        }
+        menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
+                            #selector(checkUpdates), key: ""))
+        menu.addItem(.separator())
         menu.addItem(action(L("Выйти", "Quit"), #selector(quit), key: "q"))
+    }
+
+    // Чем именно посчитаны деньги и токены. Разница между «этой машиной» и
+    // «двумя» - это разы, а не проценты, и человек должен видеть, что перед
+    // ним.
+    private func estimateNote() -> String {
+        let what = Prefs.showMoney && Prefs.showTokens
+            ? L("Деньги и токены", "Money and tokens")
+            : (Prefs.showMoney ? L("Деньги", "Money") : L("Токены", "Tokens"))
+        if machines > 1 {
+            return L("\(what) - оценка по расшифровкам двух машин: этой и \(Prefs.remoteHost)",
+                     "\(what) - estimated from two machines: this one and \(Prefs.remoteHost)")
+        }
+        return L("\(what) - оценка по расшифровкам этой машины, а не счёт",
+                 "\(what) - estimated from this machine's transcripts, not a bill")
     }
 
     private func staleNote(_ u: Usage) -> String {
@@ -260,70 +319,81 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                  "data from \(at) \u{00B7} refresh failed")
     }
 
-    // Одна строка лимита рисуется двумя: подпись и процент сверху, шкала
-    // и время сброса снизу.
+    // Строка лимита - всегда две: подпись и процент сверху, шкала и всё
+    // посчитанное снизу. Однострочного вида больше нет: он экономил высоту,
+    // но на нём не помещалось ни денег, ни токенов, а колонки в нём держались
+    // добивкой пробелами - то есть только в моноширинном шрифте.
     //
-    // Табуляция с правым выравниванием, а не добивка пробелами: пробелы
-    // держат колонку только в моноширинном шрифте, а подписи набраны
-    // обычным - на нём «Неделя, Sonnet» и «5-часовое окно» разъезжаются.
+    // Колонки держат ТАБУЛЯТОРЫ, и это главное здесь. Подпись и шкала стоят
+    // на одном табуляторе, поэтому левый край текста и левый край полоски
+    // совпадают в любом шрифте и при любой длине подписи. Пробелами это не
+    // делается: три пробела моноширинного шрифта шире трёх пробелов
+    // обычного, и полоска уезжала правее подписи.
+    // 24, а не «сколько-нибудь»: если указатель окажется шире табулятора,
+    // строка уедет на СЛЕДУЮЩИЙ табулятор - то есть подпись активного лимита
+    // прыгнет к правому краю. «▸» шире 24 точек не бывает даже на самом
+    // крупном шрифте, который разрешают настройки.
+    private static let textColumn: CGFloat = 24   // где начинается и подпись, и шкала
+    private static let pctColumn: CGFloat = 260   // правый край процента
+
     private func row(for b: Bucket, active: Bool) -> NSMenuItem {
         let accent = Palette.color(for: b)
         let item = NSMenuItem()
         item.isEnabled = true
 
-        if !Prefs.twoLineRows {
-            let line = (active ? "\u{25B8} " : "  ")
-                + Fmt.pad(b.long, 20)
-                + Fmt.padLeft("\(b.pct)", 3) + "%  "
-                + Fmt.bar(b.pct) + "  "
-                + Fmt.resetPhrase(b.resetsAt)
-            item.attributedTitle = NSAttributedString(string: line, attributes: [
-                .font: Palette.menuFont, .foregroundColor: accent,
-            ])
-            return item
-        }
-
         let para = NSMutableParagraphStyle()
-        para.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
+        para.tabStops = [
+            NSTextTab(textAlignment: .left, location: MenuBarController.textColumn),
+            NSTextTab(textAlignment: .right, location: MenuBarController.pctColumn),
+        ]
         para.lineSpacing = 2
 
-        let label = (active ? "\u{25B8} " : "   ") + b.long
+        // Указатель стоит ДО табулятора, в своей колонке шириной в отступ:
+        // иначе активная строка сдвигала бы подпись относительно остальных.
+        let mark = active ? "\u{25B8}" : ""
         let title = NSMutableAttributedString(
-            string: "\(label)\t\(b.pct)%\n",
+            string: "\(mark)\t\(b.long)\t\(b.pct)%\n",
             attributes: [
                 .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) + 1),
                 .paragraphStyle: para,
             ])
 
-        title.append(NSAttributedString(string: "   " + Fmt.bar(b.pct), attributes: [
+        title.append(NSAttributedString(string: "\t" + Fmt.bar(b.pct), attributes: [
             .font: Palette.menuFont,
             .foregroundColor: accent,
+            .paragraphStyle: para,
         ]))
 
-        var tail = "  " + Fmt.resetPhrase(b.resetsAt)
-        let clock = Fmt.clock(b.resetsAt)
-        if !clock.isEmpty { tail += " \u{00B7} " + clock }
-
-        // Деньги: сколько этот трафик стоил бы по прайсу API и во сколько
-        // обходится весь лимит целиком. И то, и другое - оценка, о чём
-        // говорит знак «≈» и отдельная строка в самом низу меню.
-        if Prefs.showMoney {
-            let mv = Money.view(for: b, in: window(for: b))
-            if mv.spent > 0 {
-                tail += "  \u{00B7} \u{2248}" + mv.spentText
-                if let full = mv.fullText {
-                    tail += L(" из \u{2248}", " of \u{2248}") + full
-                }
-            }
-        }
-
-        title.append(NSAttributedString(string: tail, attributes: [
+        title.append(NSAttributedString(string: tail(for: b), attributes: [
             .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1),
             .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: para,
         ]))
 
         item.attributedTitle = title
         return item
+    }
+
+    // Хвост второй строки: когда сброс, во сколько обошлось, сколько токенов.
+    //
+    // Деньги и токены - оценка: прямо считается только расход по расшифровкам,
+    // а «весь лимит» выводится делением на процент. Отсюда «≈» и отдельная
+    // оговорка внизу меню.
+    private func tail(for b: Bucket) -> String {
+        var s = "  " + Fmt.untilReset(b.resetsAt)
+        let clock = Fmt.clock(b.resetsAt)
+        if !clock.isEmpty { s += " \u{00B7} " + clock }
+
+        let w = window(for: b)
+        if Prefs.showMoney {
+            let mv = Money.view(for: b, in: w)
+            if mv.spent > 0 { s += "  \u{00B7} \u{2248}" + mv.pairText }
+        }
+        if Prefs.showTokens {
+            let tv = Money.tokens(for: b, in: w)
+            if !tv.isEmpty { s += "  \u{00B7} " + tv.text }
+        }
+        return s
     }
 
     private func extraRow(_ e: Extra) -> NSMenuItem {
@@ -379,6 +449,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func doRefresh() { refresh(force: true) }
+
+    @objc private func checkUpdates() {
+        NSApp.activate(ignoringOtherApps: true)
+        Updater.shared.check(silent: false) { [weak self] found in
+            self?.pendingUpdate = found
+        }
+    }
+
+    // Тихая проверка раз в сутки: приложение должно само замечать, что вышло
+    // новое, а не ждать, пока о нём вспомнят. Показывает строку в меню и
+    // ничего не качает без нажатия.
+    private func checkUpdatesQuietly() {
+        Updater.shared.check(silent: true) { [weak self] found in
+            self?.pendingUpdate = found
+        }
+    }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func openWeb() {
         if let u = URL(string: "https://claude.ai/settings/usage") { NSWorkspace.shared.open(u) }
