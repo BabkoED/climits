@@ -451,5 +451,53 @@ check("сумма найдена в тексте релиза", Version.sha256(i
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 check("нет суммы - нет и обновления", Version.sha256(inNotes: "просто текст") == nil)
 
+
+// ---- разбор ~/.ssh/config --------------------------------------------------
+//
+// Отсюда берётся выпадающий список адресов в настройках. Опечатка в адресе
+// выглядит как «не работает», поэтому набирать его руками человек не должен.
+print("\nразбор ~/.ssh/config")
+let sshCfg = """
+# комментарий
+Host vps7
+    HostName 51.38.110.54
+    User babko
+
+host  lowercase-тоже-хост
+Host *
+    ServerAliveInterval 60
+Host bastion prod-web
+  User deploy
+Host !secret wildcard-?
+  User x
+Host=cравнение-через-равно
+"""
+let found = SSHConfig.hosts(inText: sshCfg)
+check("обычная запись найдена", found.contains("vps7"))
+check("регистр слова Host не важен", found.contains("lowercase-тоже-хост"))
+check("две записи в одной строке - это два адреса",
+      found.contains("bastion") && found.contains("prod-web"))
+check("шаблон * не адрес", !found.contains("*"))
+check("шаблон с ? не адрес", !found.contains("wildcard-?"))
+check("отрицание не адрес", !found.contains("!secret"))
+check("Host через знак равенства тоже разбирается", found.contains("cравнение-через-равно"))
+check("комментарии не попали", !found.contains("#"))
+check("HostName - это не Host", !found.contains("51.38.110.54"))
+check("несуществующий файл даёт пустой список, а не падение",
+      SSHConfig.hosts(at: URL(fileURLWithPath: "/nope/нет/config")).isEmpty)
+
+// ---- отказ ssh словами -----------------------------------------------------
+print("\nотказ ssh словами")
+check("ключ не пущен",
+      RemoteScan.explain("babko@x: Permission denied (publickey).") != nil)
+check("незнакомый хост",
+      RemoteScan.explain("Host key verification failed.") != nil)
+check("имя не находится",
+      RemoteScan.explain("ssh: Could not resolve hostname nope: Name or service not known") != nil)
+check("нет python3 на той стороне",
+      RemoteScan.explain("env: ‘python3’: No such file or directory") != nil)
+check("незнакомую ошибку не выдумываем",
+      RemoteScan.explain("что-то пошло не так, но что - неизвестно") == nil)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

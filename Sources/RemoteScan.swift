@@ -20,6 +20,42 @@ import Foundation
 //     а не повод молча принять чей угодно ключ. Подключись из терминала
 //     один раз, дальше приложение подхватит known_hosts;
 //   * команда собирается массивом аргументов, не строкой для шелла.
+// Что человек уже настроил в ~/.ssh/config. Нужно ровно за тем, чтобы
+// не заставлять его вспоминать адрес и не ловить опечатку: в настройках
+// список подставляется в выпадающий список, и адрес выбирается, а не
+// набирается.
+enum SSHConfig {
+    static var path: URL {
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ssh/config")
+    }
+
+    static func hosts(at url: URL? = nil) -> [String] {
+        guard let text = try? String(contentsOf: url ?? path, encoding: .utf8) else { return [] }
+        return hosts(inText: text)
+    }
+
+    static func hosts(inText text: String) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#") else { continue }
+            // «Host» пишут и «host», и «HOST» - ssh к регистру равнодушен.
+            let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "=" })
+            guard let head = parts.first, head.lowercased() == "host" else { continue }
+            for pattern in parts.dropFirst() {
+                let name = String(pattern)
+                // Шаблоны - это правила для всех хостов сразу, а не адрес,
+                // по которому куда-то можно зайти. Отрицания тоже.
+                if name.contains("*") || name.contains("?") || name.hasPrefix("!") { continue }
+                if seen.insert(name).inserted { out.append(name) }
+            }
+        }
+        return out
+    }
+}
+
 enum RemoteScan {
 
     enum Failure: Error {
@@ -108,11 +144,43 @@ enum RemoteScan {
             let msg = String(decoding: errData, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let firstLine = msg.split(separator: "\n").first.map(String.init) ?? ""
+            if let plain = explain(msg) { return .failure(.ssh(plain)) }
             return .failure(.ssh(firstLine.isEmpty
                 ? L("ssh вышел с кодом \(p.terminationStatus)", "ssh exited \(p.terminationStatus)")
                 : firstLine))
         }
         return .success(out)
+    }
+
+    // Частые причины отказа - словами, а не как их печатает ssh.
+    //
+    // «Permission denied (publickey)» человеку не говорит, ЧТО делать,
+    // а сделать надо ровно одно понятное действие. Незнакомую ошибку
+    // не переводим: выдумать неверное объяснение хуже, чем отдать как есть.
+    static func explain(_ raw: String) -> String? {
+        let m = raw.lowercased()
+        if m.contains("permission denied") {
+            return L("ключ этой машины не пущен на ту сторону",
+                     "this machine's key is not authorised there")
+        }
+        if m.contains("host key verification failed") {
+            return L("хост незнакомый - зайди на него из терминала один раз",
+                     "unknown host - log in from a terminal once")
+        }
+        if m.contains("could not resolve hostname") {
+            return L("такое имя не находится", "no such hostname")
+        }
+        if m.contains("connection refused") || m.contains("connection timed out") ||
+           m.contains("no route to host") {
+            return L("не достучаться до хоста", "cannot reach the host")
+        }
+        if m.contains("python3") && (m.contains("not found") || m.contains("no such file")) {
+            return L("на той стороне нет python3", "no python3 on that side")
+        }
+        if m.contains("operation timed out") {
+            return L("не ответил вовремя", "timed out")
+        }
+        return nil
     }
 
     // --- разбор ответа ------------------------------------------------------

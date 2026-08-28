@@ -3,7 +3,7 @@ import AppKit
 // Окно настроек. Свёрстано кодом, без xib и storyboard: приложение собирается
 // одним вызовом swiftc, и любой ресурсный файл здесь стал бы лишним поводом
 // для сборки развалиться на чужой машине.
-final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
+final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     private var checkboxes: [String: NSButton] = [:]
     private var templateField: NSTextField!
@@ -11,7 +11,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private var previewLabel: NSTextField!
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
-    private var remoteField: NSTextField!
+    private var remoteField: NSComboBox!
     private var remoteResult: NSTextField!
 
     private let intervals: [(String, Int)] = [
@@ -170,12 +170,19 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         let remoteRow = NSStackView()
         remoteRow.orientation = .horizontal
         remoteRow.spacing = 8
-        remoteField = NSTextField()
+        // Выпадающий список, а не пустое поле: адрес не набирается по памяти,
+        // а выбирается из того, что человек уже настроил в ~/.ssh/config.
+        // Опечатка в адресе - самая обидная из возможных ошибок здесь:
+        // выглядит как «не работает», а на деле просто буква не та.
+        remoteField = NSComboBox()
+        remoteField.isEditable = true
+        remoteField.completes = true
+        remoteField.addItems(withObjectValues: SSHConfig.hosts())
         remoteField.stringValue = Prefs.remoteHost
         remoteField.delegate = self
         remoteField.identifier = NSUserInterfaceItemIdentifier("remoteHost")
-        remoteField.placeholderString = L("имя из ~/.ssh/config или user@host",
-                                          "a Host from ~/.ssh/config, or user@host")
+        remoteField.placeholderString = L("имя из ~/.ssh/config или user@адрес",
+                                          "a Host from ~/.ssh/config, or user@address")
         remoteField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         remoteField.translatesAutoresizingMaskIntoConstraints = false
         remoteField.widthAnchor.constraint(equalToConstant: 300).isActive = true
@@ -191,6 +198,12 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         remoteResult.font = NSFont.systemFont(ofSize: 10)
         remoteResult.textColor = .secondaryLabelColor
         stack.addArrangedSubview(remoteResult)
+        let known = SSHConfig.hosts()
+        stack.addArrangedSubview(small(known.isEmpty
+            ? L("В ~/.ssh/config записей нет - впиши адрес целиком, вида user@адрес.",
+                "No entries in ~/.ssh/config - type the full address, user@host.")
+            : L("Из ~/.ssh/config: \(known.prefix(8).joined(separator: ", ")).",
+                "From ~/.ssh/config: \(known.prefix(8).joined(separator: ", ")).")))
         stack.addArrangedSubview(small(L("Пароль спросить негде: нужен ключ без пароля и один заход из терминала, чтобы хост попал в known_hosts.",
                                          "There is nowhere to ask for a password: you need a key and one terminal login so the host lands in known_hosts.")))
 
@@ -305,6 +318,19 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         // галочками неделю назад, - и правит не то, что у него в трее.
         mirrorTemplate()
         applied()
+    }
+
+    // Выбор мышью из списка не проходит через controlTextDidEndEditing:
+    // без этого выбранный адрес виден в поле, но никуда не записан.
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let box = self.remoteField,
+                  let picked = box.objectValueOfSelectedItem as? String else { return }
+            box.stringValue = picked
+            Prefs.remoteHost = picked
+            self.remoteResult.stringValue = ""
+            self.applied()
+        }
     }
 
     private func mirrorTemplate() {
