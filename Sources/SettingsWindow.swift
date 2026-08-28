@@ -55,10 +55,12 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         addCheck(stack, "showModels", L("Лимиты по моделям (Opus, Sonnet, Fable)",
                                         "Per-model limits (Opus, Sonnet, Fable)"), Prefs.showModels)
         addCheck(stack, "showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra)
-        addCheck(stack, "showMoney", L("Деньги: во сколько обошлось бы по прайсу API",
-                                       "Money: what it would cost at API prices"), Prefs.showMoney)
-        addCheck(stack, "showTokens", L("Токены: потрачено и весь лимит - «1,2м/2,2м»",
-                                        "Tokens: spent and full limit - \"1.2M/2.2M\""), Prefs.showTokens)
+        addCheck(stack, "showMoney", L("Деньги в раскрывающемся меню: во сколько обошлось бы по прайсу API",
+                                       "Money in the dropdown: what it would cost at API prices"), Prefs.showMoney)
+        addCheck(stack, "showTokens", L("Токены в раскрывающемся меню: потрачено и весь лимит - «1,2м/2,2м»",
+                                        "Tokens in the dropdown: spent and full limit - \"1.2M/2.2M\""), Prefs.showTokens)
+        stack.addArrangedSubview(small(L("В строку меню наверху эти двое не попадают даже включённые - там всегда мало места. Нужны и туда - впиши {money} или {tokens} в свой формат ниже.",
+                                         "These two never reach the compact bar above, even when checked - there is never enough room there. Want them there too - add {money} or {tokens} to the custom format below.")))
         stack.addArrangedSubview(small(L("Сколько токенов в тарифе, не говорит никто - ни справка, ни админ. Второе число выведено из своего же расхода и процента.",
                                          "Nobody states how many tokens a plan has. The second number is derived from your own usage and percentage.")))
 
