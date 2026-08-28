@@ -120,7 +120,12 @@ struct Keychain {
     // Сам секрет всё равно читается через /usr/bin/security (см. readEntry):
     // тогда ACL на записи принадлежит подписанному Apple бинарнику,
     // и пользовательское «всегда разрешать» переживает пересборки приложения.
-    static func duplicateAccounts() -> [String] {
+    // allowDump: разбор `security dump-keychain` разрешён только из диагностики.
+    // На машине без логина Claude Code запрос атрибутов возвращает пусто, и
+    // прежний код уходил в dump КАЖДЫЕ пять минут: медленно, а на части
+    // конфигураций поднимает диалог доступа - ровно то, чего мы избегали,
+    // выбирая API атрибутов.
+    static func duplicateAccounts(allowDump: Bool = false) -> [String] {
 #if canImport(Security)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -135,7 +140,7 @@ struct Keychain {
             if !accounts.isEmpty { return Array(Set(accounts)).sorted() }
         }
 #endif
-        return accountsFromDump()
+        return allowDump ? accountsFromDump() : []
     }
 
     // Запасной путь: разбор `security dump-keychain`.

@@ -162,9 +162,10 @@ enum CLI {
             return 1
         }
 
-        print(Fmt.pad("User-Agent", 18) + Prefs.userAgent)
+        print(Fmt.pad("User-Agent", 18) + Prefs.userAgent
+            .components(separatedBy: CharacterSet(charactersIn: "\r\n\0")).joined(separator: " "))
 
-        let dups = Keychain.duplicateAccounts()
+        let dups = Keychain.duplicateAccounts(allowDump: true)
         print(Fmt.pad(L("Дубликаты", "Duplicates"), 18)
             + L("\(dups.count) записей с этим именем", "\(dups.count) entries with this service"))
 
@@ -193,7 +194,11 @@ enum CLI {
         }
 
         let api = UsageAPI.shared
-        print(Fmt.pad(L("Кэш", "Cache"), 18) + api.cacheFile.path)
+        // Путь сокращаем до «~»: --doctor копируют в чат, и имя пользователя
+        // в системном пути там ни к чему.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        print(Fmt.pad(L("Кэш", "Cache"), 18)
+            + api.cacheFile.path.replacingOccurrences(of: home, with: "~"))
         if let age = api.cacheAge {
             print(Fmt.pad(L("Возраст данных", "Data age"), 18)
                 + L("\(Int(age)) сек", "\(Int(age)) sec"))

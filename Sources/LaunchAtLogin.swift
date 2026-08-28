@@ -46,6 +46,17 @@ enum LaunchAtLogin {
 
     private static func writeAgent() -> String? {
         let exe = Bundle.main.executablePath ?? ""
+        // Путь пишется в plist как есть. Если приложение запустили из
+        // «Загрузок» - каталог доступен на запись, и подмена файла даёт
+        // исполнение кода при каждом входе в систему. INSTALL.md просит
+        // ставить в «Программы», но код это не проверял.
+        let allowed = ["/Applications/",
+                       FileManager.default.homeDirectoryForCurrentUser
+                           .appendingPathComponent("Applications").path + "/"]
+        if !allowed.contains(where: { exe.hasPrefix($0) }) {
+            return L("сначала перенеси приложение в «Программы» - автозапуск закрепляет путь, откуда запущено",
+                     "move the app to Applications first - launch at login pins the current path")
+        }
         guard !exe.isEmpty else {
             return L("не нашёл путь к собственному бинарнику",
                      "could not resolve own executable path")

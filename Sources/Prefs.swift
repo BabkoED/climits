@@ -44,8 +44,15 @@ struct Prefs {
     // 300 секунд: чаще нет смысла - цифры всё равно кэшируются, а частый
     // опрос этого эндпоинта приводит к HTTP 429. Проверено на живом трее:
     // раз в минуту хватало, чтобы поймать 429 за час.
+    // Зажат, как и остальные. Без границ было два исхода, и оба тихие:
+    // 0 -> таймер с нулевым интервалом, порядка десяти тысяч срабатываний
+    // в секунду на главном потоке, строка меню встаёт. Огромное значение ->
+    // кэш всегда считается свежим, приложение показывает годовалые цифры
+    // БЕЗ пометки «~», потому что на этой ветке isStale ставится false
+    // и суточный потолок не применяется.
     static var refreshInterval: Int {
-        get { int("refreshInterval", 300) } set { d.set(newValue, forKey: "refreshInterval") } }
+        get { max(60, min(3600, int("refreshInterval", 300))) }
+        set { d.set(newValue, forKey: "refreshInterval") } }
     // Как представляемся эндпоинту.
     //
     // Есть распространённое мнение, что запросы без User-Agent вида
@@ -121,9 +128,9 @@ struct Prefs {
         set { d.set(newValue, forKey: "iconSet") } }
 
     static var warnAt: Int {
-        get { int("warnAt", 50) } set { d.set(newValue, forKey: "warnAt") } }
+        get { max(1, min(100, int("warnAt", 50))) } set { d.set(newValue, forKey: "warnAt") } }
     static var alertAt: Int {
-        get { int("alertAt", 80) } set { d.set(newValue, forKey: "alertAt") } }
+        get { max(1, min(100, int("alertAt", 80))) } set { d.set(newValue, forKey: "alertAt") } }
 
     // Итоговый шаблон: либо свой, либо собранный из галочек.
     static var effectiveTemplate: String {

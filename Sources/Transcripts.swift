@@ -79,6 +79,12 @@ enum Transcripts {
 
         for case let url as URL in walker {
             guard url.pathExtension == "jsonl" else { continue }
+            // Только обычные файлы. Символьная ссылка на /dev/zero даёт
+            // seekToEnd() == 0, потолок в 64 МБ не срабатывает вовсе,
+            // и чтение съедает память; на FIFO чтение просто блокируется,
+            // а в терминальном режиме обход синхронный - климитс вешается.
+            guard let rv = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+                  rv.isRegularFile == true, rv.isSymbolicLink != true else { continue }
             // Файл, не тронутый с начала окна, точно не содержит нужных строк.
             if let v = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                let m = v.contentModificationDate, m < since { continue }
@@ -146,7 +152,10 @@ enum Transcripts {
         let size = (try? handle.seekToEnd()) ?? 0
         let truncated = size > UInt64(maxTailBytes)
         try? handle.seek(toOffset: truncated ? size - UInt64(maxTailBytes) : 0)
-        guard let data = try? handle.readToEnd() else { return ("", truncated) }
+        // Читаем не больше потолка явно: readToEnd() на нерегулярном источнике
+        // не имеет конца, и потолок, посчитанный из size, его не ограничивает.
+        let want = Int(min(size, UInt64(maxTailBytes)))
+        guard want > 0, let data = try? handle.read(upToCount: want) else { return ("", truncated) }
         return (String(decoding: data, as: UTF8.self), truncated)
     }
 }

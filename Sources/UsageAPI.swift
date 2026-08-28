@@ -14,6 +14,7 @@ enum UsageError: Error, LocalizedError {
     case offline              // сети нет и нет сохранённых данных
     case http(Int)
     case unparsable
+    case badValues
     case keychain(Error)
 
     var errorDescription: String? {
@@ -33,6 +34,11 @@ enum UsageError: Error, LocalizedError {
         case .unparsable:
             return L("ответ API не разобрался (структура изменилась?)",
                      "could not parse the API response (schema changed?)")
+        case .badValues:
+            // Отдельно от unparsable: сказать «структура изменилась», когда
+            // в ответе просто нечисловые значения, - это соврать о причине.
+            return L("в ответе нечисловые значения - показывать нечего",
+                     "the response carries non-numeric values - nothing to show")
         case .keychain(let e):
             return (e as? LocalizedError)?.errorDescription ?? "\(e)"
         }
@@ -130,14 +136,15 @@ final class UsageAPI {
         // мы потеряем обновление, но не то, что уже лежало.
         let tmp = cacheFile.appendingPathExtension("tmp")
         do {
+            // Файл создаётся УЖЕ закрытым. Прежний порядок - записать,
+            // потом chmod - оставлял содержимое на диске с правами
+            // по умолчанию на время между двумя вызовами.
+            try? FileManager.default.removeItem(at: tmp)
+            _ = FileManager.default.createFile(atPath: tmp.path, contents: nil,
+                                               attributes: [.posixPermissions: 0o600])
             try body.write(to: tmp, atomically: false, encoding: .utf8)
-            // Права выставляются ДО подмены. Если делать после, между записью
-            // и chmod существует промежуток, в котором файл лежит с правами
-            // по умолчанию. Здесь это чужой каталог не открывает, но порядок
-            // «сначала закрыть, потом положить» дешевле и надёжнее.
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                   ofItemAtPath: tmp.path)
-            _ = try? FileManager.default.replaceItemAt(cacheFile, withItemAt: tmp)
+            _ = try? FileManager.default.replaceItemAt(cacheFile, withItemAt: tmp,
+                                                      options: [.usingNewMetadataOnly])
         } catch {
             try? FileManager.default.removeItem(at: tmp)
         }
@@ -251,7 +258,9 @@ final class UsageAPI {
             guard let u = UsageParser.parse(body: s, fetchedAt: Date(), isStale: false) else {
                 // Ответ пришёл, но разобрать нечего. Кэш не портим: пусть
                 // лучше показываются прежние цифры, чем ничего.
-                return .failure(.unparsable)
+                let low = s.lowercased()
+                let nonNumeric = low.contains("nan") || low.contains("inf")
+                return .failure(nonNumeric ? .badValues : .unparsable)
             }
             writeCache(s)
             strikes = 0

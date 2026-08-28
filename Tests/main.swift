@@ -254,5 +254,53 @@ check("короткий файл не помечен обрезанным", !win
 check("стоимость окна посчитана", MoneyView.money(win.cost).hasPrefix("$0.3"))
 try? FileManager.default.removeItem(at: tmp)
 
+
+// ---- нефинитные числа: главный дефект ревью безопасности ------------------
+print("\nнефинитные значения")
+
+// В Swift Int(Double.nan) - это trap, а не мусорное значение. Путь до падения
+// короткий: "nan" в кэше или в любом .jsonl -> Bucket.pct в строке меню.
+check("nan из JSON отбрасывается", jsonNumber("nan") == nil)
+check("inf тоже", jsonNumber("inf") == nil)
+check("-inf тоже", jsonNumber("-inf") == nil)
+check("обычное число проходит", "\(jsonNumber("62.5") ?? -1)", "62.5")
+check("safeInt на nan не валится", "\(safeInt(Double.nan))", "0")
+check("safeInt отбрасывает дробь, а не округляет", "\(safeInt(69.8))", "69")
+check("бесконечность считается негодной и даёт 0", "\(safeInt(Double.infinity))", "0")
+// Зажатие относится к ФИНИТНЫМ, но огромным: 1e300 конечно, а в Int не влезает.
+check("огромное конечное число зажимается, а не валит",
+      safeInt(1e300) == Int(Int32.max))
+check("огромное отрицательное тоже", safeInt(-1e300) == -Int(Int32.max))
+
+// Лимит с испорченным процентом должен исчезнуть, а не обрушить разбор.
+let poisoned = """
+{
+  "five_hour":  {"utilization": "nan", "resets_at": "\(soon)"},
+  "seven_day":  {"utilization": 62.0,  "resets_at": "\(later)"}
+}
+"""
+if let u = UsageParser.parse(body: poisoned, fetchedAt: Date(), isStale: false) {
+    check("испорченный лимит отброшен, целый остался", u.buckets.count == 1)
+    check("остался именно недельный", u.bucket("seven_day") != nil)
+    check("строка меню строится без падения", !BarTitle.render("{5h} {7d}", usage: u).isEmpty)
+} else {
+    check("разбор с одним испорченным лимитом не должен возвращать nil", false)
+}
+
+// Все лимиты испорчены - разбора нет, но и падения нет.
+let allBad = "{\"five_hour\": {\"utilization\": \"nan\", \"resets_at\": \"\(soon)\"}}"
+check("сплошь испорченный ответ не разбирается и не валит",
+      UsageParser.parse(body: allBad, fetchedAt: Date(), isStale: false) == nil)
+
+// exponent из pricing.json или из ответа может быть любым.
+let wildExp = Extra(enabled: true, usedMinor: 13963, limitMinor: 20000,
+                    exponent: 1_000_000, currency: "USD", percentGiven: nil)
+check("огромный exponent не уводит формат в мегабайтную строку",
+      wildExp.usedText.count < 20)
+let negExp = Extra(enabled: true, usedMinor: 13963, limitMinor: 20000,
+                   exponent: -5, currency: "USD", percentGiven: nil)
+check("отрицательный exponent не даёт невалидный спецификатор",
+      !negExp.usedText.isEmpty)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

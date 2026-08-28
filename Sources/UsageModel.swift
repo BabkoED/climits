@@ -3,11 +3,28 @@ import Foundation
 // Число, которое может приехать числом, строкой или NSNumber. Ответ не
 // документирован, и типы в нём уже разъезжались: где-то 62, где-то "62".
 func jsonNumber(_ any: Any?) -> Double? {
-    if let d = any as? Double { return d }
+    // ЗАСЛОНКА НА НЕФИНИТНОЕ. В Swift Int(Double.nan) - это не мусорное
+    // значение, как в C, а гарантированный trap: процесс падает.
+    // Путь короткий: строка "nan" в кэше или в любом .jsonl под
+    // ~/.claude/projects -> Bucket.pct в updateTitle -> падение при каждом
+    // запуске. Отбрасываем, а не зажимаем: зажатое число выглядит как расчёт.
+    func ok(_ d: Double) -> Double? { return d.isFinite ? d : nil }
+    if let d = any as? Double { return ok(d) }
     if let i = any as? Int { return Double(i) }
-    if let n = any as? NSNumber { return n.doubleValue }
-    if let s = any as? String { return Double(s) }
+    if let n = any as? NSNumber { return ok(n.doubleValue) }
+    if let s = any as? String, let d = Double(s) { return ok(d) }
     return nil
+}
+
+// Безопасный переход в Int: и на нефинитном, и на выходящем за диапазон.
+//
+// Дробь ОТБРАСЫВАЕТСЯ, а не округляется - так же, как показывает /usage,
+// и так было до этой правки. Округление здесь один раз уже подменило
+// 69.8% на 70%, и тесты это поймали: заслонка от падения не должна попутно
+// менять цифру на экране.
+func safeInt(_ d: Double, cap: Int = Int(Int32.max)) -> Int {
+    guard d.isFinite else { return 0 }
+    return Int(max(Double(-cap), min(Double(cap), d)))
 }
 
 // Разбор ответа api.anthropic.com/api/oauth/usage.
@@ -37,7 +54,7 @@ struct Bucket {
     // приходит от того, кто лимит и считает.
     let severity: String
 
-    var pct: Int { return Int(percent) }   // как в /usage: отбрасываем дробь
+    var pct: Int { return safeInt(percent) }   // как в /usage, но без trap
 }
 
 struct Extra {
@@ -55,9 +72,9 @@ struct Extra {
     // бы спокойным нулём и зелёным цветом. Поэтому если поля нет, считаем сами.
     // Единицы у used и limit одинаковые (минорные), они сокращаются.
     var percent: Int? {
-        if let p = percentGiven { return Int(p) }
-        guard let u = usedMinor, let l = limitMinor, l > 0 else { return nil }
-        return Int(u / l * 100.0)
+        if let p = percentGiven { return safeInt(p) }
+        guard let u = usedMinor, let l = limitMinor, l > 0, l.isFinite else { return nil }
+        return safeInt(u / l * 100.0)
     }
 
     var symbol: String {
@@ -77,11 +94,15 @@ struct Extra {
     // завысить расход ровно в сто раз.
     func money(_ minor: Double?) -> String {
         guard let m = minor else { return "\u{2014}" }
-        let divisor = pow(10.0, Double(exponent))
+        // exponent зажат: при 1000000 строка формата "%.*f" уводит вывод
+        // в мегабайтную строку, при отрицательном спецификатор невалиден.
+        let e = max(0, min(6, exponent))
+        let divisor = pow(10.0, Double(e))
         // String(format:) без локали печатает точку в любой системе. Это
         // важно: локализованное форматирование дало бы «$139,63», и сумма
         // читалась бы как разряды тысяч.
-        return symbol + String(format: "%.\(exponent)f", m / divisor)
+        guard m.isFinite else { return symbol + "?" }
+        return symbol + String(format: "%.\(e)f", m / divisor)
     }
 
     var usedText: String { return money(usedMinor) }
@@ -400,7 +421,7 @@ struct UsageParser {
         f.formatOptions = [.withInternetDateTime]
         if let d = f.date(from: s) { return d }
         // Совсем запасной путь: секунды эпохи числом в строке.
-        if let secs = Double(s), secs > 1_000_000_000 {
+        if let secs = Double(s), secs.isFinite, secs > 1_000_000_000 {
             return Date(timeIntervalSince1970: secs > 1_000_000_000_000 ? secs / 1000 : secs)
         }
         return nil
