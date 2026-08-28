@@ -9,7 +9,7 @@ import Foundation
 //   climits --json     сырой ответ API
 //   climits --doctor   диагностика: связка ключей, токен, срок, запрос
 enum CLI {
-    static let version = "1.1.1"
+    static let version = "1.1.2"
 
     static var isTTY: Bool { return isatty(1) == 1 }
 
