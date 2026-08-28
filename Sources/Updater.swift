@@ -123,16 +123,18 @@ final class Updater {
         }
         a.informativeText = info
 
-        if r.sha256 != nil { a.addButton(withTitle: L("Обновить", "Update")) }
+        let canInstall = (r.sha256 != nil)
+        if canInstall { a.addButton(withTitle: L("Обновить", "Update")) }
         a.addButton(withTitle: L("Открыть страницу", "Open the page"))
         a.addButton(withTitle: L("Позже", "Later"))
 
         let choice = a.runModal()
-        let first = NSApplication.ModalResponse.alertFirstButtonReturn
-        if r.sha256 != nil && choice == first {
+        let pageButton: NSApplication.ModalResponse =
+            canInstall ? .alertSecondButtonReturn : .alertFirstButtonReturn
+        if canInstall && choice == .alertFirstButtonReturn {
             install(r)
-        } else if choice == (r.sha256 != nil ? .alertSecondButtonReturn : first) {
-            NSWorkspace.shared.open(URL(string: Prefs.repoURL + "/releases/latest")!)
+        } else if choice == pageButton, let u = URL(string: Prefs.repoURL + "/releases/latest") {
+            NSWorkspace.shared.open(u)
         }
     }
 
@@ -151,7 +153,7 @@ final class Updater {
             say(L("Некуда положить", "Nowhere to write"),
                 L("Нет прав на запись в \(parent.path). Скачай со страницы релиза руками.",
                   "No write access to \(parent.path). Download from the release page instead."))
-            NSWorkspace.shared.open(URL(string: Prefs.repoURL + "/releases/latest")!)
+            if let u = URL(string: Prefs.repoURL + "/releases/latest") { NSWorkspace.shared.open(u) }
             return
         }
 
