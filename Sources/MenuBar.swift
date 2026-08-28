@@ -334,7 +334,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // прыгнет к правому краю. «▸» шире 24 точек не бывает даже на самом
     // крупном шрифте, который разрешают настройки.
     private static let textColumn: CGFloat = 24   // где начинается и подпись, и шкала
-    private static let pctColumn: CGFloat = 260   // правый край процента
 
     private func row(for b: Bucket, active: Bool) -> NSMenuItem {
         let accent = Palette.color(for: b)
@@ -342,23 +341,29 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.isEnabled = true
 
         let para = NSMutableParagraphStyle()
-        para.tabStops = [
-            NSTextTab(textAlignment: .left, location: MenuBarController.textColumn),
-            NSTextTab(textAlignment: .right, location: MenuBarController.pctColumn),
-        ]
+        para.tabStops = [NSTextTab(textAlignment: .left, location: MenuBarController.textColumn)]
         para.lineSpacing = 2
 
         // Указатель стоит ДО табулятора, в своей колонке шириной в отступ:
         // иначе активная строка сдвигала бы подпись относительно остальных.
         let mark = active ? "\u{25B8}" : ""
         let title = NSMutableAttributedString(
-            string: "\(mark)\t\(b.long)\t\(b.pct)%\n",
+            string: "\(mark)\t\(b.long)\n",
             attributes: [
                 .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) + 1),
                 .paragraphStyle: para,
             ])
 
-        title.append(NSAttributedString(string: "\t" + Fmt.bar(b.pct), attributes: [
+        // Процент - сразу после шкалы, не наверху отдельной строкой: одно
+        // место для взгляда вместо двух. Именно после, а не перед - шкала
+        // у Fmt.bar всегда фиксированной длины (Prefs.barWidth, добито
+        // пустыми клетками), а у процента ширина гуляет от «3%» до «100%».
+        // Поставь его первым - сами шкалы разъезжались бы по горизонтали
+        // на пару знаков от строки к строке.
+        //
+        // Цвет процента - тот же accent, что у шкалы: числом повторяется
+        // тот же сигнал, что и цветом, а не идёт особняком нейтральным.
+        title.append(NSAttributedString(string: "\t" + Fmt.bar(b.pct) + " \(b.pct)%", attributes: [
             .font: Palette.menuFont,
             .foregroundColor: accent,
             .paragraphStyle: para,
