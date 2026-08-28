@@ -119,6 +119,38 @@ final class UsageAPI {
         }
     }
 
+
+    // Один запрос к эндпоинту. Вынесен отдельно, потому что вызывается
+    // по разу на каждый кандидат из связки ключей.
+    private func request(token: String) -> (code: Int, body: Data?) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 10
+        req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // User-Agent настраиваемый - подробности в README, раздел «Про 429».
+        // Коротко: ходит мнение, что без «правильного» значения запросы
+        // попадают в жёстко лимитируемый бакет. По первоисточникам это
+        // не подтверждается, поэтому по умолчанию представляемся честно,
+        // а подменить значение можно одной строкой в настройках.
+        req.setValue(Prefs.userAgent, forHTTPHeaderField: "User-Agent")
+
+        var out: Data? = nil
+        var status = 0
+        let sem = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.dataTask(with: req) { d, resp, _ in
+            out = d
+            status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            sem.signal()
+        }
+        task.resume()
+        // Ждём чуть дольше сетевого таймаута: если URLSession почему-то
+        // не вызовет обработчик, лучше отпустить поток, чем повесить всё.
+        _ = sem.wait(timeout: .now() + 15)
+        return (status, out)
+    }
+
     func fetchSync(ttl: TimeInterval, force: Bool) -> Result<Usage, UsageError> {
         if !force, let c = readCache(), Date().timeIntervalSince(c.at) < ttl {
             if let u = UsageParser.parse(body: c.body, fetchedAt: c.at, isStale: false) {
@@ -131,29 +163,27 @@ final class UsageAPI {
             return .failure(.rateLimited)
         }
 
-        let tok: KeychainToken
-        do { tok = try Keychain.token() }
-        catch { return .failure(.keychain(error)) }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 10
-        req.setValue("Bearer " + tok.value, forHTTPHeaderField: "Authorization")
-        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Кандидатов может быть несколько: в связке ключей нередко лежит
+        // не одна запись Claude Code, и первая по счёту вполне может быть
+        // битой - об этом сообщил живой пользователь, у которого security
+        // стабильно отдавал именно кривую. Перебираем по очереди, но только
+        // пока сервер отвечает 401/403: на любой другой ответ останавливаемся,
+        // иначе каждая сетевая неурядица превращалась бы в веер запросов.
+        let tokens = Keychain.candidates()
+        if tokens.isEmpty {
+            do { _ = try Keychain.token() }          // бросит внятную причину
+            catch { return .failure(.keychain(error)) }
+            return .failure(.auth(401))
+        }
 
         var body: Data? = nil
         var code = 0
-        let sem = DispatchSemaphore(value: 0)
-        let task = URLSession.shared.dataTask(with: req) { d, resp, _ in
-            body = d
-            code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            sem.signal()
+        for tok in tokens {
+            let r = request(token: tok.value)
+            body = r.body
+            code = r.code
+            if code != 401 && code != 403 { break }
         }
-        task.resume()
-        // Ждём чуть дольше сетевого таймаута: если URLSession почему-то не
-        // вызовет обработчик, лучше отпустить поток, чем повесить приложение.
-        _ = sem.wait(timeout: .now() + 15)
 
         switch code {
         case 200:

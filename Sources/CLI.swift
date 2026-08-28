@@ -134,9 +134,18 @@ enum CLI {
             return 1
         }
 
+        print(Fmt.pad("User-Agent", 18) + Prefs.userAgent)
+
         let dups = Keychain.duplicateAccounts()
         print(Fmt.pad(L("Дубликаты", "Duplicates"), 18)
             + L("\(dups.count) записей с этим именем", "\(dups.count) entries with this service"))
+
+        // Сколько записей вообще пригодно: именно здесь становится видно,
+        // что security отдаёт битую запись, а рабочая лежит рядом.
+        let cands = Keychain.candidates()
+        let alive = cands.filter { !$0.isExpired }.count
+        print(Fmt.pad(L("Пригодных записей", "Usable entries"), 18)
+            + L("\(cands.count), из них живых \(alive)", "\(cands.count), alive \(alive)"))
 
         do {
             let t = try Keychain.token()

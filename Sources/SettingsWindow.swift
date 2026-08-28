@@ -11,6 +11,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private var previewLabel: NSTextField!
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
+    private var uaField: NSTextField!
 
     private let intervals: [(String, Int)] = [
         (L("каждую минуту", "every minute"), 60),
@@ -20,7 +21,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     ]
 
     convenience init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 470),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = L("Настройки climits", "climits settings")
@@ -107,6 +108,18 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         loginToggle.state = LaunchAtLogin.isEnabled ? .on : .off
         stack.addArrangedSubview(loginToggle)
 
+        stack.addArrangedSubview(spacer(6))
+        stack.addArrangedSubview(NSTextField(labelWithString: "User-Agent"))
+        uaField = NSTextField()
+        uaField.stringValue = Prefs.userAgent
+        uaField.delegate = self
+        uaField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        uaField.translatesAutoresizingMaskIntoConstraints = false
+        uaField.widthAnchor.constraint(equalToConstant: 470).isActive = true
+        stack.addArrangedSubview(uaField)
+        stack.addArrangedSubview(small(L("Трогать стоит, только если эндпоинт постоянно отвечает 429. Пусто - значение по умолчанию.",
+                                         "Only worth touching if the endpoint keeps answering 429. Empty means the default.")))
+
         updatePreview()
     }
 
@@ -173,6 +186,11 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        // Одно окно, два поля: разбираемся, кто именно изменился.
+        if let f = obj.object as? NSTextField, f === uaField {
+            Prefs.userAgent = f.stringValue
+            return
+        }
         Prefs.customTemplate = templateField.stringValue
         applied()
     }

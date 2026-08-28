@@ -46,6 +46,23 @@ struct Prefs {
     // раз в минуту хватало, чтобы поймать 429 за час.
     static var refreshInterval: Int {
         get { int("refreshInterval", 300) } set { d.set(newValue, forKey: "refreshInterval") } }
+    // Как представляемся эндпоинту.
+    //
+    // Есть распространённое мнение, что запросы без User-Agent вида
+    // «claude-code/<версия>» попадают в жёстко лимитируемый бакет и ловят
+    // постоянный 429. По первоисточникам оно не подтверждается: в issues
+    // claude-code про 429 на этом эндпоинте User-Agent не упоминается вовсе.
+    // Поэтому по умолчанию представляемся своим именем - честно и проверяемо,
+    // а если 429 будет мешать, значение меняется в настройках без пересборки.
+    static let defaultUserAgent = "climits/1.0.0 (+https://github.com/BabkoED/climits)"
+    static var userAgent: String {
+        get {
+            let s = (d.string(forKey: "userAgent") ?? "").trimmingCharacters(in: .whitespaces)
+            return s.isEmpty ? defaultUserAgent : s
+        }
+        set { d.set(newValue, forKey: "userAgent") }
+    }
+
     static var warnAt: Int {
         get { int("warnAt", 50) } set { d.set(newValue, forKey: "warnAt") } }
     static var alertAt: Int {

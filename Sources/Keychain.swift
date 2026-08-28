@@ -153,26 +153,44 @@ struct Keychain {
         return String(rest[..<end.lowerBound])
     }
 
-    // Основная точка входа: живой токен или ошибка с понятной причиной.
-    static func token() throws -> KeychainToken {
-        guard let raw = rawEntry() else { throw KeychainError.notFound }
-        guard let first = parse(raw) else {
-            throw KeychainError.unparsable(previewRedacted: redact(raw))
-        }
-        if !first.isExpired { return first }
+    // Все пригодные записи, самая свежая первой.
+    //
+    // Нужно из-за реального случая от пользователя: в связке лежат две записи
+    // Claude Code, одна битая, и `security -w` отдаёт именно битую. Симптом
+    // при этом какой угодно - и «токен не читается», и «токен истёк», и
+    // честный HTTP 401 на живой с виду токен. Поэтому список кандидатов
+    // строится один раз, а разбираться, который из них рабочий, приходится
+    // уже по ответу сервера.
+    static func candidates() -> [KeychainToken] {
+        var found: [KeychainToken] = []
+        var seen = Set<String>()
 
-        // Первая запись просрочена - перебираем дубликаты и берём самую
-        // свежую по expiresAt. Разбор всей связки заметно медленнее, поэтому
-        // делаем это только здесь, а не при каждом запросе.
-        var best: KeychainToken? = nil
-        for acct in duplicateAccounts() {
-            guard let r = rawEntry(account: acct), let t = parse(r) else { continue }
-            guard let exp = t.expiresAt else { continue }
-            if let b = best, let bexp = b.expiresAt, bexp >= exp { continue }
-            best = t
+        func add(_ raw: String?) {
+            guard let r = raw, let t = parse(r), !seen.contains(t.value) else { return }
+            seen.insert(t.value)
+            found.append(t)
         }
-        if let b = best, !b.isExpired { return b }
-        throw KeychainError.expired(first.expiresAt)
+
+        add(rawEntry())
+        for acct in duplicateAccounts() { add(rawEntry(account: acct)) }
+
+        // Живые вперёд, а внутри каждой группы - у кого срок дальше.
+        // Запись без expiresAt считаем живой: на части сборок поля просто нет,
+        // и отбрасывать её было бы хуже, чем попробовать.
+        return found.sorted { a, b in
+            if a.isExpired != b.isExpired { return !a.isExpired }
+            return (a.expiresAt ?? .distantFuture) > (b.expiresAt ?? .distantFuture)
+        }
+    }
+
+    // Основная точка входа: лучший из кандидатов или ошибка с понятной причиной.
+    static func token() throws -> KeychainToken {
+        let all = candidates()
+        if let best = all.first, !best.isExpired { return best }
+        if let newest = all.first { throw KeychainError.expired(newest.expiresAt) }
+        // Кандидатов нет вовсе: либо записи нет, либо она не разбирается.
+        guard let raw = rawEntry() else { throw KeychainError.notFound }
+        throw KeychainError.unparsable(previewRedacted: redact(raw))
     }
 
     // Для --doctor: показать структуру записи, не раскрывая секретов.
