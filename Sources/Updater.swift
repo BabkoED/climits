@@ -138,6 +138,19 @@ final class Updater {
         }
     }
 
+    // Подпись не проверилась - решает человек, а не мы за него. Сумма архива
+    // к этому моменту уже сошлась, то есть скачано ровно то, что собрал CI.
+    private func confirmUnverified(_ why: String) -> Bool {
+        let a = NSAlert()
+        a.messageText = L("Подпись не проверилась", "Signature not verified")
+        a.informativeText = L(
+            "\(why)\n\nСумма архива при этом сошлась с той, что напечатала сборка: скачано ровно то, что собрал CI. Ставить?",
+            "\(why)\n\nThe archive checksum did match the one printed by the build: this is exactly what CI produced. Install anyway?")
+        a.addButton(withTitle: L("Ставить", "Install"))
+        a.addButton(withTitle: L("Отмена", "Cancel"))
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
     private func say(_ title: String, _ text: String) {
         let a = NSAlert()
         a.messageText = title
@@ -164,8 +177,9 @@ final class Updater {
                 guard let self = self else { return }
                 self.busy = false
                 switch result {
-                case .success(let newApp):
-                    self.swap(newApp, over: bundle)
+                case .success(let ready):
+                    if let w = ready.signatureWarning, !self.confirmUnverified(w) { return }
+                    self.swap(ready.app, over: bundle)
                 case .failure(let e):
                     self.say(L("Обновиться не вышло", "Update failed"), e.text)
                 case .none:
@@ -179,11 +193,28 @@ final class Updater {
     // ради этого перечисление незачем: наверх уходит только текст для окна.
     struct Trouble: Error { let text: String }
 
-    private func fail(_ text: String) -> Result<URL, Trouble> { return .failure(Trouble(text: text)) }
+    // Распакованное приложение и оговорка, если проверка подписи не прошла.
+    //
+    // Почему оговорка, а не отказ. Настоящая защита здесь одна - сверка
+    // SHA-256 с суммой, которую напечатала сборка в тексте релиза; она уже
+    // прошла к этому моменту, иначе сюда бы не дошло. Подпись ad-hoc говорит
+    // только о целости распакованного, а её и так гарантирует совпавшая сумма.
+    //
+    // Зато отказ на этом шаге стоил дорого: проверку выполняет ТА ВЕРСИЯ,
+    // КОТОРАЯ УЖЕ СТОИТ. Опечатка в ключе codesign (`--quiet`, которого у него
+    // нет) намертво закрыла обновление в 1.2.1 - и починить это выпуском
+    // новой версии нельзя, только руками. Больше ни один шаг ПОСЛЕ сверки
+    // суммы не имеет права запирать обновление сам: он спрашивает.
+    struct Ready {
+        let app: URL
+        let signatureWarning: String?
+    }
+
+    private func fail(_ text: String) -> Result<Ready, Trouble> { return .failure(Trouble(text: text)) }
 
     // Скачивание, сверка суммы, распаковка. Всё в каталоге на ТОМ ЖЕ томе,
     // что и приложение: подмена через replaceItemAt между томами не работает.
-    private func download(_ r: Release, near bundle: URL) -> Result<URL, Trouble> {
+    private func download(_ r: Release, near bundle: URL) -> Result<Ready, Trouble> {
         let fm = FileManager.default
         let work: URL
         do {
@@ -248,15 +279,13 @@ final class Updater {
         // «скачано из интернета» у приложения, которое уже стоит.
         _ = shell("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
 
-        // Подпись обязана быть на месте. Она ad-hoc, но без неё система
-        // спрашивает доступ к связке ключей заново и чаще, а битый бандл
-        // выглядит точно так же, как целый.
-        if let e = shell("/usr/bin/codesign", ["--verify", "--quiet", newApp.path]) {
-            return fail(L("подпись не проходит проверку: \(e)",
-                              "signature does not verify: \(e)"))
-        }
+        // Ровно та команда, что уже гоняется в CI на настоящем macOS, знак
+        // в знак. Свой набор ключей здесь придумывать нельзя: проверить его
+        // на Linux нечем - codesign там не существует, - и ровно так был
+        // сломан 1.2.1.
+        let signature = shell("/usr/bin/codesign", ["--verify", "--verbose", newApp.path])
 
-        return .success(newApp)
+        return .success(Ready(app: newApp, signatureWarning: signature))
     }
 
     private func swap(_ newApp: URL, over bundle: URL) {
