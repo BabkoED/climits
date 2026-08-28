@@ -16,6 +16,9 @@ struct WindowUsage {
     // Токены по семействам моделей: opus, sonnet, fable, haiku.
     var byFamily: [String: TokenTally] = [:]
     var unknownModels: Set<String> = []
+    // Хотя бы один файл пришлось читать не целиком - значит часть окна
+    // не увидели, и итог занижен. Молча этого показывать нельзя.
+    var truncated = false
 
     var totals: TokenTally {
         return byFamily.values.reduce(TokenTally()) { $0 + $1 }
@@ -39,7 +42,12 @@ struct WindowUsage {
 enum Transcripts {
     // Читаем только хвост файла: расшифровки длинных проектов вырастают до
     // сотен мегабайт, а в интересующее нас окно попадает только конец.
-    private static let maxTailBytes = 8 * 1024 * 1024
+    //
+    // Восемь мегабайт было мало: недельное окно у активного пользователя
+    // не влезает, и деньги за неделю занижались молча. Шестьдесят четыре
+    // покрывают неделю с запасом, а если всё же не покрыли - в WindowUsage
+    // поднимается флаг truncated, и в меню появляется оговорка.
+    private static let maxTailBytes = 64 * 1024 * 1024
 
     static var projectsDir: URL {
         return FileManager.default.homeDirectoryForCurrentUser
@@ -59,6 +67,9 @@ enum Transcripts {
     static func usage(cutoffs: [Date], dir: URL? = nil) -> [WindowUsage] {
         guard let earliest = cutoffs.min() else { return [] }
         var out = [WindowUsage](repeating: WindowUsage(), count: cutoffs.count)
+        // Общий на все файлы: один и тот же message.id не должен посчитаться
+        // дважды, даже если строки разъехались по двум файлам.
+        var seen = Set<String>()
         let root = dir ?? projectsDir
         let since = earliest
         guard let walker = FileManager.default.enumerator(
@@ -71,14 +82,18 @@ enum Transcripts {
             // Файл, не тронутый с начала окна, точно не содержит нужных строк.
             if let v = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                let m = v.contentModificationDate, m < since { continue }
-            scan(url: url, cutoffs: cutoffs, into: &out)
+            scan(url: url, cutoffs: cutoffs, into: &out, seen: &seen)
         }
         return out
     }
 
-    private static func scan(url: URL, cutoffs: [Date], into out: inout [WindowUsage]) {
+    private static func scan(url: URL, cutoffs: [Date], into out: inout [WindowUsage],
+                             seen: inout Set<String>) {
         let since = cutoffs.min() ?? Date.distantPast
-        for line in tail(of: url).split(separator: "\n") {
+        let (text, truncated) = tail(of: url)
+        if truncated { for i in out.indices { out[i].truncated = true } }
+
+        for line in text.split(separator: "\n") {
             // Дешёвый отсев до разбора JSON: строк в файле десятки тысяч,
             // а с расходом - единицы процентов от них.
             guard line.contains("\"usage\"") else { continue }
@@ -90,6 +105,21 @@ enum Transcripts {
                   let when = UsageParser.parseDate(ts), when >= since else { continue }
             guard let message = row["message"] as? [String: Any],
                   let usage = message["usage"] as? [String: Any] else { continue }
+
+            // ОДНО СООБЩЕНИЕ - НЕСКОЛЬКО СТРОК.
+            //
+            // Claude Code пишет ответ модели порциями, и в каждой строке
+            // лежит ПОЛНЫЙ usage этого сообщения, а не приращение. Считать
+            // построчно - значит сложить одно и то же по нескольку раз.
+            // Замер на живом файле: 98 строк с usage на 43 сообщения, то есть
+            // завышение в 2.28 раза. Значения в повторах идентичны, поэтому
+            // берём первое вхождение и остальные пропускаем.
+            if let mid = message["id"] as? String, !mid.isEmpty {
+                if seen.contains(mid) { continue }
+                seen.insert(mid)
+            }
+            // Строка без id дедупу не поддаётся. В замере таких не было
+            // ни одной, но если появятся - лучше посчитать, чем потерять.
 
             let model = (message["model"] as? String) ?? ""
             let family = Pricing.family(of: model)
@@ -110,14 +140,14 @@ enum Transcripts {
         return Int(jsonNumber(any) ?? 0)
     }
 
-    private static func tail(of url: URL) -> String {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+    private static func tail(of url: URL) -> (text: String, truncated: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return ("", false) }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        let offset = size > UInt64(maxTailBytes) ? size - UInt64(maxTailBytes) : 0
-        try? handle.seek(toOffset: offset)
-        guard let data = try? handle.readToEnd() else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        let truncated = size > UInt64(maxTailBytes)
+        try? handle.seek(toOffset: truncated ? size - UInt64(maxTailBytes) : 0)
+        guard let data = try? handle.readToEnd() else { return ("", truncated) }
+        return (String(decoding: data, as: UTF8.self), truncated)
     }
 }
 
@@ -175,12 +205,16 @@ struct MoneyView {
 // когда до сброса осталось десять минут, эти два промежутка расходятся почти
 // полностью.
 enum Money {
-    static func duration(of key: String) -> TimeInterval {
-        return key == "five_hour" ? 5 * 3600 : 7 * 86400
+    // isSession, а не сравнение с «five_hour»: длительность окна задаёт
+    // Anthropic, имя ключа уже менялось, и ровно поэтому в Usage есть
+    // отдельное свойство session. Полагаться здесь на литерал - значит
+    // однажды поделить недельный расход на пятичасовой процент.
+    static func duration(isSession: Bool) -> TimeInterval {
+        return isSession ? 5 * 3600 : 7 * 86400
     }
 
-    static func windowStart(for b: Bucket) -> Date {
-        let d = duration(of: b.key)
+    static func windowStart(for b: Bucket, isSession: Bool) -> Date {
+        let d = duration(isSession: isSession)
         if let reset = b.resetsAt { return reset.addingTimeInterval(-d) }
         return Date().addingTimeInterval(-d)
     }

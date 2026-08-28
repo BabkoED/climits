@@ -209,11 +209,24 @@ func iso(_ offset: TimeInterval) -> String {
     return f.string(from: Date().addingTimeInterval(offset))
 }
 
-// Две строки в окне (Opus и Sonnet) и одна за его пределами.
+// Фикстура по живому файлу, а не по моему представлению о нём.
+//
+// Claude Code пишет ответ модели несколькими строками, и в каждой лежит
+// ПОЛНЫЙ usage сообщения, а не приращение. Замер на настоящей расшифровке:
+// 98 строк с usage на 43 сообщения, значения в повторах идентичны. Прежняя
+// фикстура держала одну строку на сообщение - и тест не замечал, что деньги
+// завышаются вдвое.
 let jsonl = [
-  "{\"timestamp\":\"\(iso(-600))\",\"message\":{\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":2000,\"cache_read_input_tokens\":500000}}}",
-  "{\"timestamp\":\"\(iso(-900))\",\"message\":{\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":300,\"output_tokens\":100}}}",
-  "{\"timestamp\":\"\(iso(-99999))\",\"message\":{\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":9999999,\"output_tokens\":9999999}}}",
+  // одно сообщение Opus, разбитое на три строки с одинаковым usage
+  "{\"timestamp\":\"\(iso(-600))\",\"message\":{\"id\":\"msg_a\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":2000,\"cache_read_input_tokens\":500000}}}",
+  "{\"timestamp\":\"\(iso(-599))\",\"message\":{\"id\":\"msg_a\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":2000,\"cache_read_input_tokens\":500000}}}",
+  "{\"timestamp\":\"\(iso(-598))\",\"message\":{\"id\":\"msg_a\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":2000,\"cache_read_input_tokens\":500000}}}",
+  // отдельное сообщение Sonnet, две строки
+  "{\"timestamp\":\"\(iso(-900))\",\"message\":{\"id\":\"msg_b\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":300,\"output_tokens\":100}}}",
+  "{\"timestamp\":\"\(iso(-899))\",\"message\":{\"id\":\"msg_b\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":300,\"output_tokens\":100}}}",
+  // за пределами окна
+  "{\"timestamp\":\"\(iso(-99999))\",\"message\":{\"id\":\"msg_old\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":9999999,\"output_tokens\":9999999}}}",
+  // строка без расхода вообще
   "{\"timestamp\":\"\(iso(-300))\",\"type\":\"user\",\"message\":{\"content\":\"без расхода\"}}",
 ].joined(separator: "\n")
 try? jsonl.write(to: tmp.appendingPathComponent("proj-a/session.jsonl"),
@@ -221,11 +234,15 @@ try? jsonl.write(to: tmp.appendingPathComponent("proj-a/session.jsonl"),
 
 let win = Transcripts.usage(since: Date().addingTimeInterval(-3600), dir: tmp)
 check("найдены две модели", win.byFamily.count == 2)
-check("Opus: входные сложились", "\(win.byFamily["opus"]?.input ?? -1)", "1000")
-check("Opus: чтение из кэша учтено отдельно", "\(win.byFamily["opus"]?.cacheRead ?? -1)", "500000")
-check("Sonnet отдельной строкой", "\(win.byFamily["sonnet"]?.output ?? -1)", "100")
-check("строка за пределами окна не попала", win.byFamily["opus"]?.requests == 1)
-check("строка без usage не считается запросом", win.totals.requests == 2)
+// Главная проверка этого блока: три строки одного сообщения дают один расход,
+// а не тройной. Именно здесь деньги завышались вдвое.
+check("повторы одного сообщения не сложились", "\(win.byFamily["opus"]?.input ?? -1)", "1000")
+check("и запрос посчитан один", win.byFamily["opus"]?.requests == 1)
+check("Sonnet тоже один раз", "\(win.byFamily["sonnet"]?.output ?? -1)", "100")
+check("всего два сообщения, а не пять строк", win.totals.requests == 2)
+check("чтение из кэша учтено отдельно", "\(win.byFamily["opus"]?.cacheRead ?? -1)", "500000")
+check("сообщение за пределами окна не попало", (win.byFamily["opus"]?.input ?? 0) < 9_999_999)
+check("короткий файл не помечен обрезанным", !win.truncated)
 // 1000*5 + 2000*25 + 500000*0.5 = 5000 + 50000 + 250000 = 305000 / 1e6 = $0.305
 check("стоимость окна посчитана", MoneyView.money(win.cost).hasPrefix("$0.3"))
 try? FileManager.default.removeItem(at: tmp)

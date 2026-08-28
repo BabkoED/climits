@@ -18,22 +18,32 @@ enum Notifier {
 
     static func check(_ usage: Usage) {
         guard Prefs.notifyEnabled else { return }
+        // По несвежим цифрам не оповещаем. Иначе после суток без сети
+        // приходит сообщение о пороге, пройденном двадцать часов назад,
+        // и выглядит это как срабатывание сейчас.
+        guard !usage.isStale else { return }
+
         let threshold = Prefs.notifyAt
         let d = UserDefaults.standard
 
         for b in usage.buckets {
             let key = firedKey(b.key)
-            let already = d.bool(forKey: key)
+            // Запоминаем не «оповещали ли», а ДЛЯ КАКОГО окна оповещали.
+            // Взвод по просадке ниже порога не работал: пока приложение
+            // не видело просадку - а его могли не запускать сутки - новое
+            // окно оставалось без предупреждения вовсе.
+            let stamp = b.resetsAt.map { String(Int($0.timeIntervalSince1970)) } ?? "no-reset"
+            let firedFor = d.string(forKey: key)
+
             if b.pct >= threshold {
-                if !already {
-                    d.set(true, forKey: key)
+                if firedFor != stamp {
+                    d.set(stamp, forKey: key)
                     send(title: L("Лимит на исходе", "Limit running out"),
-                         body: L("\(b.long): \(b.pct)% \(Fmt.resetPhrase(b.resetsAt))",
-                                 "\(b.long): \(b.pct)% \(Fmt.resetPhrase(b.resetsAt))"))
+                         body: "\(b.long): \(b.pct)% \u{00B7} \(Fmt.resetPhrase(b.resetsAt))")
                 }
-            } else if already {
-                // Ушли ниже порога - значит окно сбросилось, взводим снова.
-                d.set(false, forKey: key)
+            } else if firedFor == stamp {
+                // Ушли ниже порога внутри того же окна - взводим заново.
+                d.removeObject(forKey: key)
             }
         }
     }

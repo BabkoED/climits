@@ -92,10 +92,12 @@ enum CLI {
         // файлов, и платить за него в каждом вызове незачем.
         var windows: [String: WindowUsage] = [:]
         if Prefs.showMoney {
-            let s = u.session.map { Money.windowStart(for: $0) } ?? Date().addingTimeInterval(-5 * 3600)
-            let w = u.bucket("seven_day").map { Money.windowStart(for: $0) } ?? Date().addingTimeInterval(-7 * 86400)
+            let s = u.session.map { Money.windowStart(for: $0, isSession: true) }
+                ?? Date().addingTimeInterval(-5 * 3600)
+            let w = u.bucket("seven_day").map { Money.windowStart(for: $0, isSession: false) }
+                ?? Date().addingTimeInterval(-7 * 86400)
             let scans = Transcripts.usage(cutoffs: [s, w])
-            if scans.count == 2 { windows = ["five_hour": scans[0], "week": scans[1]] }
+            if scans.count == 2 { windows = ["session": scans[0], "week": scans[1]] }
         }
 
         print("")
@@ -104,7 +106,7 @@ enum CLI {
             let clock = Fmt.clock(b.resetsAt)
             let tail = clock.isEmpty ? "" : " \u{00B7} " + clock
             var moneyTail = ""
-            if Prefs.showMoney, let w = windows[b.key == "five_hour" ? "five_hour" : "week"] {
+            if Prefs.showMoney, let w = windows[b.key == u.session?.key ? "session" : "week"] {
                 let mv = Money.view(for: b, in: w)
                 if mv.spent > 0 {
                     moneyTail = "  \u{2248}" + mv.spentText

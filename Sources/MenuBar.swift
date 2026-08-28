@@ -17,6 +17,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var sessionWindow = WindowUsage()
     private var weeklyWindow = WindowUsage()
     private var localEstimate: WindowUsage?
+    // Ключ текущего окна берётся из ответа, а не зашивается литералом.
+    private var sessionKey = "five_hour"
+    private var scanning = false
+    private var lastScan: Date?
 
     override init() {
         super.init()
@@ -81,36 +85,64 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
     // главном потоке это подвесило бы строку меню на секунды.
-    private func rescanTranscripts(for u: Usage) {
+    //
+    // Реже, чем раз в две минуты, не пересчитываем: обход дерева проектов -
+    // это десятки мегабайт чтения, а таймер, открытие меню и ⌘R дают поводов
+    // куда чаще. Замер на живой машине: 61 МБ и 222 файла за один проход.
+    private static let rescanGap: TimeInterval = 120
+
+    private func rescanTranscripts(for u: Usage, force: Bool = false) {
         guard Prefs.showMoney else { return }
-        let sessionStart = u.session.map { Money.windowStart(for: $0) }
+        if scanning { return }
+        if !force, let last = lastScan, Date().timeIntervalSince(last) < MenuBarController.rescanGap {
+            return
+        }
+        sessionKey = u.session?.key ?? "five_hour"
+        let sessionStart = u.session.map { Money.windowStart(for: $0, isSession: true) }
             ?? Date().addingTimeInterval(-5 * 3600)
-        let weeklyStart = u.bucket("seven_day").map { Money.windowStart(for: $0) }
+        let weeklyStart = u.bucket("seven_day").map { Money.windowStart(for: $0, isSession: false) }
             ?? Date().addingTimeInterval(-7 * 86400)
+
+        scanning = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let w = Transcripts.usage(cutoffs: [sessionStart, weeklyStart])
             DispatchQueue.main.async {
-                guard let self = self, w.count == 2 else { return }
+                guard let self = self else { return }
+                self.scanning = false
+                self.lastScan = Date()
+                guard w.count == 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
+                // Без этого макрос {money} в строке меню пуст при запуске
+                // и потом всегда отстаёт на одно обновление: цифры пришли,
+                // а перерисовать никто не попросил.
+                self.updateTitle()
             }
         }
     }
 
     private func rescanLocalOnly() {
+        if scanning { return }
+        scanning = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let w = Transcripts.usage(since: Date().addingTimeInterval(-5 * 3600))
-            DispatchQueue.main.async { self?.localEstimate = w }
+            DispatchQueue.main.async {
+                self?.scanning = false
+                self?.localEstimate = w
+            }
         }
     }
 
     // Какое окно расшифровок относится к этому лимиту.
     private func window(for b: Bucket) -> WindowUsage {
-        return b.key == "five_hour" ? sessionWindow : weeklyWindow
+        return b.key == sessionKey ? sessionWindow : weeklyWindow
     }
 
     @objc private func prefsChanged() {
         rearmTimer()
+        // Включили «Деньги» - считаем сразу, не дожидаясь таймера. Иначе
+        // галочка выглядит так, будто ничего не делает.
+        if Prefs.showMoney, let u = usage { rescanTranscripts(for: u, force: true) }
         updateTitle()
     }
 
@@ -161,6 +193,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if Prefs.showMoney {
                 menu.addItem(dim(L("Деньги - оценка по расшифровкам этой машины, а не счёт",
                                    "Money is an estimate from this machine's transcripts, not a bill")))
+                // Флаги, которые до этого собирались и никуда не попадали.
+                // Собирать и не показывать - хуже, чем не собирать: в коде
+                // выглядит как учтённое, а человек об этом не узнаёт.
+                let unknown = sessionWindow.unknownModels.union(weeklyWindow.unknownModels)
+                if !unknown.isEmpty {
+                    let list = unknown.sorted().joined(separator: ", ")
+                    menu.addItem(dim(L("нет цены для \(list) - считаю по Sonnet",
+                                       "no price for \(list) - counted as Sonnet")))
+                }
+                if sessionWindow.truncated || weeklyWindow.truncated {
+                    menu.addItem(dim(L("история не прочитана целиком - итог занижен",
+                                       "history not read in full - the total is understated")))
+                }
             }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
@@ -183,8 +228,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 menu.addItem(plain(L("запросов: \(tt.requests)", "requests: \(tt.requests)")))
                 menu.addItem(plain(L("токенов: \(Fmt.compact(tt.total))",
                                      "tokens: \(Fmt.compact(tt.total))")))
-                menu.addItem(plain(L("по прайсу API: \u{2248}\(MoneyView.money(est.cost))",
-                                     "at API prices: \u{2248}\(MoneyView.money(est.cost))")))
+                if Prefs.showMoney {
+                    menu.addItem(plain(L("по прайсу API: \u{2248}\(MoneyView.money(est.cost))",
+                                         "at API prices: \u{2248}\(MoneyView.money(est.cost))")))
+                }
                 menu.addItem(dim(L("только эта машина, лимита это не заменяет",
                                    "this machine only - not a substitute for the limit")))
             }

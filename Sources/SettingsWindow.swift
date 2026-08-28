@@ -271,10 +271,31 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         applied()
     }
 
+    // Числа применяются по окончании ввода, а не на каждое нажатие.
+    //
+    // Иначе, набирая порог 50, человек на мгновение ставит 5 - и получает
+    // настоящее уведомление о «пороге», которого не задавал. С цветами
+    // и шаблоном наоборот: там живой отклик и есть весь смысл.
+    private static let numericKeys: Set<String> = [
+        "barWidth", "fontSize", "menuFontSize", "warnAt", "alertAt", "notifyAt",
+    ]
+
     func controlTextDidChange(_ obj: Notification) {
         guard let f = obj.object as? NSTextField else { return }
-        let v = f.stringValue
-        switch f.identifier?.rawValue ?? "" {
+        let key = f.identifier?.rawValue ?? ""
+        if SettingsWindowController.numericKeys.contains(key) { return }
+        apply(key: key, value: f.stringValue)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let f = obj.object as? NSTextField else { return }
+        let key = f.identifier?.rawValue ?? ""
+        guard SettingsWindowController.numericKeys.contains(key) else { return }
+        apply(key: key, value: f.stringValue)
+    }
+
+    private func apply(key: String, value v: String) {
+        switch key {
         case "userAgent":    Prefs.userAgent = v; return   // вида не меняет
         case "colorCalm":    Prefs.colorCalm = v
         case "colorWarn":    Prefs.colorWarn = v
@@ -323,8 +344,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     // Предпросмотр на выдуманных, но правдоподобных цифрах: настраивать вид
     // строки, глядя на живые 3%, неудобно - половина макросов выглядит пусто.
     private func updatePreview() {
-        previewLabel.stringValue = BarTitle.render(Prefs.effectiveTemplate, usage: SettingsWindowController.sample)
+        // С деньгами: иначе галочка «Деньги» на предпросмотр не влияет вовсе,
+        // и человек решает, что она сломана.
+        previewLabel.stringValue = BarTitle.render(Prefs.effectiveTemplate,
+                                                   usage: SettingsWindowController.sample,
+                                                   money: SettingsWindowController.sampleMoney)
     }
+
+    static let sampleMoney = MoneyView.make(spent: 12.40, percent: 37, partial: true)
 
     static let sample: Usage = {
         let now = Date()
