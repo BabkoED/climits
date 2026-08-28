@@ -8,6 +8,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var usage: Usage?
     private var lastError: String?
     private var settingsWindow: SettingsWindowController?
+    // Один запрос в полёте. Без этого совпавшие поводы обновиться - таймер,
+    // открытие меню и ⌘R одновременно - дают три параллельных запроса
+    // к эндпоинту, который и от одного-то огрызается.
+    private var inFlight = false
 
     override init() {
         super.init()
@@ -46,8 +50,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func refresh(force: Bool) {
+        if inFlight { return }
+        inFlight = true
         UsageAPI.shared.fetch(ttl: ttl, force: force) { [weak self] result in
             guard let self = self else { return }
+            self.inFlight = false
             switch result {
             case .success(let u):
                 self.usage = u
@@ -76,24 +83,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         let text = BarTitle.render(Prefs.effectiveTemplate, usage: u)
-        let worst = u.worst?.pct ?? 0
-        var color = NSColor.labelColor
-        if worst >= Prefs.alertAt { color = NSColor.systemRed }
-        else if worst >= Prefs.warnAt { color = NSColor.systemOrange }
+        // Строка меню остаётся нейтральной, пока всё спокойно: цветом
+        // в строке меню стоит тревожить только по делу.
+        let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
         button.attributedTitle = NSAttributedString(string: text, attributes: [
             .foregroundColor: color,
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular),
+            .font: Palette.barFont,
         ])
     }
 
     // --- меню ---------------------------------------------------------------
+    // Открытие меню - хороший повод освежить данные: человек смотрит именно
+    // сейчас. Порог между запросами внутри fetch всё равно не даст частить.
+    func menuWillOpen(_ menu: NSMenu) {
+        refresh(force: false)
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
         if let u = usage {
             if u.isStale || lastError != nil {
-                let note = staleNote(u)
-                menu.addItem(dim(note))
+                menu.addItem(dim(staleNote(u)))
+                if let next = UsageAPI.shared.nextAttemptAt {
+                    menu.addItem(dim(L("пробую снова в \(Fmt.hhmm(next))",
+                                       "next attempt at \(Fmt.hhmm(next))")))
+                }
                 menu.addItem(.separator())
             }
             for b in u.buckets {
@@ -141,11 +156,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             + Fmt.resetPhrase(b.resetsAt)
         let i = NSMenuItem(title: line, action: nil, keyEquivalent: "")
         i.isEnabled = true
-        var color = NSColor.labelColor
-        if b.pct >= Prefs.alertAt { color = NSColor.systemRed }
-        else if b.pct >= Prefs.warnAt { color = NSColor.systemOrange }
+        let color = Palette.color(for: b)
         i.attributedTitle = NSAttributedString(string: line, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: Palette.menuFont,
             .foregroundColor: color,
         ])
         return i
@@ -161,8 +174,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let p = e.percent ?? 0
             text = "  " + L("Сверх лимита: ", "Extra usage: ")
                  + e.usedText + L(" из ", " of ") + e.money(limit) + "  (\(p)%)"
-            if p >= Prefs.alertAt { color = NSColor.systemRed }
-            else if p >= Prefs.warnAt { color = NSColor.systemOrange }
+            color = Palette.color(forPercent: p, severity: "normal")
         } else {
             // Лимит не задан - не выдумываем «из —», а честно поясняем.
             text = "  " + L("Сверх лимита: ", "Extra usage: ") + e.usedText
@@ -172,7 +184,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let i = NSMenuItem(title: text, action: nil, keyEquivalent: "")
         i.isEnabled = true
         i.attributedTitle = NSAttributedString(string: text, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: Palette.menuFont,
             .foregroundColor: color,
         ])
         return i

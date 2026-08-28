@@ -21,10 +21,12 @@ enum CLI {
     static var yellow: String { c("33") }
     static var red: String { c("31") }
 
-    static func colorFor(_ pct: Int) -> String {
-        if pct >= Prefs.alertAt { return red }
-        if pct >= Prefs.warnAt { return yellow }
-        return green
+    static func colorFor(_ pct: Int, severity: String = "normal") -> String {
+        switch styleLevel(percent: pct, severity: severity) {
+        case 2: return red
+        case 1: return yellow
+        default: return green
+        }
     }
 
     // Возвращает код выхода.
@@ -88,7 +90,7 @@ enum CLI {
     private static func printFull(_ u: Usage) {
         print("")
         for b in u.buckets {
-            let col = colorFor(b.pct)
+            let col = colorFor(b.pct, severity: b.severity)
             let clock = Fmt.clock(b.resetsAt)
             let tail = clock.isEmpty ? "" : " \u{00B7} " + clock
             print("  \(bold)\(Fmt.pad(b.long, 20))\(reset)"

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Проверки логики: разбор ответа API, единицы денег, сборка строки меню.
 #
-# Ни AppKit, ни сети здесь нет - поэтому гоняется где угодно, где есть swiftc,
+# Ни AppKit, ни Security, ни сети здесь нет - поэтому гоняется где угодно,
+# где есть swiftc,
 # включая Linux и CI. Это те места, где ошибка не видна глазами: сумма,
 # завышенная в сто раз, выглядит ровно так же убедительно, как правильная.
 set -euo pipefail
@@ -14,7 +15,6 @@ trap 'rm -rf "$(dirname "$OUT")"' EXIT
 
 swiftc -swift-version 5 -o "$OUT" \
   Sources/L10n.swift \
-  Sources/Keychain.swift \
   Sources/UsageModel.swift \
   Sources/Prefs.swift \
   Sources/Format.swift \

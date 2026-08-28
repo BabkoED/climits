@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 
 // Чтение токена Claude Code из системной связки ключей.
 //
@@ -93,7 +96,7 @@ struct Keychain {
                 // expiresAt приходит в МИЛЛИСЕКУНДАХ. Делить обязательно:
                 // без деления дата уезжает в 57-й тысячный год и проверка
                 // «истёк ли токен» становится бессмысленной.
-                if let ms = numeric(node["expiresAt"]) {
+                if let ms = jsonNumber(node["expiresAt"]) {
                     exp = Date(timeIntervalSince1970: ms / 1000.0)
                 }
                 return KeychainToken(value: tok, expiresAt: exp)
@@ -106,24 +109,37 @@ struct Keychain {
         return nil
     }
 
-    // Числовое поле, которое может приехать числом или строкой.
-    static func numeric(_ any: Any?) -> Double? {
-        if let d = any as? Double { return d }
-        if let i = any as? Int { return Double(i) }
-        if let s = any as? String { return Double(s) }
-        if let n = any as? NSNumber { return n.doubleValue }
-        return nil
-    }
-
     // Имена учётных записей всех записей с нашим service.
     //
-        // Зачем это нужно: в связке ключей нередко лежит несколько записей с
-    // одинаковым именем - следы прошлых установок Claude Code. Команда
-    // `security ... -w` отдаёт ПЕРВУЮ попавшуюся, и это вполне может быть
-    // протухшая запись, тогда как рабочая лежит рядом. Один и тот же симптом:
-    // /usage внутри Claude Code показывает цифры, а индикатор в трее говорит
-    // «токен истёк».
+    // Через SecItemCopyMatching, а не разбором вывода `security dump-keychain`:
+    // здесь запрашиваются АТРИБУТЫ, а не сам секрет, и такой запрос не поднимает
+    // диалог авторизации и не требует прав на содержимое. Разбор dump-keychain
+    // остаётся запасным путём - он медленный, зависит от формата вывода,
+    // и на части систем сам показывает диалог.
+    //
+    // Сам секрет всё равно читается через /usr/bin/security (см. readEntry):
+    // тогда ACL на записи принадлежит подписанному Apple бинарнику,
+    // и пользовательское «всегда разрешать» переживает пересборки приложения.
     static func duplicateAccounts() -> [String] {
+#if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: AnyObject?
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+           let items = result as? [[String: Any]] {
+            let accounts = items.compactMap { $0[kSecAttrAccount as String] as? String }
+            if !accounts.isEmpty { return Array(Set(accounts)).sorted() }
+        }
+#endif
+        return accountsFromDump()
+    }
+
+    // Запасной путь: разбор `security dump-keychain`.
+    private static func accountsFromDump() -> [String] {
         guard let dump = run("/usr/bin/security", ["dump-keychain"]) else { return [] }
         var accounts: [String] = []
         var acct: String? = nil

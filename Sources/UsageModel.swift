@@ -1,5 +1,15 @@
 import Foundation
 
+// Число, которое может приехать числом, строкой или NSNumber. Ответ не
+// документирован, и типы в нём уже разъезжались: где-то 62, где-то "62".
+func jsonNumber(_ any: Any?) -> Double? {
+    if let d = any as? Double { return d }
+    if let i = any as? Int { return Double(i) }
+    if let n = any as? NSNumber { return n.doubleValue }
+    if let s = any as? String { return Double(s) }
+    return nil
+}
+
 // Разбор ответа api.anthropic.com/api/oauth/usage.
 //
 // Эндпоинт НЕ документирован: это то, что Claude Code запрашивает для своей
@@ -22,6 +32,10 @@ struct Bucket {
     let resetsAt: Date?
     let isActive: Bool
     let rank: Int          // порядок в списке
+    // Уровень тревоги словами от самого сервера: normal | warning | critical.
+    // Когда он есть, он вернее наших порогов: пороги мы выдумали, а этот
+    // приходит от того, кто лимит и считает.
+    let severity: String
 
     var pct: Int { return Int(percent) }   // как в /usage: отбрасываем дробь
 }
@@ -141,28 +155,51 @@ struct UsageParser {
     }
 
     // ---- путь 1: массив "limits" -------------------------------------------
+    //
+    // Настоящая форма, а не догадка: kind принимает значения session,
+    // weekly_all и weekly_scoped, а имя модели лежит НЕ рядом с процентом,
+    // а внутри scope.model.display_name. Первая версия этого разбора искала
+    // model строкой на верхнем уровне записи - в результате все модельные
+    // лимиты схлопывались в один ключ weekly_scoped: в меню было несколько
+    // одинаково подписанных строк, а макросы {opus} и {fable} молчали.
     private static func parseLimitsArray(_ root: [String: Any]) -> [Bucket] {
         guard let list = root["limits"] as? [[String: Any]], !list.isEmpty else { return [] }
         var out: [Bucket] = []
+        var usedKeys = Set<String>()
+
         for item in list {
-            // Имя лимита может лежать под разными ключами - берём первое,
-            // которое есть. Так же и с процентом.
-            let key = firstString(item, ["kind", "type", "name", "id", "scope"])
-                ?? firstString(item, ["title"]) ?? "limit\(out.count)"
             guard let pct = firstNumber(item, ["percent", "utilization", "used_percent", "pct"])
             else { continue }
-            let reset = firstString(item, ["resets_at", "reset_at", "resets"]).flatMap(parseDate)
-            let active = (item["is_active"] as? Bool) ?? false
-            // Человеческое имя, если API его прислало, иначе выводим из ключа.
-            let title = firstString(item, ["title", "display_name", "label"])
-            let model = firstString(item, ["model", "model_name"])
-            out.append(makeBucket(key: normalizeKey(key, model: model),
+            let kind = firstString(item, ["kind", "type", "name", "id"]) ?? "limit\(out.count)"
+            let scope = item["scope"] as? [String: Any]
+            let display = modelDisplayName(scope: scope, item: item)
+
+            var key = normalizeKey(kind, display: display)
+            // Две модели с одинаковым коротким именем - маловероятно, но если
+            // случится, вторая не должна затирать первую.
+            if usedKeys.contains(key) { key += "_\(out.count)" }
+            usedKeys.insert(key)
+
+            out.append(makeBucket(key: key,
                                   percent: pct,
-                                  resetsAt: reset,
-                                  isActive: active,
-                                  titleFromAPI: title))
+                                  resetsAt: firstString(item, ["resets_at", "reset_at", "resets"]).flatMap(parseDate),
+                                  isActive: (item["is_active"] as? Bool) ?? false,
+                                  severity: firstString(item, ["severity"]) ?? "normal",
+                                  titleFromAPI: display ?? firstString(item, ["title", "display_name", "label"])))
         }
         return out
+    }
+
+    // Имя модели: сначала документированный путь scope.model.display_name,
+    // потом всё, что похоже, - форма ответа не обещана и уже менялась.
+    private static func modelDisplayName(scope: [String: Any]?, item: [String: Any]) -> String? {
+        if let s = scope {
+            if let m = s["model"] as? [String: Any] {
+                if let d = firstString(m, ["display_name", "name", "id", "model"]) { return d }
+            }
+            if let d = firstString(s, ["model", "display_name", "name"]) { return d }
+        }
+        return firstString(item, ["model", "model_name"])
     }
 
     // ---- путь 2: объекты верхнего уровня -----------------------------------
@@ -189,38 +226,45 @@ struct UsageParser {
                                   percent: pct,
                                   resetsAt: reset,
                                   isActive: (obj["is_active"] as? Bool) ?? false,
+                                  severity: firstString(obj, ["severity"]) ?? "normal",
                                   titleFromAPI: nil))
         }
         return out
     }
 
-    // Приводим имена из массива limits к тем же ключам, что на верхнем уровне,
-    // чтобы настройки и макросы работали одинаково в обеих формах ответа.
-    private static func normalizeKey(_ raw: String, model: String?) -> String {
-        let k = raw.lowercased().replacingOccurrences(of: "-", with: "_")
-        if let m = model?.lowercased(), !m.isEmpty {
-            if k.contains("seven") || k.contains("week") {
-                return "seven_day_" + modelFamily(m)
-            }
-        }
-        if k == "five_hour" || k.contains("five_hour") || k.contains("5h") || k == "session" {
+    // Приводим значения kind к тем же ключам, что на верхнем уровне, чтобы
+    // настройки, макросы и порядок строк работали одинаково в обеих формах.
+    private static func normalizeKey(_ rawKind: String, display: String?) -> String {
+        let k = rawKind.lowercased().replacingOccurrences(of: "-", with: "_")
+
+        if k == "session" || k == "five_hour" || k.contains("five_hour") || k.contains("5h") {
             return "five_hour"
         }
-        if k == "seven_day" || k == "weekly" || k == "week" { return "seven_day" }
+        if k == "weekly_all" || k == "seven_day" || k == "weekly" || k == "week" {
+            return "seven_day"
+        }
+        if k == "weekly_scoped" || k.hasPrefix("seven_day_") || k.contains("scoped") {
+            if let d = display, !d.isEmpty { return "seven_day_" + modelFamily(d.lowercased()) }
+            // Модель не названа - оставляем ключ как есть, иначе безымянные
+            // лимиты слипнутся в один.
+            return k
+        }
         return k
     }
 
-    // «claude-opus-4-6-20260115» -> «opus». Версии и даты в названии нам не
-    // нужны: в трее должно стоять короткое имя семейства.
+    // «Claude Opus 4.6», «claude-opus-4-6-20260115» -> «opus». В трее должно
+    // стоять короткое имя семейства, а не версия с датой сборки.
     private static func modelFamily(_ m: String) -> String {
         for family in ["opus", "sonnet", "haiku", "fable"] {
             if m.contains(family) { return family }
         }
-        return m
+        // Незнакомая модель: оставляем как есть, только без пробелов.
+        return m.replacingOccurrences(of: " ", with: "_")
     }
 
     private static func makeBucket(key: String, percent: Double, resetsAt: Date?,
-                                   isActive: Bool, titleFromAPI: String?) -> Bucket {
+                                   isActive: Bool, severity: String = "normal",
+                                   titleFromAPI: String?) -> Bucket {
         var short = key
         var long = titleFromAPI ?? key
         var rank = 2
@@ -240,7 +284,7 @@ struct UsageParser {
             rank = 2
         default:
             if key.hasPrefix("seven_day_") {
-                let m = String(key.dropFirst("seven_day_".count))
+                let m = String(key.dropFirst("seven_day_".count)).replacingOccurrences(of: "_", with: " ")
                 short = m.prefix(1).uppercased() + m.dropFirst()
                 long = L("Неделя, ", "Week, ") + short
             } else if titleFromAPI == nil {
@@ -251,7 +295,8 @@ struct UsageParser {
             }
         }
         return Bucket(key: key, short: short, long: long, percent: percent,
-                      resetsAt: resetsAt, isActive: isActive, rank: rank)
+                      resetsAt: resetsAt, isActive: isActive, rank: rank,
+                      severity: severity.lowercased())
     }
 
     // ---- деньги ------------------------------------------------------------
@@ -272,6 +317,7 @@ struct UsageParser {
         }
         if let l = spend["limit"] as? [String: Any] {
             limit = firstNumber(l, ["amount_minor", "amount", "minor"])
+            if currency == nil { currency = firstString(l, ["currency", "currency_code"]) }
         }
         // Затем extra_usage - прежняя форма того же самого.
         if used == nil { used = firstNumber(eu, ["used_credits", "used", "amount_minor"]) }
@@ -285,9 +331,14 @@ struct UsageParser {
         if exponent == nil { exponent = deepNumber(root, ["exponent", "decimal_places"]).map { Int($0) } }
         if currency == nil { currency = deepString(root, ["currency", "currency_code"]) }
 
+        // Флаг называется по-разному в разных версиях ответа: is_enabled
+        // в extra_usage и просто enabled в spend. Проверяем оба, иначе
+        // включённый перерасход показывался бы выключенным.
         let enabled: Bool
         if let b = eu["is_enabled"] as? Bool { enabled = b }
+        else if let b = eu["enabled"] as? Bool { enabled = b }
         else if let b = spend["is_enabled"] as? Bool { enabled = b }
+        else if let b = spend["enabled"] as? Bool { enabled = b }
         else { enabled = used != nil }
 
         return Extra(enabled: enabled,
@@ -295,7 +346,8 @@ struct UsageParser {
                      limitMinor: limit,
                      exponent: exponent ?? 2,
                      currency: currency ?? "USD",
-                     percentGiven: firstNumber(eu, ["utilization", "percent"]))
+                     percentGiven: firstNumber(eu, ["utilization", "percent"])
+                                   ?? firstNumber(spend, ["percent", "utilization"]))
     }
 
     // ---- мелкие помощники --------------------------------------------------
@@ -308,7 +360,7 @@ struct UsageParser {
 
     static func firstNumber(_ d: [String: Any], _ keys: [String]) -> Double? {
         for k in keys {
-            if let v = Keychain.numeric(d[k]) { return v }
+            if let v = jsonNumber(d[k]) { return v }
         }
         return nil
     }
@@ -318,7 +370,7 @@ struct UsageParser {
     // в новый контейнер, а называется по-прежнему.
     static func deepNumber(_ any: Any, _ keys: [String]) -> Double? {
         if let d = any as? [String: Any] {
-            for k in keys { if let v = Keychain.numeric(d[k]) { return v } }
+            for k in keys { if let v = jsonNumber(d[k]) { return v } }
             for (_, v) in d { if let r = deepNumber(v, keys) { return r } }
         }
         if let a = any as? [Any] {

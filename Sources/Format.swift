@@ -2,6 +2,21 @@ import Foundation
 
 // Форматирование: сколько осталось, шкала, подстановка макросов.
 
+// Уровень тревоги: 0 спокойно, 1 внимание, 2 тревога.
+// Здесь, а не в Palette: этим пользуется и терминальный режим, где AppKit нет.
+// Severity от сервера главнее наших порогов - пороги мы выдумали, а severity
+// считает тот, кто считает и сам лимит.
+func styleLevel(percent: Int, severity: String) -> Int {
+    switch severity.lowercased() {
+    case "critical": return 2
+    case "warning":  return 1
+    default: break
+    }
+    if percent >= Prefs.alertAt { return 2 }
+    if percent >= Prefs.warnAt { return 1 }
+    return 0
+}
+
 enum Fmt {
     // «2ч 14м», «1д 4ч», «вот-вот». Секунды не показываем никогда: на экране,
     // который обновляется раз в пять минут, они всё равно врут.
@@ -31,30 +46,36 @@ enum Fmt {
         guard let d = date else { return "" }
         let cal = Calendar.current
         let wd = cal.component(.weekday, from: d)
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return weekdayShort(wd) + " " + f.string(from: d)
+        return weekdayShort(wd) + " " + hhmm(d)
     }
 
+    // Формат времени берём у системы, а не зашиваем «HH:mm»: у половины мира
+    // часы двенадцатичасовые, и жёсткий формат там читается как ошибка.
     static func hhmm(_ date: Date) -> String {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+        f.locale = .autoupdatingCurrent
+        f.setLocalizedDateFormatFromTemplate("j:mm")
         return f.string(from: date)
     }
 
-    static func bar(_ pct: Int, width: Int = 14) -> String {
+    static func bar(_ pct: Int, width: Int? = nil) -> String {
+        let w = width ?? Prefs.barWidth
         let p = max(0, min(100, pct))
-        let filled = p * width / 100
-        return String(repeating: "\u{2588}", count: filled)
-             + String(repeating: "\u{2591}", count: width - filled)
+        // Округляем, а не отбрасываем: при 14 клетках 6% отбрасыванием дают
+        // пустую шкалу, и «немного» выглядит как «ничего».
+        let filled = Int((Double(p) / 100.0 * Double(w)).rounded())
+        return String(repeating: Prefs.barFilled, count: max(0, min(w, filled)))
+             + String(repeating: Prefs.barEmpty, count: max(0, w - filled))
     }
 
     // Кружок отражает САМЫЙ нагруженный лимит, даже если в тексте показан
     // не он: так видно, что стоит заглянуть в меню, а строка остаётся короткой.
     static func icon(for pct: Int) -> String {
-        if pct >= Prefs.alertAt { return "\u{25D5}" }   // ◕
-        if pct >= Prefs.warnAt { return "\u{25D1}" }    // ◑
-        return "\u{25D4}"                                // ◔
+        let parts = Prefs.iconSet.split(separator: ",").map(String.init)
+        let glyphs = parts.count >= 3 ? parts : ["\u{25D4}", "\u{25D1}", "\u{25D5}"]
+        if pct >= Prefs.alertAt { return glyphs[2] }
+        if pct >= Prefs.warnAt { return glyphs[1] }
+        return glyphs[0]
     }
 
     // Ширина строки в ЗНАКАХ, с учётом того, что в меню стоит моноширинный

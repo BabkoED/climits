@@ -54,7 +54,12 @@ struct Prefs {
     // claude-code про 429 на этом эндпоинте User-Agent не упоминается вовсе.
     // Поэтому по умолчанию представляемся своим именем - честно и проверяемо,
     // а если 429 будет мешать, значение меняется в настройках без пересборки.
-    static let defaultUserAgent = "climits/1.0.0 (+https://github.com/BabkoED/climits)"
+    // Версия берётся из бандла, а не пишется здесь строкой: иначе она
+    // расходится с настоящей ровно в тот момент, когда её забыли обновить.
+    static var defaultUserAgent: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        return "climits/\(v) (macOS; +https://github.com/BabkoED/climits)"
+    }
     static var userAgent: String {
         get {
             let s = (d.string(forKey: "userAgent") ?? "").trimmingCharacters(in: .whitespaces)
@@ -62,6 +67,44 @@ struct Prefs {
         }
         set { d.set(newValue, forKey: "userAgent") }
     }
+
+    // --- вид ---
+    //
+    // Всё, что описывает внешность, вынесено в настройки. Значение по
+    // умолчанию - пустая строка или ноль, и тогда берётся системное:
+    // так опечатка не ломает вид, а просто ничего не меняет.
+    static func str(_ key: String, _ def: String) -> String {
+        return d.string(forKey: key) ?? def
+    }
+
+    static var colorCalm: String {
+        get { str("colorCalm", "") } set { d.set(newValue, forKey: "colorCalm") } }
+    static var colorWarn: String {
+        get { str("colorWarn", "") } set { d.set(newValue, forKey: "colorWarn") } }
+    static var colorAlarm: String {
+        get { str("colorAlarm", "") } set { d.set(newValue, forKey: "colorAlarm") } }
+
+    static var fontSize: Int {
+        get { max(9, min(20, int("fontSize", 13))) } set { d.set(newValue, forKey: "fontSize") } }
+    static var menuFontSize: Int {
+        get { max(9, min(20, int("menuFontSize", 12))) } set { d.set(newValue, forKey: "menuFontSize") } }
+    static var fontName: String {
+        get { str("fontName", "") } set { d.set(newValue, forKey: "fontName") } }
+
+    // Шкала: чем рисовать и какой длины.
+    static var barFilled: String {
+        get { let s = str("barFilled", "\u{2588}"); return s.isEmpty ? "\u{2588}" : s }
+        set { d.set(newValue, forKey: "barFilled") } }
+    static var barEmpty: String {
+        get { let s = str("barEmpty", "\u{2591}"); return s.isEmpty ? "\u{2591}" : s }
+        set { d.set(newValue, forKey: "barEmpty") } }
+    static var barWidth: Int {
+        get { max(4, min(40, int("barWidth", 14))) } set { d.set(newValue, forKey: "barWidth") } }
+
+    // Кружок слева: три знака через запятую, от спокойного к тревожному.
+    static var iconSet: String {
+        get { let s = str("iconSet", "\u{25D4},\u{25D1},\u{25D5}"); return s.isEmpty ? "\u{25D4},\u{25D1},\u{25D5}" : s }
+        set { d.set(newValue, forKey: "iconSet") } }
 
     static var warnAt: Int {
         get { int("warnAt", 50) } set { d.set(newValue, forKey: "warnAt") } }

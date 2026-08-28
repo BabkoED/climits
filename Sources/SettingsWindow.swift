@@ -21,7 +21,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     ]
 
     convenience init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = L("Настройки climits", "climits settings")
@@ -65,6 +65,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         templateField = NSTextField()
         templateField.stringValue = Prefs.customTemplate
         templateField.delegate = self
+        templateField.identifier = NSUserInterfaceItemIdentifier("customTemplate")
         templateField.isEnabled = Prefs.useCustomTemplate
         templateField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         templateField.translatesAutoresizingMaskIntoConstraints = false
@@ -108,11 +109,40 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         loginToggle.state = LaunchAtLogin.isEnabled ? .on : .off
         stack.addArrangedSubview(loginToggle)
 
+        stack.addArrangedSubview(spacer(10))
+        stack.addArrangedSubview(header(L("Вид", "Appearance")))
+
+        stack.addArrangedSubview(fieldRow([
+            field(L("спокойно", "calm"), "colorCalm", Prefs.colorCalm, width: 80),
+            field(L("внимание", "warning"), "colorWarn", Prefs.colorWarn, width: 80),
+            field(L("тревога", "alarm"), "colorAlarm", Prefs.colorAlarm, width: 80),
+        ]))
+        stack.addArrangedSubview(small(L("Пусто - системный цвет. Можно словом (red, orange) или кодом (#ff3b30).",
+                                         "Empty means system colour. A word (red, orange) or a hex code (#ff3b30).")))
+
+        stack.addArrangedSubview(fieldRow([
+            field(L("шкала", "bar"), "barFilled", Prefs.barFilled, width: 40),
+            field(L("фон", "empty"), "barEmpty", Prefs.barEmpty, width: 40),
+            field(L("длина", "width"), "barWidth", "\(Prefs.barWidth)", width: 40),
+            field(L("кружки", "dots"), "iconSet", Prefs.iconSet, width: 90),
+        ]))
+
+        stack.addArrangedSubview(fieldRow([
+            field(L("шрифт строки", "bar font"), "fontSize", "\(Prefs.fontSize)", width: 40),
+            field(L("шрифт меню", "menu font"), "menuFontSize", "\(Prefs.menuFontSize)", width: 40),
+            field(L("внимание с", "warn at"), "warnAt", "\(Prefs.warnAt)", width: 40),
+            field(L("тревога с", "alarm at"), "alertAt", "\(Prefs.alertAt)", width: 40),
+        ]))
+        stack.addArrangedSubview(field(L("имя шрифта", "font name"), "fontName", Prefs.fontName, width: 200))
+        stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Пороги в процентах; severity от сервера всё равно главнее.",
+                                         "Empty means the system monospaced font. Thresholds in percent; server severity still wins.")))
+
         stack.addArrangedSubview(spacer(6))
         stack.addArrangedSubview(NSTextField(labelWithString: "User-Agent"))
         uaField = NSTextField()
         uaField.stringValue = Prefs.userAgent
         uaField.delegate = self
+        uaField.identifier = NSUserInterfaceItemIdentifier("userAgent")
         uaField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         uaField.translatesAutoresizingMaskIntoConstraints = false
         uaField.widthAnchor.constraint(equalToConstant: 470).isActive = true
@@ -121,6 +151,35 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
                                          "Only worth touching if the endpoint keeps answering 429. Empty means the default.")))
 
         updatePreview()
+    }
+
+    // Компактное поле с подписью слева. Всё оформление настраивается
+    // текстом: цвет можно задать и словом («red»), и кодом («#ff3b30»),
+    // знак шкалы - любым символом, включая эмодзи.
+    private func field(_ label: String, _ key: String, _ value: String, width: CGFloat) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 6
+        let l = NSTextField(labelWithString: label)
+        l.font = NSFont.systemFont(ofSize: 11)
+        row.addArrangedSubview(l)
+        let f = NSTextField()
+        f.stringValue = value
+        f.delegate = self
+        f.identifier = NSUserInterfaceItemIdentifier(key)
+        f.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        f.translatesAutoresizingMaskIntoConstraints = false
+        f.widthAnchor.constraint(equalToConstant: width).isActive = true
+        row.addArrangedSubview(f)
+        return row
+    }
+
+    private func fieldRow(_ items: [NSView]) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 14
+        items.forEach { row.addArrangedSubview($0) }
+        return row
     }
 
     // --- элементы -----------------------------------------------------------
@@ -186,12 +245,24 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        // Одно окно, два поля: разбираемся, кто именно изменился.
-        if let f = obj.object as? NSTextField, f === uaField {
-            Prefs.userAgent = f.stringValue
-            return
+        guard let f = obj.object as? NSTextField else { return }
+        let v = f.stringValue
+        switch f.identifier?.rawValue ?? "" {
+        case "userAgent":    Prefs.userAgent = v; return   // вида не меняет
+        case "colorCalm":    Prefs.colorCalm = v
+        case "colorWarn":    Prefs.colorWarn = v
+        case "colorAlarm":   Prefs.colorAlarm = v
+        case "barFilled":    Prefs.barFilled = v
+        case "barEmpty":     Prefs.barEmpty = v
+        case "iconSet":      Prefs.iconSet = v
+        case "fontName":     Prefs.fontName = v
+        case "barWidth":     if let n = Int(v) { Prefs.barWidth = n }
+        case "fontSize":     if let n = Int(v) { Prefs.fontSize = n }
+        case "menuFontSize": if let n = Int(v) { Prefs.menuFontSize = n }
+        case "warnAt":       if let n = Int(v) { Prefs.warnAt = n }
+        case "alertAt":      if let n = Int(v) { Prefs.alertAt = n }
+        default:             Prefs.customTemplate = v
         }
-        Prefs.customTemplate = templateField.stringValue
         applied()
     }
 
@@ -231,15 +302,15 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         let now = Date()
         let buckets = [
             Bucket(key: "five_hour", short: L("5ч", "5h"), long: L("5-часовое окно", "5-hour window"),
-                   percent: 37, resetsAt: now.addingTimeInterval(2 * 3600 + 840), isActive: true, rank: 0),
+                   percent: 37, resetsAt: now.addingTimeInterval(2 * 3600 + 840), isActive: true, rank: 0, severity: "normal"),
             Bucket(key: "seven_day", short: L("7д", "7d"), long: L("Неделя, всего", "Week, total"),
-                   percent: 62, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 1),
+                   percent: 62, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 1, severity: "normal"),
             Bucket(key: "seven_day_opus", short: "Opus", long: L("Неделя, Opus", "Week, Opus"),
-                   percent: 81, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 2),
+                   percent: 81, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 2, severity: "normal"),
             Bucket(key: "seven_day_sonnet", short: "Sonnet", long: L("Неделя, Sonnet", "Week, Sonnet"),
-                   percent: 12, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 2),
+                   percent: 12, resetsAt: now.addingTimeInterval(3 * 86400), isActive: false, rank: 2, severity: "normal"),
             Bucket(key: UsageParser.fableKey, short: "Fable", long: L("Неделя, Fable", "Week, Fable"),
-                   percent: 0, resetsAt: nil, isActive: false, rank: 2),
+                   percent: 0, resetsAt: nil, isActive: false, rank: 2, severity: "normal"),
         ]
         let extra = Extra(enabled: true, usedMinor: 13963, limitMinor: 20000,
                           exponent: 2, currency: "USD", percentGiven: nil)

@@ -54,13 +54,50 @@ final class UsageAPI {
         return base.appendingPathComponent("climits", isDirectory: true)
     }
     var cacheFile: URL { return dir.appendingPathComponent("usage.json") }
-    var cooldownFile: URL { return dir.appendingPathComponent("cooldown") }
 
     // Сколько показывать старые данные, если обновиться не удалось.
     let staleMax: TimeInterval = 24 * 3600
-    // Пауза после HTTP 429. Пятнадцать минут - потому что дальше уже нет
-    // разницы: окно лимита запросов всё равно короче.
-    let cooldown: TimeInterval = 900
+
+    // Нижний порог между запросами. Ниже него не опускается ничто: ни таймер,
+    // ни открытие меню. Ручное обновление проходит быстрее, но не мгновенно -
+    // иначе двойной клик по «Обновить» это два запроса подряд.
+    let minRequestGap: TimeInterval = 60
+    let minForcedGap: TimeInterval = 5
+
+    // Пауза после 429 растёт: 5 -> 10 -> 20 -> 40 -> 60 минут, и сбрасывается
+    // первым же успешным ответом.
+    //
+    // Плоские 15 минут были хуже с обеих сторон: при разовом 429 они слишком
+    // долго молчат, а при устойчивом - слишком часто долбятся. Заголовок
+    // retry-after у этого эндпоинта врёт (claude-code#30930), поэтому расписание
+    // ведём своё.
+    //
+    // Счётчик и срок лежат в настройках, а не в памяти: перезапуск приложения
+    // не должен обнулять паузу, иначе выход и запуск превращаются в способ
+    // обойти собственную защиту.
+    private var strikes: Int {
+        get { UserDefaults.standard.integer(forKey: "rl.strikes") }
+        set { UserDefaults.standard.set(newValue, forKey: "rl.strikes") }
+    }
+    private var backoffUntil: Date? {
+        get { UserDefaults.standard.object(forKey: "rl.until") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "rl.until") }
+    }
+    private var lastAttempt: Date? {
+        get { UserDefaults.standard.object(forKey: "rl.lastAttempt") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "rl.lastAttempt") }
+    }
+
+    private func backoffDelay(for strikes: Int) -> TimeInterval {
+        return min(300 * pow(2, Double(max(strikes - 1, 0))), 3600)
+    }
+
+    // Когда состоится следующая попытка. Показывается в меню: «пробую снова
+    // в 14:35» честнее, чем молчаливый значок.
+    var nextAttemptAt: Date? {
+        guard let until = backoffUntil, until > Date() else { return nil }
+        return until
+    }
 
     private func ensureDir() {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -77,8 +114,7 @@ final class UsageAPI {
     }
 
     var inCooldown: Bool {
-        guard let m = mtime(cooldownFile) else { return false }
-        return Date().timeIntervalSince(m) < cooldown
+        return nextAttemptAt != nil
     }
 
     private func readCache() -> (body: String, at: Date)? {
@@ -163,6 +199,13 @@ final class UsageAPI {
             return .failure(.rateLimited)
         }
 
+        // Нижний порог между обращениями к сети.
+        let gap = force ? minForcedGap : minRequestGap
+        if let last = lastAttempt, Date().timeIntervalSince(last) < gap {
+            if let u = stale() { return .success(u) }
+        }
+        lastAttempt = Date()
+
         // Кандидатов может быть несколько: в связке ключей нередко лежит
         // не одна запись Claude Code, и первая по счёту вполне может быть
         // битой - об этом сообщил живой пользователь, у которого security
@@ -196,14 +239,13 @@ final class UsageAPI {
                 return .failure(.unparsable)
             }
             writeCache(s)
-            try? FileManager.default.removeItem(at: cooldownFile)
+            strikes = 0
+            backoffUntil = nil
             return .success(u)
 
         case 429:
-            ensureDir()
-            _ = FileManager.default.createFile(atPath: cooldownFile.path, contents: nil)
-            try? FileManager.default.setAttributes([.modificationDate: Date()],
-                                                    ofItemAtPath: cooldownFile.path)
+            strikes += 1
+            backoffUntil = Date().addingTimeInterval(backoffDelay(for: strikes))
             if let u = stale() { return .success(u) }
             return .failure(.rateLimited)
 
