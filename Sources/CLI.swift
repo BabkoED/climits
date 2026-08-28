@@ -88,15 +88,33 @@ enum CLI {
     }
 
     private static func printFull(_ u: Usage) {
+        // Расшифровки читаются только если деньги включены: это чтение
+        // файлов, и платить за него в каждом вызове незачем.
+        var windows: [String: WindowUsage] = [:]
+        if Prefs.showMoney {
+            let s = u.session.map { Money.windowStart(for: $0) } ?? Date().addingTimeInterval(-5 * 3600)
+            let w = u.bucket("seven_day").map { Money.windowStart(for: $0) } ?? Date().addingTimeInterval(-7 * 86400)
+            let scans = Transcripts.usage(cutoffs: [s, w])
+            if scans.count == 2 { windows = ["five_hour": scans[0], "week": scans[1]] }
+        }
+
         print("")
         for b in u.buckets {
             let col = colorFor(b.pct, severity: b.severity)
             let clock = Fmt.clock(b.resetsAt)
             let tail = clock.isEmpty ? "" : " \u{00B7} " + clock
+            var moneyTail = ""
+            if Prefs.showMoney, let w = windows[b.key == "five_hour" ? "five_hour" : "week"] {
+                let mv = Money.view(for: b, in: w)
+                if mv.spent > 0 {
+                    moneyTail = "  \u{2248}" + mv.spentText
+                    if let full = mv.fullText { moneyTail += L(" из \u{2248}", " of \u{2248}") + full }
+                }
+            }
             print("  \(bold)\(Fmt.pad(b.long, 20))\(reset)"
                 + " \(col)\(Fmt.padLeft("\(b.pct)", 3))%\(reset)"
                 + "  \(col)\(Fmt.bar(b.pct))\(reset)"
-                + "  \(dim)\(Fmt.resetPhrase(b.resetsAt))\(tail)\(reset)")
+                + "  \(dim)\(Fmt.resetPhrase(b.resetsAt))\(tail)\(moneyTail)\(reset)")
         }
         let e = u.extra
         print("")
@@ -109,6 +127,12 @@ enum CLI {
         } else {
             print("  \(label) \(yellow)\(e.usedText)\(reset)  \(dim)"
                 + L("за месяц, персональный лимит не задан", "this month, no personal cap set")
+                + "\(reset)")
+        }
+        if Prefs.showMoney {
+            print("  \(dim)"
+                + L("деньги - оценка по расшифровкам этой машины, а не счёт",
+                    "money is an estimate from this machine's transcripts, not a bill")
                 + "\(reset)")
         }
         print("")

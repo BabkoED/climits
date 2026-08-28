@@ -18,6 +18,8 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/UsageModel.swift \
   Sources/Prefs.swift \
   Sources/Format.swift \
+  Sources/Pricing.swift \
+  Sources/Transcripts.swift \
   Tests/main.swift
 
 "$OUT"

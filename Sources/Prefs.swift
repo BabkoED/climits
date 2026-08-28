@@ -68,6 +68,20 @@ struct Prefs {
         set { d.set(newValue, forKey: "userAgent") }
     }
 
+    // --- деньги, уведомления, вид строк ---
+    //
+    // Деньги выключены по умолчанию намеренно: это оценка по локальным
+    // расшифровкам, и включать её без объяснения значит показать человеку
+    // цифру, которую он примет за счёт.
+    static var showMoney: Bool {
+        get { bool("showMoney", false) } set { d.set(newValue, forKey: "showMoney") } }
+    static var twoLineRows: Bool {
+        get { bool("twoLineRows", true) } set { d.set(newValue, forKey: "twoLineRows") } }
+    static var notifyEnabled: Bool {
+        get { bool("notifyEnabled", false) } set { d.set(newValue, forKey: "notifyEnabled") } }
+    static var notifyAt: Int {
+        get { max(1, min(100, int("notifyAt", 80))) } set { d.set(newValue, forKey: "notifyAt") } }
+
     // --- вид ---
     //
     // Всё, что описывает внешность, вынесено в настройки. Значение по
@@ -127,6 +141,7 @@ struct Prefs {
         if showWeekly  { parts.append(L("7д ", "7d ") + "{7d}") }
         if showModels  { parts.append("{models}") }
         if showExtra   { parts.append("{extra}") }
+        if showMoney   { parts.append("{money}") }
         var body = parts.joined(separator: " \u{00B7} ")
         if body.isEmpty { body = "{worst}" }   // пустая строка меню бессмысленна
         if showIcon { body = "{icon} " + body }

@@ -58,6 +58,14 @@ enum Fmt {
         return f.string(from: date)
     }
 
+    // 1_234_567 -> «1.2M». В меню важно оценить порядок, а не пересчитать
+    // до штуки.
+    static func compact(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return "\(n / 1000)K" }
+        return "\(n)"
+    }
+
     static func bar(_ pct: Int, width: Int? = nil) -> String {
         let w = width ?? Prefs.barWidth
         let p = max(0, min(100, pct))
@@ -114,9 +122,11 @@ enum BarTitle {
         ("{active}",     L("лимит, который упрётся первым", "the limit that hits first")),
         ("{extra}",      L("потрачено сверх лимита", "extra usage spent")),
         ("{extra.pct}",  L("сверх лимита, процент", "extra usage percent")),
+        ("{money}",      L("во сколько обошлось окно", "what this window cost")),
+        ("{money.limit}",L("во сколько обойдётся весь лимит", "what the full limit is worth")),
     ]
 
-    static func render(_ template: String, usage: Usage) -> String {
+    static func render(_ template: String, usage: Usage, money: MoneyView? = nil) -> String {
         var s = template
 
         func put(_ macro: String, _ value: String) {
@@ -151,6 +161,11 @@ enum BarTitle {
 
         if let w = usage.worst { put("{worst}", "\(w.short) \(w.pct)%") } else { put("{worst}", "") }
         if let a = usage.active { put("{active}", "\(a.short) \(a.pct)%") } else { put("{active}", "") }
+
+        // Знак «≈» ставится здесь, а не в MoneyView: в строке меню он несёт
+        // смысл (это оценка), а в отчёте рядом уже есть подпись словами.
+        put("{money}", money.map { $0.spent > 0 ? "\u{2248}" + $0.spentText : "" } ?? "")
+        put("{money.limit}", money?.fullText.map { "\u{2248}" + $0 } ?? "")
 
         let e = usage.extra
         put("{extra}", (e.enabled && e.usedMinor != nil) ? e.usedText : "")

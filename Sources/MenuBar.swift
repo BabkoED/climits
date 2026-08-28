@@ -12,6 +12,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // открытие меню и ⌘R одновременно - дают три параллельных запроса
     // к эндпоинту, который и от одного-то огрызается.
     private var inFlight = false
+    // Деньги и локальная оценка считаются по файлам на диске, поэтому живут
+    // отдельно от ответа API и обновляются в фоне.
+    private var sessionWindow = WindowUsage()
+    private var weeklyWindow = WindowUsage()
+    private var localEstimate: WindowUsage?
 
     override init() {
         super.init()
@@ -59,13 +64,49 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             case .success(let u):
                 self.usage = u
                 self.lastError = nil
+                self.localEstimate = nil
+                Notifier.check(u)
+                self.rescanTranscripts(for: u)
             case .failure(let e):
                 // Прежние цифры не выбрасываем: если сеть моргнула, честнее
                 // оставить их на экране и приписать причину в меню.
                 self.lastError = e.errorDescription
+                // Ни ответа, ни кэша - остаётся посчитать по расшифровкам.
+                // Это оценка расхода, а не остаток лимита, и подписана так же.
+                if self.usage == nil { self.rescanLocalOnly() }
             }
             self.updateTitle()
         }
+    }
+
+    // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
+    // главном потоке это подвесило бы строку меню на секунды.
+    private func rescanTranscripts(for u: Usage) {
+        guard Prefs.showMoney else { return }
+        let sessionStart = u.session.map { Money.windowStart(for: $0) }
+            ?? Date().addingTimeInterval(-5 * 3600)
+        let weeklyStart = u.bucket("seven_day").map { Money.windowStart(for: $0) }
+            ?? Date().addingTimeInterval(-7 * 86400)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let w = Transcripts.usage(cutoffs: [sessionStart, weeklyStart])
+            DispatchQueue.main.async {
+                guard let self = self, w.count == 2 else { return }
+                self.sessionWindow = w[0]
+                self.weeklyWindow = w[1]
+            }
+        }
+    }
+
+    private func rescanLocalOnly() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let w = Transcripts.usage(since: Date().addingTimeInterval(-5 * 3600))
+            DispatchQueue.main.async { self?.localEstimate = w }
+        }
+    }
+
+    // Какое окно расшифровок относится к этому лимиту.
+    private func window(for b: Bucket) -> WindowUsage {
+        return b.key == "five_hour" ? sessionWindow : weeklyWindow
     }
 
     @objc private func prefsChanged() {
@@ -82,7 +123,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 attributes: [.foregroundColor: NSColor.secondaryLabelColor])
             return
         }
-        let text = BarTitle.render(Prefs.effectiveTemplate, usage: u)
+        let money = (Prefs.showMoney ? u.session.map { Money.view(for: $0, in: sessionWindow) } : nil)
+        let text = BarTitle.render(Prefs.effectiveTemplate, usage: u, money: money ?? nil)
         // Строка меню остаётся нейтральной, пока всё спокойно: цветом
         // в строке меню стоит тревожить только по делу.
         let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
@@ -116,12 +158,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra))
+            if Prefs.showMoney {
+                menu.addItem(dim(L("Деньги - оценка по расшифровкам этой машины, а не счёт",
+                                   "Money is an estimate from this machine's transcripts, not a bill")))
+            }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
             i.isEnabled = true
             i.attributedTitle = NSAttributedString(string: err,
                 attributes: [.foregroundColor: NSColor.systemRed])
             menu.addItem(i)
+            if let next = UsageAPI.shared.nextAttemptAt {
+                menu.addItem(dim(L("пробую снова в \(Fmt.hhmm(next))",
+                                   "next attempt at \(Fmt.hhmm(next))")))
+            }
+            // Ни ответа, ни сохранённых цифр. Показать хоть что-то полезнее,
+            // чем показать ничего, - но это расход, а не остаток лимита,
+            // и подписано именно так.
+            if let est = localEstimate, !est.isEmpty {
+                menu.addItem(.separator())
+                menu.addItem(dim(L("Оценка по расшифровкам, за последние 5 часов",
+                                   "Estimate from transcripts, last 5 hours")))
+                let tt = est.totals
+                menu.addItem(plain(L("запросов: \(tt.requests)", "requests: \(tt.requests)")))
+                menu.addItem(plain(L("токенов: \(Fmt.compact(tt.total))",
+                                     "tokens: \(Fmt.compact(tt.total))")))
+                menu.addItem(plain(L("по прайсу API: \u{2248}\(MoneyView.money(est.cost))",
+                                     "at API prices: \u{2248}\(MoneyView.money(est.cost))")))
+                menu.addItem(dim(L("только эта машина, лимита это не заменяет",
+                                   "this machine only - not a substitute for the limit")))
+            }
         } else {
             menu.addItem(dim(L("загружаю\u{2026}", "loading\u{2026}")))
         }
@@ -147,21 +213,70 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                  "data from \(at) \u{00B7} refresh failed")
     }
 
+    // Одна строка лимита рисуется двумя: подпись и процент сверху, шкала
+    // и время сброса снизу.
+    //
+    // Табуляция с правым выравниванием, а не добивка пробелами: пробелы
+    // держат колонку только в моноширинном шрифте, а подписи набраны
+    // обычным - на нём «Неделя, Sonnet» и «5-часовое окно» разъезжаются.
     private func row(for b: Bucket, active: Bool) -> NSMenuItem {
-        let mark = active ? "\u{25B8} " : "  "
-        let line = mark
-            + Fmt.pad(b.long, 20)
-            + Fmt.padLeft("\(b.pct)", 3) + "%  "
-            + Fmt.bar(b.pct) + "  "
-            + Fmt.resetPhrase(b.resetsAt)
-        let i = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-        i.isEnabled = true
-        let color = Palette.color(for: b)
-        i.attributedTitle = NSAttributedString(string: line, attributes: [
+        let accent = Palette.color(for: b)
+        let item = NSMenuItem()
+        item.isEnabled = true
+
+        if !Prefs.twoLineRows {
+            let line = (active ? "\u{25B8} " : "  ")
+                + Fmt.pad(b.long, 20)
+                + Fmt.padLeft("\(b.pct)", 3) + "%  "
+                + Fmt.bar(b.pct) + "  "
+                + Fmt.resetPhrase(b.resetsAt)
+            item.attributedTitle = NSAttributedString(string: line, attributes: [
+                .font: Palette.menuFont, .foregroundColor: accent,
+            ])
+            return item
+        }
+
+        let para = NSMutableParagraphStyle()
+        para.tabStops = [NSTextTab(textAlignment: .right, location: 260)]
+        para.lineSpacing = 2
+
+        let label = (active ? "\u{25B8} " : "   ") + b.long
+        let title = NSMutableAttributedString(
+            string: "\(label)\t\(b.pct)%\n",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) + 1),
+                .paragraphStyle: para,
+            ])
+
+        title.append(NSAttributedString(string: "   " + Fmt.bar(b.pct), attributes: [
             .font: Palette.menuFont,
-            .foregroundColor: color,
-        ])
-        return i
+            .foregroundColor: accent,
+        ]))
+
+        var tail = "  " + Fmt.resetPhrase(b.resetsAt)
+        let clock = Fmt.clock(b.resetsAt)
+        if !clock.isEmpty { tail += " \u{00B7} " + clock }
+
+        // Деньги: сколько этот трафик стоил бы по прайсу API и во сколько
+        // обходится весь лимит целиком. И то, и другое - оценка, о чём
+        // говорит знак «≈» и отдельная строка в самом низу меню.
+        if Prefs.showMoney {
+            let mv = Money.view(for: b, in: window(for: b))
+            if mv.spent > 0 {
+                tail += "  \u{00B7} \u{2248}" + mv.spentText
+                if let full = mv.fullText {
+                    tail += L(" из \u{2248}", " of \u{2248}") + full
+                }
+            }
+        }
+
+        title.append(NSAttributedString(string: tail, attributes: [
+            .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+
+        item.attributedTitle = title
+        return item
     }
 
     private func extraRow(_ e: Extra) -> NSMenuItem {
@@ -186,6 +301,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         i.attributedTitle = NSAttributedString(string: text, attributes: [
             .font: Palette.menuFont,
             .foregroundColor: color,
+        ])
+        return i
+    }
+
+    private func plain(_ s: String) -> NSMenuItem {
+        let i = NSMenuItem(title: s, action: nil, keyEquivalent: "")
+        i.isEnabled = true
+        i.attributedTitle = NSAttributedString(string: "   " + s, attributes: [
+            .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize)),
         ])
         return i
     }

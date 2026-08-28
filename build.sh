@@ -37,7 +37,7 @@ SLICES=()
 for arch in arm64 x86_64; do
   obj="$BUILD/climits-$arch"
   if swiftc -O -target "$arch-apple-macosx$MIN" \
-       -framework AppKit -framework ServiceManagement \
+       -framework AppKit -framework ServiceManagement -framework UserNotifications \
        -o "$obj" "${SOURCES[@]}" 2>"$BUILD/$arch.log"; then
     SLICES+=("$obj")
     echo "  собрано: $arch"

@@ -21,7 +21,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     ]
 
     convenience init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 880),
                          styleMask: [.titled, .closable],
                          backing: .buffered, defer: false)
         w.title = L("Настройки climits", "climits settings")
@@ -54,6 +54,10 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         addCheck(stack, "showModels", L("Лимиты по моделям (Opus, Sonnet, Fable)",
                                         "Per-model limits (Opus, Sonnet, Fable)"), Prefs.showModels)
         addCheck(stack, "showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra)
+        addCheck(stack, "showMoney", L("Деньги: во сколько обошлось бы по прайсу API",
+                                       "Money: what it would cost at API prices"), Prefs.showMoney)
+        stack.addArrangedSubview(small(L("Оценка по расшифровкам этой машины. Работа с других машин сюда не попадает.",
+                                         "Estimated from this machine's transcripts. Work done elsewhere is not counted.")))
 
         stack.addArrangedSubview(spacer(6))
         customToggle = NSButton(checkboxWithTitle: L("Свой формат вместо галочек",
@@ -108,6 +112,26 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
                                target: self, action: #selector(toggleLogin))
         loginToggle.state = LaunchAtLogin.isEnabled ? .on : .off
         stack.addArrangedSubview(loginToggle)
+
+        let notify = NSButton(checkboxWithTitle: L("Уведомлять при достижении порога",
+                                                   "Notify when a threshold is reached"),
+                              target: self, action: #selector(toggleCheck(_:)))
+        notify.state = Prefs.notifyEnabled ? .on : .off
+        notify.identifier = NSUserInterfaceItemIdentifier("notifyEnabled")
+        checkboxes["notifyEnabled"] = notify
+        stack.addArrangedSubview(notify)
+
+        let twoLine = NSButton(checkboxWithTitle: L("Пункты меню в две строки",
+                                                    "Two-line menu rows"),
+                               target: self, action: #selector(toggleCheck(_:)))
+        twoLine.state = Prefs.twoLineRows ? .on : .off
+        twoLine.identifier = NSUserInterfaceItemIdentifier("twoLineRows")
+        checkboxes["twoLineRows"] = twoLine
+        stack.addArrangedSubview(twoLine)
+
+        stack.addArrangedSubview(fieldRow([
+            field(L("порог уведомления, %", "notify at, %"), "notifyAt", "\(Prefs.notifyAt)", width: 40),
+        ]))
 
         stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(header(L("Вид", "Appearance")))
@@ -218,6 +242,9 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         case "showWeekly": Prefs.showWeekly = on
         case "showModels": Prefs.showModels = on
         case "showExtra": Prefs.showExtra = on
+        case "showMoney": Prefs.showMoney = on
+        case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
+        case "twoLineRows": Prefs.twoLineRows = on; applied(); return
         default: break
         }
         // Правка галочек означает, что человек хочет быстрый выбор, а не
@@ -261,6 +288,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         case "menuFontSize": if let n = Int(v) { Prefs.menuFontSize = n }
         case "warnAt":       if let n = Int(v) { Prefs.warnAt = n }
         case "alertAt":      if let n = Int(v) { Prefs.alertAt = n }
+        case "notifyAt":     if let n = Int(v) { Prefs.notifyAt = n }
         default:             Prefs.customTemplate = v
         }
         applied()
