@@ -21,16 +21,44 @@ if ! command -v swiftc >/dev/null 2>&1; then
 fi
 
 # macOS 13 - минимум: SMAppService (автозапуск) появился именно там.
-TARGET="$(uname -m)-apple-macosx13.0"
+MIN="13.0"
 
 rm -rf "$BUILD"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-echo "Собираю ($TARGET)..."
-swiftc -O -target "$TARGET" \
-  -framework AppKit -framework ServiceManagement \
-  -o "$BIN" \
-  Sources/*.swift
+SOURCES=(Sources/*.swift)
+
+# Собираем универсальный бинарник: в офисе почти наверняка есть и Apple
+# Silicon, и Intel, а приложение под чужую архитектуру просто не запустится
+# с невнятной ошибкой. SDK на macOS содержит обе, так что вторая сборка
+# ничего не стоит. Если какая-то из них не вышла - не падаем, а честно
+# сообщаем и отдаём то, что собралось.
+SLICES=()
+for arch in arm64 x86_64; do
+  obj="$BUILD/climits-$arch"
+  if swiftc -O -target "$arch-apple-macosx$MIN" \
+       -framework AppKit -framework ServiceManagement \
+       -o "$obj" "${SOURCES[@]}" 2>"$BUILD/$arch.log"; then
+    SLICES+=("$obj")
+    echo "  собрано: $arch"
+  else
+    echo "  пропущено: $arch (подробности в $BUILD/$arch.log)"
+  fi
+done
+
+if [ "${#SLICES[@]}" -eq 0 ]; then
+  echo "Сборка не удалась ни для одной архитектуры:" >&2
+  cat "$BUILD"/*.log >&2
+  exit 1
+fi
+
+if [ "${#SLICES[@]}" -gt 1 ] && command -v lipo >/dev/null 2>&1; then
+  lipo -create -output "$BIN" "${SLICES[@]}"
+  echo "  универсальный бинарник: $(lipo -archs "$BIN")"
+else
+  cp "${SLICES[0]}" "$BIN"
+fi
+rm -f "${SLICES[@]}"
 
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 

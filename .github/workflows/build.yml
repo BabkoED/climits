@@ -1,0 +1,58 @@
+name: build
+
+# Сборка идёт на настоящем macOS у GitHub, а не на машине разработчика.
+# Смысл двойной: во-первых, каждый коммит проверяется компилятором, а не
+# надеждой; во-вторых, коллегам достаётся готовый .app из релиза, и им
+# не нужны ни Xcode, ни git.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # нужно, чтобы приложить сборку к релизу по тегу
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Логика проверяется до сборки: если разбор ответа API сломан,
+      # собранное приложение всё равно показывало бы неверные цифры.
+      - name: Проверки логики
+        run: ./run-tests.sh
+
+      - name: Сборка приложения
+        run: ./build.sh
+
+      - name: Архитектуры в бинарнике
+        run: lipo -archs build/climits.app/Contents/MacOS/climits
+
+      # Именно ditto, а не zip: zip теряет расширенные атрибуты и права
+      # внутри бандла, и распакованное приложение может не запуститься.
+      - name: Упаковка
+        run: ditto -c -k --sequesterRsrc --keepParent build/climits.app climits.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: climits-app
+          path: climits.zip
+
+      - name: Релиз по тегу
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: climits.zip
+          body: |
+            Скачай `climits.zip`, распакуй, перетащи `climits.app` в «Программы».
+
+            При первом запуске macOS скажет, что разработчик не подтверждён -
+            это ожидаемо: приложение не подписано сертификатом Apple.
+            Правый клик по нему → «Открыть» → «Открыть». Один раз.
+
+            Или одной командой:
+            `xattr -dr com.apple.quarantine /Applications/climits.app`

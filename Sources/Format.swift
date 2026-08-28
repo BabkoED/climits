@@ -136,7 +136,11 @@ enum BarTitle {
         put("{extra.pct}", e.percent != nil ? "\(e.percent!)%" : "")
 
         // Неизвестные макросы убираем, чтобы в трее не висело «{foo}».
-        if let re = try? NSRegularExpression(pattern: "\\{[a-zA-Z0-9_.]+\\}") {
+        //
+        // \w, а не [a-zA-Z0-9_]: в ICU это буквы любого алфавита. С латинским
+        // диапазоном опечатка кириллицей - «{процент}» - оставалась в строке
+        // меню как есть, и человек видел фигурные скобки вместо цифры.
+        if let re = try? NSRegularExpression(pattern: "\\{[\\w.]+\\}") {
             s = re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
                                             withTemplate: "")
         }
