@@ -462,8 +462,29 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // Зазор между парами - чтобы пояснение первой пары не слипалось
         // с кнопкой второй.
         grid.column(at: 2).leadingPadding = 20
+        // Таблица должна занимать СВОЮ ширину, а не всю доступную.
+        //
+        // Внешний стек тянется от края до края окна, и растянутая по нему
+        // таблица раздаёт лишнюю ширину колонке с пояснением - вторая пара
+        // улетает к правому краю. Именно это и выглядело как «текст,
+        // накиданный в свободное место»: сама сетка была уже правильной,
+        // а ширина - нет.
+        //
+        // Лечится не приоритетами, а честной распоркой: таблица и пустышка
+        // в одном ряду. Пустышка цепляется за ширину слабее всех, поэтому
+        // весь избыток достаётся ей, а не колонке с текстом.
+        grid.setContentHuggingPriority(.required, for: .horizontal)
+        let holder = NSStackView()
+        holder.orientation = .horizontal
+        holder.spacing = 0
+        holder.addArrangedSubview(grid)
+        let filler = NSView()
+        filler.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        filler.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1),
+                                                       for: .horizontal)
+        holder.addArrangedSubview(filler)
         syncMacroToggles()
-        return grid
+        return holder
     }
 
     // Кнопки показывают то, что в шаблоне на самом деле: и после правки
