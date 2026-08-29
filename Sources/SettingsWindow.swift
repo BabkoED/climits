@@ -447,15 +447,25 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     private func small(_ s: String) -> NSTextField {
         let t = NSTextField(labelWithString: s)
-        t.font = s.contains("\n")
-            ? NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            : NSFont.systemFont(ofSize: 10)
+        t.font = NSFont.systemFont(ofSize: 10)
         t.textColor = .secondaryLabelColor
         // Многострочная подпись без этого показывает первую строку и
         // многоточие: у метки по умолчанию одна строка.
         t.usesSingleLineMode = false
         t.lineBreakMode = .byWordWrapping
         t.maximumNumberOfLines = 0
+        // Ширина, ПОСЛЕ которой текст переносится.
+        //
+        // Без неё «переносится» не значит ничего: собственная ширина метки -
+        // это вся строка в одну линию, и раз она больше окна, окно под неё
+        // и растягивается. Проверено снимком из CI: окно шириной 560 стало
+        // шириной 1240, а самая длинная подпись всё равно не влезла и
+        // обрезалась по краю.
+        //
+        // 500 - это 560 окна минус отступы по 20 с каждой стороны и запас
+        // на полосу прокрутки.
+        t.preferredMaxLayoutWidth = 500
+        t.widthAnchor.constraint(lessThanOrEqualToConstant: 500).isActive = true
         return t
     }
     private func spacer(_ h: CGFloat) -> NSView {
