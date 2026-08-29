@@ -6,7 +6,6 @@ import AppKit
 final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     private var checkboxes: [String: NSButton] = [:]
-    private var macroToggles: [String: NSButton] = [:]
     private var templateField: NSTextField!
     private var customToggle: NSButton!
     private var previewLabel: NSTextField!
@@ -111,32 +110,13 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -20),
         ])
 
-        stack.addArrangedSubview(header(L("Что показывать в строке меню",
-                                          "What to show in the menu bar")))
+        stack.addArrangedSubview(header(L("Что показывать", "What to show")))
 
-        addCheck(stack, "showIcon", L("Кружок загрузки", "Load dot"), Prefs.showIcon)
-        addCheck(stack, "showSession", L("Процент текущего окна", "Current window percent"), Prefs.showSession)
-        addCheck(stack, "showLeft", L("Сколько до сброса", "Time until reset"), Prefs.showLeft)
-        addCheck(stack, "showWeekly", L("Недельный кап", "Weekly cap"), Prefs.showWeekly)
-        addCheck(stack, "showModels", L("Лимиты по моделям (Opus, Sonnet, Fable)",
-                                        "Per-model limits (Opus, Sonnet, Fable)"), Prefs.showModels)
-        addCheck(stack, "showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra)
-        addCheck(stack, "showMoney", L("Деньги: во сколько обошёлся расход по прайсу API",
-                                       "Money: what this usage costs at API prices"), Prefs.showMoney)
-        addCheck(stack, "showTokens", L("Токены: сколько прошло за окно",
-                                        "Tokens: how many went through this window"), Prefs.showTokens)
-        stack.addArrangedSubview(small(L("Это измеренный расход, а не доля лимита: сколько всего выдано по подписке, Anthropic не публикует нигде. Процент рядом отвечает на другой вопрос - он от сервера и по всему аккаунту, но без масштаба.",
-                                         "This is measured usage, not a share of a limit: Anthropic publishes no plan size anywhere. The percentage answers a different question - it comes from the server and covers the whole account, but has no scale.")))
-        stack.addArrangedSubview(small(L("Считается по расшифровкам тех машин, которые видит приложение. Работаешь ещё и на сервере - впиши его ниже, иначе цифры занижены в разы.",
-                                         "Counted from transcripts of the machines the app can see. Also working on a server - add it below, or the numbers are off by multiples.")))
-        addCheck(stack, "showHistory", L("История и темп: столбики за 7 дней, «сегодня», токенов в час, прогноз",
-                                         "History and pace: 7-day bars, today, tokens per hour, forecast"), Prefs.showHistory)
-        stack.addArrangedSubview(small(L("Столбики отвечают на «это много или как обычно». Прогноз - на «упрусь ли раньше, чем сбросится»: он считается по своим же замерам процента, размер лимита для него не нужен.",
-                                         "The bars answer \"is this a lot or a normal day\". The forecast answers \"will I hit the wall before the reset\": it is computed from our own percentage samples and needs no plan size.")))
-        stack.addArrangedSubview(small(L("Эти трое живут в выпадающем меню и в строку наверху не попадают - там места на три-четыре знака.",
-                                         "These three live in the dropdown and never reach the bar above - there is room for three or four characters there.")))
-
-        stack.addArrangedSubview(spacer(6))
+        // Строка формата стоит ПЕРВОЙ, а галочки под ней.
+        //
+        // Раньше было наоборот, и это был неверный порядок: галочки правят
+        // именно эту строку, а править то, чего ещё не видел, невозможно.
+        // Сначала показываем результат, потом способы его собрать.
         customToggle = NSButton(checkboxWithTitle: L("Свой формат вместо галочек",
                                                      "Custom format instead of checkboxes"),
                                 target: self, action: #selector(toggleCustom))
@@ -166,14 +146,17 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         rebuild.bezelStyle = .rounded
         rebuild.controlSize = .small
         stack.addArrangedSubview(rebuild)
+        stack.addArrangedSubview(small(L("Галочки ниже добавляют и убирают куски этой строки. Пока «свой формат» выключен, она просто повторяет галочки; включил - и правь готовое. Пустые куски убираются вместе с разделителем.",
+                                         "The checkboxes below add and remove pieces of this line. While custom format is off it simply mirrors them; switch it on and edit what is already there. Empty pieces are dropped along with their separator.")))
 
-        // Раньше здесь были только имена макросов подряд - «{5h} {5h.left}
-        // {7d}...». По ним видно, что макросы существуют, и совершенно
-        // непонятно, что каждый значит. Теперь это кнопки: пояснение
-        // всплывает подсказкой, а нажатие вставляет макрос в шаблон.
-        stack.addArrangedSubview(macroGrid())
-        stack.addArrangedSubview(small(L("Пока «свой формат» выключен, поле повторяет галочки - включил и правь готовое. Пустые макросы убираются вместе с разделителем.",
-                                         "While custom format is off, the field mirrors the checkboxes - switch it on and edit what is already there. Empty macros are dropped along with their separator.")))
+        stack.addArrangedSubview(spacer(6))
+        stack.addArrangedSubview(checkGrid())
+        stack.addArrangedSubview(small(L("Справа - не строка меню, а выпадающее: там места хватает всегда. Деньги и токены - измеренный расход, а не доля лимита: сколько всего выдано по подписке, Anthropic не публикует нигде. Считается по расшифровкам тех машин, которые видит приложение, - работаешь ещё и на сервере, впиши его ниже, иначе цифры занижены в разы.",
+                                         "On the right is the dropdown, not the menu bar line: there is always room there. Money and tokens are measured usage, not a share of a limit - Anthropic publishes no plan size anywhere. Counted from transcripts of the machines the app can see: also working on a server, add it below or the numbers are off by multiples.")))
+        stack.addArrangedSubview(small(L("Столбики истории отвечают на «это много или как обычно», прогноз - на «упрусь ли раньше, чем сбросится»: он считается по своим же замерам процента, размер лимита для него не нужен.",
+                                         "History bars answer \"is this a lot or a normal day\"; the forecast answers \"will I hit the wall before the reset\" - computed from our own percentage samples, no plan size needed.")))
+        stack.addArrangedSubview(small(L("Для своего формата есть и то, чего нет в галочках: {worst} {active} {active.left} {active.reset} {money} {tokens} {extra.pct} {5h.reset} {7d.left} {opus} {sonnet} {fable} {haiku}. Что каждый значит - в README.",
+                                         "The custom format also has what the checkboxes do not: {worst} {active} {active.left} {active.reset} {money} {tokens} {extra.pct} {5h.reset} {7d.left} {opus} {sonnet} {fable} {haiku}. What each means is in the README.")))
 
         stack.addArrangedSubview(spacer(6))
         previewLabel = NSTextField(labelWithString: "")
@@ -399,80 +382,49 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
-    // Макросы: нажимаемое имя и обычная подпись рядом, в две пары в ряд.
+    // Галочки в два столбца, слева строка меню, справа выпадающее.
     //
-    // Свёрстано NSGridView, а не рядами из стеков. Разница видна сразу:
-    // у горизонтального стека колонки шириной по своему содержимому, и
-    // когда во второй паре стоит «{5h}» с коротким именем и длинным
-    // пояснением, а в соседнем ряду наоборот, - вертикали не совпадают
-    // нигде. Получается текст, накиданный в свободное место. У таблицы
-    // ширина колонки общая на весь столбец, и вертикали держатся сами.
+    // Столбцы разделены по смыслу, а не пополам по счёту: слева то, что
+    // борется за три-четыре знака в строке наверху, справа то, для чего
+    // места хватает всегда. Раньше все девять шли одним списком, и разница
+    // между «попадёт в строку» и «не попадёт никогда» держалась на подписи
+    // мелким шрифтом под ними.
     //
-    // Кнопка - только само имя, «{icon}». Пояснение рядом текстом и не
-    // нажимается: кнопка во всю строку занимала вдвое больше места и
-    // выглядела как «нажми меня» восемнадцать раз подряд.
-    //
-    // Кнопка залипающая: нажал - макрос в строке, отжал - его нет.
-    // Состояние берётся из самого шаблона, а не запоминается отдельно,
-    // поэтому правка текста руками сразу видна по кнопкам.
-    private func macroGrid() -> NSView {
-        var rows: [[NSView]] = []
-        var cells: [NSView] = []
-        for (macro, hint) in BarTitle.macros {
-            let b = NSButton(title: macro, target: self, action: #selector(toggleMacro(_:)))
-            b.setButtonType(.pushOnPushOff)
-            b.bezelStyle = .recessed
-            b.controlSize = .small
-            b.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            b.toolTip = L("добавить \(macro) в формат или убрать оттуда",
-                          "add \(macro) to the format, or take it out")
-            b.identifier = NSUserInterfaceItemIdentifier(macro)
-            macroToggles[macro] = b
+    // Здесь же раньше стояла таблица имён макросов - «{icon}», «{5h}» -
+    // кнопками. Убрана: коды нужны тому, кто пишет формат руками, а таких
+    // случаев один на сотню, и ради него восемнадцать строк занимали пол-окна.
+    // Кому надо - имена перечислены строкой под галочками.
+    private func checkGrid() -> NSView {
+        let left: [(String, String, Bool)] = [
+            ("showIcon", L("Кружок загрузки", "Load dot"), Prefs.showIcon),
+            ("showSession", L("Процент текущего окна", "Current window percent"), Prefs.showSession),
+            ("showLeft", L("Сколько до сброса", "Time until reset"), Prefs.showLeft),
+            ("showWeekly", L("Недельный кап", "Weekly cap"), Prefs.showWeekly),
+            ("showModels", L("Лимиты по моделям", "Per-model limits"), Prefs.showModels),
+            ("showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra),
+        ]
+        let right: [(String, String, Bool)] = [
+            ("showMoney", L("Деньги по прайсу API", "Money at API prices"), Prefs.showMoney),
+            ("showTokens", L("Токены за окно", "Tokens this window"), Prefs.showTokens),
+            ("showHistory", L("История и темп", "History and pace"), Prefs.showHistory),
+        ]
 
-            let label = small(hint)
-            // Однострочно: перенос внутри ячейки ломает высоту ряда,
-            // и таблица перестаёт быть таблицей.
-            label.usesSingleLineMode = true
-            label.maximumNumberOfLines = 1
-
-            cells.append(b)
-            cells.append(label)
-            if cells.count == 4 {
-                rows.append(cells)
-                cells = []
-            }
-        }
-        if !cells.isEmpty {
-            // Ряд обязан быть полным: у таблицы число ячеек в ряду
-            // фиксировано, недостающие - пустые заглушки.
-            while cells.count < 4 { cells.append(NSView()) }
-            rows.append(cells)
+        var rows: [[NSView]] = [[subheader(L("В строке меню", "In the menu bar")),
+                                 subheader(L("В выпадающем меню", "In the dropdown"))]]
+        for i in 0..<max(left.count, right.count) {
+            let a: NSView = i < left.count ? makeCheck(left[i].0, left[i].1, left[i].2) : NSView()
+            let b: NSView = i < right.count ? makeCheck(right[i].0, right[i].1, right[i].2) : NSView()
+            rows.append([a, b])
         }
 
         let grid = NSGridView(views: rows)
-        grid.rowSpacing = 4
+        grid.rowSpacing = 3
         grid.columnSpacing = 8
-        // Кнопки тянутся на всю ширину своей колонки: иначе «{icon}»
-        // и «{active.reset}» разной длины, и левый край второго столбца
-        // ходит туда-сюда.
-        grid.column(at: 0).xPlacement = .fill
-        grid.column(at: 2).xPlacement = .fill
+        grid.column(at: 0).xPlacement = .leading
         grid.column(at: 1).xPlacement = .leading
-        grid.column(at: 3).xPlacement = .leading
-        // Зазор между парами - чтобы пояснение первой пары не слипалось
-        // с кнопкой второй.
-        grid.column(at: 2).leadingPadding = 20
-        // Таблица должна занимать СВОЮ ширину, а не всю доступную.
-        //
-        // Внешний стек тянется от края до края окна, и растянутая по нему
-        // таблица раздаёт лишнюю ширину колонке с пояснением - вторая пара
-        // улетает к правому краю. Именно это и выглядело как «текст,
-        // накиданный в свободное место»: сама сетка была уже правильной,
-        // а ширина - нет.
-        //
-        // Лечится не приоритетами, а честной распоркой: таблица и пустышка
-        // в одном ряду. Пустышка цепляется за ширину слабее всех, поэтому
-        // весь избыток достаётся ей, а не колонке с текстом.
+        grid.column(at: 1).leadingPadding = 28
+        // Та же распорка, что и везде: без неё таблица растягивается на всю
+        // ширину окна и второй столбец улетает к правому краю.
         grid.setContentHuggingPriority(.required, for: .horizontal)
         let holder = NSStackView()
         holder.orientation = .horizontal
@@ -483,39 +435,14 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         filler.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1),
                                                        for: .horizontal)
         holder.addArrangedSubview(filler)
-        syncMacroToggles()
         return holder
     }
 
-    // Кнопки показывают то, что в шаблоне на самом деле: и после правки
-    // руками, и после галочки, и после «Собрать заново».
-    private func syncMacroToggles() {
-        let t = Prefs.effectiveTemplate
-        for (macro, b) in macroToggles {
-            b.state = t.contains(macro) ? .on : .off
-        }
-    }
-
-    @objc private func toggleMacro(_ sender: NSButton) {
-        let macro = sender.identifier?.rawValue ?? ""
-        guard !macro.isEmpty else { return }
-        // Шаблон действует только со «своим форматом». Включаем его сами,
-        // а не отказываем: человек, нажавший на макрос, ровно этого и хочет,
-        // а молчаливое «ничего не произошло» выглядит как поломка.
-        if !Prefs.useCustomTemplate {
-            Prefs.useCustomTemplate = true
-            customToggle.state = .on
-            templateField.isEnabled = true
-            // Поле до этого повторяло галочки - с него и продолжаем,
-            // иначе первое же нажатие стёрло бы всё, что было в трее.
-            templateField.stringValue = Prefs.defaultTemplateFromCheckboxes()
-        }
-        let t = sender.state == .on
-            ? TemplateEdit.add([macro], to: templateField.stringValue)
-            : TemplateEdit.remove([macro], from: templateField.stringValue)
-        templateField.stringValue = t
-        Prefs.customTemplate = t
-        applied()
+    private func subheader(_ s: String) -> NSTextField {
+        let t = NSTextField(labelWithString: s)
+        t.font = NSFont.boldSystemFont(ofSize: 11)
+        t.textColor = .secondaryLabelColor
+        return t
     }
 
     private func small(_ s: String) -> NSTextField {
@@ -537,12 +464,16 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         v.heightAnchor.constraint(equalToConstant: h).isActive = true
         return v
     }
-    private func addCheck(_ stack: NSStackView, _ key: String, _ title: String, _ on: Bool) {
+    private func makeCheck(_ key: String, _ title: String, _ on: Bool) -> NSButton {
         let b = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggleCheck(_:)))
         b.state = on ? .on : .off
         b.identifier = NSUserInterfaceItemIdentifier(key)
         checkboxes[key] = b
-        stack.addArrangedSubview(b)
+        return b
+    }
+
+    private func addCheck(_ stack: NSStackView, _ key: String, _ title: String, _ on: Bool) {
+        stack.addArrangedSubview(makeCheck(key, title, on))
     }
 
     // --- реакции ------------------------------------------------------------
@@ -774,7 +705,6 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     }
 
     private func applied() {
-        syncMacroToggles()
         updatePreview()
         NotificationCenter.default.post(name: .climitsPrefsChanged, object: nil)
     }
