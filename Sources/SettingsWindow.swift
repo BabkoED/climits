@@ -6,6 +6,7 @@ import AppKit
 final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     private var checkboxes: [String: NSButton] = [:]
+    private var macroToggles: [String: NSButton] = [:]
     private var templateField: NSTextField!
     private var customToggle: NSButton!
     private var previewLabel: NSTextField!
@@ -398,65 +399,74 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
-    // Макросы кнопками, по две в ряд.
+    // Макросы: нажимаемое имя и обычная подпись рядом.
     //
-    // Нажимается вся строка целиком - «{icon} кружок загрузки», - а не одно
-    // имя с подсказкой по наведению. Разница не косметическая: подсказку
-    // надо сначала догадаться вызвать, а до тех пор «{worst}» не значит
-    // ничего. Нажимать хочется по тому, что понял, а понятно как раз
-    // пояснение.
+    // Кнопка - только само имя, «{icon}». Пояснение стоит рядом текстом
+    // и не нажимается. Кнопка во всю строку вместе с пояснением занимала
+    // вдвое больше места и выглядела как «нажми меня», хотя нажимать
+    // хотелось не восемнадцать раз, а два-три.
     //
-    // По две в ряд, а не по четыре: с пояснением строка длинная, и четыре
-    // таких в ряд уехали бы за край окна.
-    //
-    // Нажатие вставляет макрос туда, где стоит курсор, или в конец, если
-    // в поле не пишут. Это и есть конструктор: собрать строку, не помня
-    // наизусть ни одного имени.
+    // Кнопка залипающая: нажал - макрос в строке, отжал - его нет.
+    // Состояние берётся из самого шаблона, а не запоминается отдельно,
+    // поэтому правка текста руками сразу видна по кнопкам.
     private func macroButtons() -> [NSView] {
         var rows: [NSView] = []
         var current: [NSView] = []
         for (macro, hint) in BarTitle.macros {
-            let b = NSButton(title: macro + "  " + hint,
-                             target: self, action: #selector(insertMacro(_:)))
-            b.bezelStyle = .inline
+            let b = NSButton(title: macro, target: self, action: #selector(toggleMacro(_:)))
+            b.setButtonType(.pushOnPushOff)
+            b.bezelStyle = .recessed
             b.controlSize = .small
-            b.alignment = .left
             b.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            b.toolTip = L("вставить \(macro) в формат", "insert \(macro) into the format")
+            b.toolTip = L("добавить \(macro) в формат или убрать оттуда",
+                          "add \(macro) to the format, or take it out")
             b.identifier = NSUserInterfaceItemIdentifier(macro)
             b.translatesAutoresizingMaskIntoConstraints = false
-            b.widthAnchor.constraint(equalToConstant: 250).isActive = true
-            current.append(b)
+            b.widthAnchor.constraint(equalToConstant: 108).isActive = true
+            macroToggles[macro] = b
+
+            let pair = NSStackView()
+            pair.orientation = .horizontal
+            pair.spacing = 5
+            pair.addArrangedSubview(b)
+            pair.addArrangedSubview(small(hint))
+            current.append(pair)
             if current.count == 2 {
                 rows.append(fieldRow(current))
                 current = []
             }
         }
         if !current.isEmpty { rows.append(fieldRow(current)) }
+        syncMacroToggles()
         return rows
     }
 
-    @objc private func insertMacro(_ sender: NSButton) {
+    // Кнопки показывают то, что в шаблоне на самом деле: и после правки
+    // руками, и после галочки, и после «Собрать заново».
+    private func syncMacroToggles() {
+        let t = Prefs.effectiveTemplate
+        for (macro, b) in macroToggles {
+            b.state = t.contains(macro) ? .on : .off
+        }
+    }
+
+    @objc private func toggleMacro(_ sender: NSButton) {
         let macro = sender.identifier?.rawValue ?? ""
         guard !macro.isEmpty else { return }
-        // Вставка правит шаблон, а шаблон действует только со «своим
-        // форматом». Включаем его сами, а не отказываем: человек, нажавший
-        // на макрос, ровно этого и хочет, а молчаливое «ничего не произошло»
-        // выглядит как поломка.
+        // Шаблон действует только со «своим форматом». Включаем его сами,
+        // а не отказываем: человек, нажавший на макрос, ровно этого и хочет,
+        // а молчаливое «ничего не произошло» выглядит как поломка.
         if !Prefs.useCustomTemplate {
             Prefs.useCustomTemplate = true
             customToggle.state = .on
             templateField.isEnabled = true
+            // Поле до этого повторяло галочки - с него и продолжаем,
+            // иначе первое же нажатие стёрло бы всё, что было в трее.
+            templateField.stringValue = Prefs.defaultTemplateFromCheckboxes()
         }
-        var t = templateField.stringValue
-        if let editor = templateField.currentEditor() {
-            let r = editor.selectedRange
-            let ns = NSMutableString(string: t)
-            ns.replaceCharacters(in: r, with: macro)
-            t = ns as String
-        } else {
-            t = TemplateEdit.add([macro], to: t)
-        }
+        let t = sender.state == .on
+            ? TemplateEdit.add([macro], to: templateField.stringValue)
+            : TemplateEdit.remove([macro], from: templateField.stringValue)
         templateField.stringValue = t
         Prefs.customTemplate = t
         applied()
@@ -718,6 +728,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     }
 
     private func applied() {
+        syncMacroToggles()
         updatePreview()
         NotificationCenter.default.post(name: .climitsPrefsChanged, object: nil)
     }
