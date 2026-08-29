@@ -25,6 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: MenuBarController?
     func applicationDidFinishLaunching(_ n: Notification) {
         controller = MenuBarController()
+        // Отладочный вход для снимка в CI: открыть окно настроек сразу.
+        // Переменной окружения, а не ключом запуска: ключ означал бы
+        // терминальный режим (см. разбор аргументов выше), и приложение
+        // напечатало бы отчёт вместо запуска окна.
+        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT"] == "1" {
+            controller?.showSettingsForShot()
+        }
     }
 }
 

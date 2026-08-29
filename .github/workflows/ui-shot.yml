@@ -1,0 +1,64 @@
+name: ui-shot
+
+# Снимок окна настроек на настоящем macOS.
+#
+# Зачем. Вёрстка окна не проверяется ничем: swiftc -parse видит синтаксис,
+# run-tests.sh - логику, а то, что содержимое уехало за нижний край экрана
+# или колонки не выровнены, не видит никто. До сих пор это ловил человек
+# со скриншотом, и три версии подряд правились вслепую.
+#
+# Запускается тегом shot-*, не каждым коммитом: это отладочный инструмент,
+# а не проверка.
+#
+# Снимок кладётся в ветку shots, а не в артефакты прогона: артефакты
+# скачиваются только с токеном, а raw.githubusercontent на публичном
+# репозитории открыт всем. То есть результат можно просто посмотреть.
+
+on:
+  push:
+    tags: ['shot-*']
+
+permissions:
+  contents: write
+
+jobs:
+  shot:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: собрать
+        run: ./build.sh
+
+      - name: запустить и снять
+        run: |
+          # Бинарник напрямую, а не через open: так переменная окружения
+          # доходит без плясок с Launch Services. Терминала на stdout нет,
+          # поэтому приложение уходит в оконный режим, а не в отчёт.
+          CLIMITS_UI_SHOT=1 build/climits.app/Contents/MacOS/climits &
+          APP_PID=$!
+          # Окно строится не мгновенно: сетка, шрифты, список хостов ssh.
+          sleep 12
+          mkdir -p shot
+          # -x без звука затвора, -o без тени вокруг окна.
+          screencapture -x -o shot/settings.png || echo "screencapture упал"
+          kill "$APP_PID" 2>/dev/null || true
+          ls -la shot/
+          # Чёрный или пустой снимок весит подозрительно мало - скажем
+          # об этом прямо, иначе в ветку уедет картинка ни о чём.
+          SIZE=$(stat -f%z shot/settings.png 2>/dev/null || echo 0)
+          echo "размер снимка: $SIZE байт"
+          if [ "$SIZE" -lt 20000 ]; then echo "::warning::снимок подозрительно мал"; fi
+
+      - name: выложить в ветку shots
+        run: |
+          cd shot
+          git init -q
+          git checkout -q -b shots
+          git config user.name "climits ui-shot"
+          git config user.email "noreply@github.com"
+          git add settings.png
+          git commit -q -m "снимок настроек с ${GITHUB_REF_NAME}"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -583,6 +583,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func openWeb() {
         if let u = URL(string: "https://claude.ai/settings/usage") { NSWorkspace.shared.open(u) }
     }
+    // Открыть настройки не по клику, а по требованию снаружи.
+    //
+    // Нужно ровно для одного: снимок окна на настоящем macOS в CI. Вёрстка
+    // окна не покрывается ни одним тестом - ни «-parse», ни разбором логики,
+    // - и до сих пор единственным способом узнать, что получилось, был
+    // человек со скриншотом. Это дорого и медленно: три версии подряд
+    // правились вслепую.
+    func showSettingsForShot() {
+        openSettings()
+    }
+
     @objc private func openSettings() {
         if settingsWindow == nil { settingsWindow = SettingsWindowController() }
         NSApp.activate(ignoringOtherApps: true)
