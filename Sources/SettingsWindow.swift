@@ -55,14 +55,20 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         addCheck(stack, "showModels", L("Лимиты по моделям (Opus, Sonnet, Fable)",
                                         "Per-model limits (Opus, Sonnet, Fable)"), Prefs.showModels)
         addCheck(stack, "showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra)
-        addCheck(stack, "showMoney", L("Деньги в раскрывающемся меню: во сколько обошлось бы по прайсу API",
-                                       "Money in the dropdown: what it would cost at API prices"), Prefs.showMoney)
-        addCheck(stack, "showTokens", L("Токены в раскрывающемся меню: потрачено и весь лимит - «1,2м/2,2м»",
-                                        "Tokens in the dropdown: spent and full limit - \"1.2M/2.2M\""), Prefs.showTokens)
-        stack.addArrangedSubview(small(L("В строку меню наверху эти двое не попадают даже включённые - там всегда мало места. Нужны и туда - впиши {money} или {tokens} в свой формат ниже.",
-                                         "These two never reach the compact bar above, even when checked - there is never enough room there. Want them there too - add {money} or {tokens} to the custom format below.")))
-        stack.addArrangedSubview(small(L("Сколько токенов в тарифе, не говорит никто - ни справка, ни админ. Второе число выведено из своего же расхода и процента.",
-                                         "Nobody states how many tokens a plan has. The second number is derived from your own usage and percentage.")))
+        addCheck(stack, "showMoney", L("Деньги: во сколько обошёлся расход по прайсу API",
+                                       "Money: what this usage costs at API prices"), Prefs.showMoney)
+        addCheck(stack, "showTokens", L("Токены: сколько прошло за окно",
+                                        "Tokens: how many went through this window"), Prefs.showTokens)
+        stack.addArrangedSubview(small(L("Это измеренный расход, а не доля лимита: сколько всего выдано по подписке, Anthropic не публикует нигде. Процент рядом отвечает на другой вопрос - он от сервера и по всему аккаунту, но без масштаба.",
+                                         "This is measured usage, not a share of a limit: Anthropic publishes no plan size anywhere. The percentage answers a different question - it comes from the server and covers the whole account, but has no scale.")))
+        stack.addArrangedSubview(small(L("Считается по расшифровкам тех машин, которые видит приложение. Работаешь ещё и на сервере - впиши его ниже, иначе цифры занижены в разы.",
+                                         "Counted from transcripts of the machines the app can see. Also working on a server - add it below, or the numbers are off by multiples.")))
+        addCheck(stack, "showHistory", L("История и темп: столбики за 7 дней, «сегодня», токенов в час, прогноз",
+                                         "History and pace: 7-day bars, today, tokens per hour, forecast"), Prefs.showHistory)
+        stack.addArrangedSubview(small(L("Столбики отвечают на «это много или как обычно». Прогноз - на «упрусь ли раньше, чем сбросится»: он считается по своим же замерам процента, размер лимита для него не нужен.",
+                                         "The bars answer \"is this a lot or a normal day\". The forecast answers \"will I hit the wall before the reset\": it is computed from our own percentage samples and needs no plan size.")))
+        stack.addArrangedSubview(small(L("Эти трое живут в выпадающем меню и в строку наверху не попадают - там места на три-четыре знака.",
+                                         "These three live in the dropdown and never reach the bar above - there is room for three or four characters there.")))
 
         stack.addArrangedSubview(spacer(6))
         customToggle = NSButton(checkboxWithTitle: L("Свой формат вместо галочек",
@@ -210,6 +216,16 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                          "There is nowhere to ask for a password: you need a key and one terminal login so the host lands in known_hosts.")))
 
         stack.addArrangedSubview(spacer(10))
+        stack.addArrangedSubview(header(L("Ещё каталоги на этой машине", "More folders on this machine")))
+        stack.addArrangedSubview(small(L("Второй аккаунт со своим CLAUDE_CONFIG_DIR пишет расшифровки мимо ~/.claude/projects. Лимит при этом общий, а расход мы видели только домашний. По одному пути в строке.",
+                                         "A second account with its own CLAUDE_CONFIG_DIR writes transcripts outside ~/.claude/projects. The limit is shared, but we only saw the home folder. One path per line.")))
+        stack.addArrangedSubview(field(L("пути", "paths"), "extraRoots",
+                                       Prefs.extraRoots.replacingOccurrences(of: "\n", with: " "),
+                                       width: 300))
+        stack.addArrangedSubview(small(L("Несколько - через пробел. Вида ~/work/.claude/projects.",
+                                         "Several - separated by spaces. Like ~/work/.claude/projects.")))
+
+        stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(versionLine())
 
         updatePreview()
@@ -304,6 +320,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showExtra": Prefs.showExtra = on
         case "showMoney": Prefs.showMoney = on
         case "showTokens": Prefs.showTokens = on
+        case "showHistory": Prefs.showHistory = on
         case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
         default: break
         }
@@ -405,7 +422,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // живой отклик и есть весь смысл.
     private static let deferredKeys: Set<String> = [
         "barWidth", "fontSize", "menuFontSize", "warnAt", "alertAt", "notifyAt",
-        "remoteHost",
+        // Адрес машины и пути к каталогам - только по окончании ввода:
+        // на каждой букве приложение обходило бы полпути к несуществующему
+        // каталогу и лезло по ssh на несуществующий хост.
+        "remoteHost", "extraRoots",
     ]
 
     func controlTextDidChange(_ obj: Notification) {
@@ -425,6 +445,16 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private func apply(key: String, value v: String) {
         switch key {
         case "remoteHost":   Prefs.remoteHost = v; applied(); return
+        // Поле одно, а путей может быть несколько: разделяем пробелом при
+        // вводе и храним по строке на путь. Пробел в самом пути тогда
+        // невозможен - но каталог расшифровок с пробелом в имени против
+        // читаемого поля не стоит ничего.
+        case "extraRoots":
+            Prefs.extraRoots = v.split(separator: " ")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            applied(); return
         case "colorCalm":    Prefs.colorCalm = v
         case "colorWarn":    Prefs.colorWarn = v
         case "colorAlarm":   Prefs.colorAlarm = v
@@ -480,8 +510,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                                    tokens: SettingsWindowController.sampleTokens)
     }
 
-    static let sampleMoney = MoneyView.make(spent: 12.40, percent: 37, partial: true)
-    static let sampleTokens = TokensView.make(spent: 1_240_000, percent: 37)
+    static let sampleMoney = MoneyView.make(spent: 12.40, partial: true)
+    static let sampleTokens = TokensView(spent: 1_240_000)
 
     static let sample: Usage = {
         let now = Date()

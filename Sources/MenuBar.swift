@@ -17,6 +17,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var sessionWindow = WindowUsage()
     private var weeklyWindow = WindowUsage()
     private var localEstimate: WindowUsage?
+    // Посуточный расход за неделю и границы этих суток - для столбиков.
+    private var dailyWindows: [WindowUsage] = []
+    private var dayCutoffs: [Date] = []
+    // Расход за последний час - для темпа.
+    private var lastHour = WindowUsage()
     // Ключ текущего окна берётся из ответа, а не зашивается литералом.
     private var sessionKey = "five_hour"
     private var scanning = false
@@ -44,6 +49,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh(force: false)
         rearmTimer()
         checkUpdatesQuietly()
+        // Прайс тянем при запуске, а не по таймеру: сутки живут дольше
+        // любого сеанса, и второй раз за день это всё равно не сработает.
+        // Перерисовка нужна - цены поменяли деньги в уже показанной строке.
+        PricingFetch.refreshIfStale { [weak self] in self?.updateTitle() }
     }
 
     // --- обновление ---------------------------------------------------------
@@ -77,6 +86,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.usage = u
                 self.lastError = nil
                 self.localEstimate = nil
+                // Замер процентов кладём ВСЕГДА, даже когда история выключена:
+                // включить её и увидеть пустоту - значит ждать ещё час, пока
+                // накопится наклон. Файл от этого прирастает парой сотен байт
+                // в час, и это дешевле, чем час без ответа.
+                History.record(u.buckets.map {
+                    PctSample(at: u.fetchedAt, key: $0.key, pct: $0.pct)
+                })
                 Notifier.check(u)
                 self.rescanTranscripts(for: u)
             case .failure(let e):
@@ -100,7 +116,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private static let rescanGap: TimeInterval = 120
 
     private func rescanTranscripts(for u: Usage, force: Bool = false) {
-        guard Prefs.showMoney || Prefs.showTokens else { return }
+        guard Prefs.showMoney || Prefs.showTokens || Prefs.showHistory else { return }
         if scanning { return }
         if !force, let last = lastScan, Date().timeIntervalSince(last) < MenuBarController.rescanGap {
             return
@@ -111,11 +127,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let weeklyStart = u.bucket("seven_day").map { Money.windowStart(for: $0, isSession: false) }
             ?? Date().addingTimeInterval(-7 * 86400)
 
+        // Суточные границы и последний час идут тем же проходом по файлам:
+        // передать восемь границ вместо двух стоит столько же, сколько две,
+        // а второй обход - это те же десятки мегабайт чтения заново.
+        let days = Prefs.showHistory ? Trend.dayCutoffs(days: 7) : []
+        let burnStart = Date().addingTimeInterval(-3600)
+        var cutoffs = [sessionStart, weeklyStart]
+        cutoffs += days
+        if Prefs.showHistory { cutoffs.append(burnStart) }
+
         scanning = true
         let host = Prefs.remoteHost
         let remotePath = Prefs.remotePath
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var w = Transcripts.usage(cutoffs: [sessionStart, weeklyStart])
+            var w = Transcripts.usage(cutoffs: cutoffs)
             var err: String? = nil
             var machines = 1
 
@@ -124,7 +149,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // и «одна не ответила» выглядят на экране одинаково.
             if !host.isEmpty {
                 switch RemoteScan.usage(host: host, path: remotePath,
-                                        cutoffs: [sessionStart, weeklyStart]) {
+                                        cutoffs: cutoffs) {
                 case .success(let r) where r.count == w.count:
                     for i in w.indices { w[i] = w[i] + r[i] }
                     machines = 2
@@ -141,9 +166,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.lastScan = Date()
                 self.machines = machines
                 self.remoteError = err
-                guard w.count == 2 else { return }
+                guard w.count == cutoffs.count, w.count >= 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
+                if !days.isEmpty, w.count == 2 + days.count + 1 {
+                    self.dayCutoffs = days
+                    self.dailyWindows = Trend.split(Array(w[2..<(2 + days.count)]))
+                    self.lastHour = w[w.count - 1]
+                }
                 // Без этого макрос {money} в строке меню пуст при запуске
                 // и потом всегда отстаёт на одно обновление: цифры пришли,
                 // а перерисовать никто не попросил.
@@ -245,6 +275,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                        "history not read in full - the total is understated")))
                 }
             }
+            if Prefs.showHistory {
+                menu.addItem(.separator())
+                for line in historyRows(u) { menu.addItem(plain(line)) }
+            }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
             i.isEnabled = true
@@ -298,12 +332,81 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let what = Prefs.showMoney && Prefs.showTokens
             ? L("Деньги и токены", "Money and tokens")
             : (Prefs.showMoney ? L("Деньги", "Money") : L("Токены", "Tokens"))
+        // Дата прайса стоит здесь, а не отдельной строкой: она отвечает на
+        // тот же вопрос «насколько этому числу верить», что и перечень
+        // машин. Две оговорки об одном числе в разных углах меню читаются
+        // как две разные проблемы.
+        let price = " \u{00B7} " + Pricing.originText()
+        // Сколько каталогов читаем на этой машине сверх домашнего. Молчать
+        // об этом нельзя в обе стороны: и когда читаем только один из двух,
+        // и когда человек настроил второй и хочет убедиться, что он в счёте.
+        let extra = max(0, Transcripts.localRoots().count - 1)
+        let roots = extra > 0
+            ? L(" и ещё \(extra) катал.", " plus \(extra) more folder(s)")
+            : ""
         if machines > 1 {
-            return L("\(what) - оценка по расшифровкам двух машин: этой и \(Prefs.remoteHost)",
-                     "\(what) - estimated from two machines: this one and \(Prefs.remoteHost)")
+            return L("\(what) - по расшифровкам двух машин: этой\(roots) и \(Prefs.remoteHost)\(price)",
+                     "\(what) - from two machines: this one\(roots) and \(Prefs.remoteHost)\(price)")
         }
-        return L("\(what) - оценка по расшифровкам этой машины, а не счёт",
-                 "\(what) - estimated from this machine's transcripts, not a bill")
+        return L("\(what) - по расшифровкам ТОЛЬКО этой машины\(roots)\(price)",
+                 "\(what) - from THIS machine only\(roots)\(price)")
+    }
+
+    // Три строки про историю и темп. Пустые не показываем: строка «темп: -»
+    // занимает место и не отвечает ни на что.
+    //
+    // Отвечают они на разные вопросы, и в этом смысл всей тройки:
+    // столбики - «это много или как обычно», темп - «с какой скоростью
+    // трачу», прогноз - «упрусь ли раньше, чем сбросится».
+    private func historyRows(_ u: Usage) -> [String] {
+        var out: [String] = []
+
+        if !dailyWindows.isEmpty {
+            let totals = dailyWindows.map { $0.totals.total }
+            var line = "  " + L("7 дней ", "7 days ") + Fmt.spark(totals)
+            if let today = dailyWindows.last, !today.isEmpty {
+                line += "  \u{00B7} " + L("сегодня ", "today ") + Fmt.compact(today.totals.total)
+                if Prefs.showMoney { line += " \u{2248}" + MoneyView.money(today.cost) }
+            }
+            out.append(line)
+        }
+
+        // Темп по расшифровкам: сколько токенов в час прошло за последний час.
+        let burnTokens = lastHour.totals.total
+        if let perHour = Trend.perHour(tokens: burnTokens, over: 3600) {
+            var line = "  " + L("темп ", "burn ") + Fmt.compact(perHour) + L("/ч", "/h")
+            // Во что обойдётся окно к сбросу при этом темпе. Это НЕ прогноз
+            // лимита: сколько его всего, мы не знаем и не выдумываем.
+            if Prefs.showMoney, let b = u.session,
+               let end = Trend.projected(spent: Money.spent(for: b, in: sessionWindow),
+                                         perHour: lastHour.cost, until: b.resetsAt) {
+                line += "  \u{00B7} " + L("к сбросу \u{2248}", "by reset \u{2248}") + MoneyView.money(end)
+            }
+            out.append(line)
+        }
+
+        // Прогноз по процентам. Здесь нет ни одного предположения о размере
+        // лимита: проценты делятся на проценты, темп берётся из своих же
+        // замеров, а сотня - это сотня.
+        let target = u.active ?? u.session
+        if let b = target {
+            let samples = History.load()
+            let rate = History.rate(samples, key: b.key)
+            if let hit = History.hitsFull(pct: b.pct, rate: rate) {
+                let beats = History.beatsReset(hit: hit, reset: b.resetsAt) ?? false
+                if beats {
+                    out.append("  " + L("при таком темпе до сброса не упрёшься",
+                                        "at this pace you will not hit the wall before reset"))
+                } else {
+                    out.append("  " + L("при таком темпе 100% в \(Fmt.hhmm(hit))",
+                                        "at this pace 100% at \(Fmt.hhmm(hit))"))
+                }
+            } else if rate == nil {
+                out.append("  " + L("темпа пока не видно - замеров мало",
+                                    "no pace yet - too few samples"))
+            }
+        }
+        return out
     }
 
     private func staleNote(_ u: Usage) -> String {
@@ -381,9 +484,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // Хвост второй строки: когда сброс, во сколько обошлось, сколько токенов.
     //
-    // Деньги и токены - оценка: прямо считается только расход по расшифровкам,
-    // а «весь лимит» выводится делением на процент. Отсюда «≈» и отдельная
-    // оговорка внизу меню.
+    // Деньги и токены - измеренный расход по видимым машинам, а не доля
+    // лимита: сколько всего выдано, Anthropic не говорит. «≈» здесь про
+    // прайс и про неполноту машин, а не про догадку о размере лимита.
     private func tail(for b: Bucket) -> String {
         var s = "  " + Fmt.untilReset(b.resetsAt)
         let clock = Fmt.clock(b.resetsAt)
@@ -392,7 +495,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let w = window(for: b)
         if Prefs.showMoney {
             let mv = Money.view(for: b, in: w)
-            if mv.spent > 0 { s += "  \u{00B7} \u{2248}" + mv.pairText }
+            if mv.spent > 0 { s += "  \u{00B7} \u{2248}" + mv.spentText }
         }
         if Prefs.showTokens {
             let tv = Money.tokens(for: b, in: w)

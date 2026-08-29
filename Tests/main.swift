@@ -142,11 +142,15 @@ if let stale = UsageParser.parse(body: topLevel, fetchedAt: Date(), isStale: tru
           BarTitle.render("{5h}", usage: stale).hasSuffix("~"))
 }
 
-let mv2 = MoneyView.make(spent: 12.0, percent: 10, partial: true)
+let mv2 = MoneyView.make(spent: 12.0, partial: true)
 check("макрос денег подставляется со знаком приблизительности",
       BarTitle.render("{money}", usage: a, money: mv2), "\u{2248}$12")
-check("макрос полного лимита тоже",
-      BarTitle.render("{money.limit}", usage: a, money: mv2), "\u{2248}$120")
+// Макроса {money.limit} больше нет - лимит в деньгах был выведен делением
+// на процент и врал в разы. У людей он мог остаться в своём шаблоне,
+// поэтому проверяем не отсутствие макроса, а то, что от него не остаётся
+// мусора в строке меню.
+check("снятый макрос полного лимита не оставляет мусора",
+      BarTitle.render("{5h} \u{00B7} {money.limit}", usage: a, money: mv2), "37%")
 check("без денег макрос не оставляет мусора",
       BarTitle.render("{5h} \u{00B7} {money}", usage: a), "37%")
 
@@ -193,14 +197,13 @@ check("семейство из Claude Fable 5", Pricing.family(of: "Claude Fable
 check("незнакомая модель считается по запасной", Pricing.family(of: "claude-nimbus-9"), "sonnet")
 check("и помечается как незнакомая", !Pricing.isKnown("claude-nimbus-9"))
 
-// Экстраполяция: потратили $12 и это 10% лимита -> весь лимит около $120.
-let m = MoneyView.make(spent: 12.0, percent: 10, partial: false)
-check("лимит в деньгах посчитан от процента", m.fullText ?? "нет", "$120")
-// При крошечном проценте деление разносит погрешность в разы - не показываем.
-let tiny = MoneyView.make(spent: 0.4, percent: 1, partial: false)
-check("на одном проценте экстраполяции нет", tiny.fullLimit == nil)
-let zero = MoneyView.make(spent: 0, percent: 40, partial: false)
-check("без трафика экстраполяции нет", zero.fullLimit == nil)
+// Деньги - только измеренное. Экстраполяции «весь лимит = потрачено/процент»
+// здесь больше нет: числитель считался по видимым машинам, знаменатель - по
+// всему аккаунту, и на замере 28.08 это занижало лимит вчетверо.
+let m = MoneyView.make(spent: 12.0, partial: false)
+check("деньги - это потрачено, и ничего больше", m.spentText, "$12")
+check("копейки не округляются до нуля", MoneyView.make(spent: 0.4, partial: false).spentText, "$0.40")
+check("сотни без ложной точности", MoneyView.make(spent: 258.37, partial: false).spentText, "$258")
 
 // ---- чтение расшифровок ----------------------------------------------------
 print("\nрасшифровки")
@@ -332,8 +335,6 @@ check("миллиард переключает ступень на «млрд»"
       Fmt.compact(1_739_000_000), L("1,7млрд", "1.7B"))
 check("девятьсот девять миллионов ещё не миллиард",
       Fmt.compact(999_000_000), L("999,0м", "999.0M"))
-check("пара «потрачено/всего»", Fmt.pair("1,2м", "2,2м"), "1,2м/2,2м")
-check("без второго числа пара не появляется", Fmt.pair("1,2м", nil), "1,2м")
 
 // ---- буква вместо имени модели ---------------------------------------------
 print("\nбуквы моделей")
@@ -352,22 +353,16 @@ check("макрос моделей идёт буквами",
 // ---- токены ----------------------------------------------------------------
 //
 // Сколько токенов в тарифе, не публикует никто - ни справка, ни админ
-// в Enterprise. Единственный способ узнать: поделить свой расход на свой же
-// процент. Отсюда и осторожность - ниже пяти процентов деление бессмысленно.
+// в Enterprise. Раньше мы это делили и получали «полный лимит»; теперь
+// показываем только то, что прошло через видимые машины.
 print("\nтокены")
-let tv = TokensView.make(spent: 1_240_000, percent: 50)
-check("полный лимит выведен из процента", tv.text, L("1,2м/2,5м", "1.2M/2.5M"))
-check("на одном проценте экстраполяции нет", TokensView.make(spent: 1000, percent: 1).full == nil)
-check("без расхода экстраполяции нет", TokensView.make(spent: 0, percent: 50).full == nil)
+let tv = TokensView(spent: 1_240_000)
+check("токены - это расход, а не доля лимита", tv.text, L("1,2м", "1.2M"))
+check("пусто, когда расхода нет", TokensView(spent: 0).isEmpty)
 check("макрос токенов подставляется",
-      BarTitle.render("{tokens}", usage: a, tokens: tv), L("1,2м/2,5м", "1.2M/2.5M"))
+      BarTitle.render("{tokens}", usage: a, tokens: tv), L("1,2м", "1.2M"))
 check("без токенов макрос не оставляет мусора",
       BarTitle.render("{5h} \u{00B7} {tokens}", usage: a), "37%")
-
-let mvPair = MoneyView.make(spent: 12.0, percent: 10, partial: true)
-check("деньги парой: знак валюты только слева", mvPair.pairText, "$12/120")
-check("без экстраполяции пара - это одно число",
-      MoneyView.make(spent: 12.0, percent: 1, partial: true).pairText, "$12")
 
 // ---- перерасход выше потолка -----------------------------------------------
 //
@@ -507,19 +502,200 @@ check("незнакомую ошибку не выдумываем",
       RemoteScan.explain("что-то пошло не так, но что - неизвестно") == nil)
 
 
+
+// ---- живой прайс -----------------------------------------------------------
+//
+// Встроенная таблица цен однажды начнёт врать МОЛЧА - это записано прямо
+// в Pricing.swift. Здесь проверяется то, что должно эту молчаливость снять:
+// разбор прайса LiteLLM. Ошибка тут не видна глазами - счёт, завышенный
+// втрое, выглядит ровно так же убедительно, как правильный.
+print("\nживой прайс")
+
+// Сравнение дробных - через порог, а не «равно»: 4.1 в двоичной записи
+// не представимо точно, и строгое равенство здесь ловило бы не ошибку
+// разбора, а последний бит мантиссы.
+func near(_ a: Double?, _ b: Double) -> Bool {
+    guard let a = a else { return false }
+    return abs(a - b) < 0.0001
+}
+check("версия из ключа с датой", near(PricingFeed.version(of: "claude-opus-4-1-20250805"), 4.1))
+check("версия из старого имени", near(PricingFeed.version(of: "claude-3-5-sonnet-20241022"), 3.5))
+check("версия без минорной", near(PricingFeed.version(of: "claude-opus-5"), 5.0))
+check("восьмизначная дата за версию не принимается",
+      PricingFeed.version(of: "claude-sonnet-20250101") == nil)
+check("семейство из ключа", PricingFeed.family(ofKey: "claude-sonnet-4-5") ?? "", "sonnet")
+check("чужая модель семейства не получает", PricingFeed.family(ofKey: "gpt-4o") == nil)
+
+let feedJSON = """
+{
+  "claude-opus-4-20250514": {"litellm_provider": "anthropic",
+     "input_cost_per_token": 0.000015, "output_cost_per_token": 0.000075},
+  "claude-opus-5": {"litellm_provider": "anthropic",
+     "input_cost_per_token": 0.000005, "output_cost_per_token": 0.000025,
+     "cache_creation_input_token_cost": 0.00000625,
+     "cache_read_input_token_cost": 0.0000005},
+  "bedrock/claude-opus-5": {"litellm_provider": "bedrock",
+     "input_cost_per_token": 0.000009, "output_cost_per_token": 0.000045},
+  "gpt-5": {"litellm_provider": "openai",
+     "input_cost_per_token": 0.00001, "output_cost_per_token": 0.00003},
+  "claude-haiku-broken": {"litellm_provider": "anthropic",
+     "input_cost_per_token": 0, "output_cost_per_token": 0}
+}
+"""
+let feed = PricingFeed.parse(Data(feedJSON.utf8))
+
+// Главное здесь: НЕ максимум по цене. У Opus 4 было $15/$75, у Opus 5 стало
+// $5/$25 - выбор по «самой дорогой записи» дал бы прошлогоднюю модель
+// и завысил счёт втрое, причём молча.
+check("из двух версий Opus берётся старшая, а не дорогая", near(feed["opus"]?.input, 5.0))
+check("выход тоже от старшей версии", near(feed["opus"]?.output, 25.0))
+check("цена за токен переведена в цену за миллион", near(feed["opus"]?.cacheRead, 0.5))
+check("запись кэша взята из файла, а не выведена", near(feed["opus"]?.cacheWrite, 6.25))
+check("чужой провайдер не попадает вовсе", feed["openai"] == nil && feed.count == 1)
+check("нулевая цена отбрасывается", feed["haiku"] == nil)
+
+check("мусор вместо JSON даёт пустую таблицу",
+      PricingFeed.parse(Data("не json".utf8)).isEmpty)
+check("пустой объект даёт пустую таблицу", PricingFeed.parse(Data("{}".utf8)).isEmpty)
+
+// Кэш пишется в нашем формате, а не исходником LiteLLM: тот весит мегабайты
+// и почти весь про чужих провайдеров.
+if let enc = PricingFeed.encode(feed, at: 1_700_000_000) {
+    check("отметка времени переживает запись и чтение",
+          near(PricingFeed.decodeStamp(enc), 1_700_000_000))
+    let back = PricingFeed.parse(enc)
+    check("наш собственный файл прайсом LiteLLM не считается", back.isEmpty)
+} else {
+    check("кэш прайса сериализуется", false)
+}
+
+
+
+// ---- столбики, темп, прогноз -----------------------------------------------
+//
+// Три разных ответа на три разных вопроса, и ни один из них не требует
+// знать размер лимита - именно поэтому они и появились вместо экстраполяции.
+print("\nстолбики, темп, прогноз")
+
+check("столбики от максимума недели", Fmt.spark([1, 2, 4, 8]), "\u{2581}\u{2582}\u{2584}\u{2588}")
+// Ноль и «немного» - разные ответы. Нижний блок читается как «немного»,
+// поэтому пустой день рисуется точкой.
+check("пустой день - точка, а не полоска", Fmt.spark([0, 8]), "\u{00B7}\u{2588}")
+check("всё по нулям - одни точки", Fmt.spark([0, 0, 0]), "\u{00B7}\u{00B7}\u{00B7}")
+check("день с одним запросом всё равно виден", Fmt.spark([1, 1_000_000]).first != "\u{00B7}")
+check("пустой список не ломает", Fmt.spark([]), "")
+
+// Сутки берутся у календаря: при переходе на летнее время они длиной
+// 23 и 25 часов, и вычитание 86400 разъехалось бы дважды в год.
+var utc = Calendar(identifier: .gregorian)
+utc.timeZone = TimeZone(identifier: "UTC")!
+let noon = Date(timeIntervalSince1970: 1_700_000_000)
+let cuts = Trend.dayCutoffs(days: 7, now: noon, calendar: utc)
+check("семь границ на семь дней", cuts.count == 7)
+check("границы идут от старых к свежим", cuts == cuts.sorted())
+check("последняя граница - сегодняшняя полночь",
+      utc.startOfDay(for: noon) == cuts.last)
+check("между границами ровно сутки",
+      cuts[1].timeIntervalSince(cuts[0]) == 86400)
+
+// Вычитание вложенных окон: «с понедельника» минус «со вторника» = понедельник.
+func win(_ family: String, _ n: Int) -> WindowUsage {
+    var w = WindowUsage()
+    w.byFamily[family] = TokenTally(input: n, output: 0, cacheWrite: 0, cacheRead: 0, requests: 1)
+    return w
+}
+let cumulative = [win("opus", 100), win("opus", 60), win("opus", 25)]
+let perDay = Trend.split(cumulative)
+check("первые сутки - разность окон", perDay[0].totals.total == 40)
+check("вторые сутки - тоже разность", perDay[1].totals.total == 35)
+check("последние сутки берутся как есть", perDay[2].totals.total == 25)
+check("суммы сходятся с исходным окном",
+      perDay.reduce(0) { $0 + $1.totals.total } == 100)
+
+check("темп за час", Trend.perHour(tokens: 120_000, over: 3600) == 120_000)
+check("темп за полчаса пересчитан в час", Trend.perHour(tokens: 60_000, over: 1800) == 120_000)
+// На трёх минутах один длинный ответ модели превращается в «два миллиона
+// в час». Это не темп, а всплеск, и ответ здесь - «пока не знаю».
+check("на трёх минутах темпа нет", Trend.perHour(tokens: 100_000, over: 180) == nil)
+check("без расхода темпа нет", Trend.perHour(tokens: 0, over: 3600) == nil)
+
+let reset2h = noon.addingTimeInterval(2 * 3600)
+check("к сбросу набежит потрачено плюс темп на остаток",
+      near(Trend.projected(spent: 10, perHour: 5, until: reset2h, now: noon), 20.0))
+check("без времени сброса прогноза нет",
+      Trend.projected(spent: 10, perHour: 5, until: nil, now: noon) == nil)
+check("сброс в прошлом прогноза не даёт",
+      Trend.projected(spent: 10, perHour: 5, until: noon.addingTimeInterval(-60), now: noon) == nil)
+
+// Прогноз по процентам. Проценты делятся на проценты - размер лимита
+// в этой арифметике не участвует вовсе.
+let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+func sample(_ minutes: Double, _ pct: Int, _ key: String = "five_hour") -> PctSample {
+    return PctSample(at: t0.addingTimeInterval(minutes * 60), key: key, pct: pct)
+}
+let straight = [sample(0, 40), sample(30, 46), sample(60, 52)]
+check("темп в процентах за час", near(History.rate(straight, key: "five_hour"), 12.0))
+check("чужой лимит темпа не даёт", History.rate(straight, key: "seven_day") == nil)
+// Меньше четверти часа - шум: между соседними замерами процент часто
+// не меняется вовсе.
+check("на пяти минутах темпа нет",
+      History.rate([sample(0, 40), sample(5, 41)], key: "five_hour") == nil)
+check("падение процента темпа не даёт",
+      History.rate([sample(0, 90), sample(60, 5)], key: "five_hour") == nil)
+
+// Сброс окна - это падение процента, а не отрицательный расход. Считать
+// наклон через границу окна значит получить «расход идёт назад».
+let acrossReset = [sample(0, 80), sample(60, 90), sample(120, 4), sample(180, 16)]
+check("после сброса считаем заново, а не через границу",
+      near(History.rate(acrossReset, key: "five_hour"), 12.0))
+check("сегмент начинается после сброса",
+      History.currentSegment(acrossReset, key: "five_hour").count == 2)
+
+let hit = History.hitsFull(pct: 52, rate: 12.0, now: t0)
+check("до сотни при 12% в час - четыре часа",
+      hit.map { Int($0.timeIntervalSince(t0) / 60) } == 240)
+check("на сотне прогноза нет", History.hitsFull(pct: 100, rate: 12.0, now: t0) == nil)
+// Темп 0.1% в час дал бы «упрёшься через сорок суток». Это не прогноз,
+// а деление на почти ноль.
+check("почти нулевой темп прогноза не даёт",
+      History.hitsFull(pct: 50, rate: 0.05, now: t0) == nil)
+check("успеваем, если сброс раньше",
+      History.beatsReset(hit: t0.addingTimeInterval(3600),
+                         reset: t0.addingTimeInterval(1800)) == true)
+check("не успеваем, если сброс позже",
+      History.beatsReset(hit: t0.addingTimeInterval(1800),
+                         reset: t0.addingTimeInterval(3600)) == false)
+
+check("старьё выбрасывается",
+      History.prune([sample(0, 10), sample(-20 * 24 * 60, 10)], now: t0).count == 1)
+if let enc = History.encode(straight) {
+    check("замеры переживают запись и чтение", History.decode(enc) == straight)
+} else {
+    check("замеры сериализуются", false)
+}
+
+
 // ---- деньги и токены не просачиваются в трей -------------------------------
 //
-// В раскрывающемся меню места всегда хватает - там показываются вообще все
-// buckets и строка "Сверх лимита" независимо от галочек. У денег и токенов
-// вычисление дорогое (обход расшифровок), поэтому у них одна галочка на
-// «считать и показывать в меню» - но она не обязана означать «и в трей»:
-// там всегда мало места, а сумма и пара токенов только вытесняют остальное.
+// В строке меню места три-четыре знака, и заняты они тем, что отвечает на
+// «работать дальше или подождать»: процентом и временем до сброса. Деньги,
+// токены и история отвечают на другой вопрос и живут в выпадающем меню.
 print("\nденьги и токены не просачиваются в трей")
 Prefs.showMoney = true
 Prefs.showTokens = true
+Prefs.showHistory = true
 let withBoth = Prefs.defaultTemplateFromCheckboxes()
 check("галочка «Деньги» не добавляет {money} в трей", !withBoth.contains("{money}"))
 check("галочка «Токены» не добавляет {tokens} в трей", !withBoth.contains("{tokens}"))
+// Выключенный процент не должен уносить с собой время до сброса: без него
+// строка вообще перестаёт отвечать на «когда отпустит».
+Prefs.showSession = false
+Prefs.showLeft = true
+let noPct = Prefs.defaultTemplateFromCheckboxes()
+check("без процента остаётся время до сброса", noPct.contains("{5h.left}"))
+check("а самого процента в строке нет", !noPct.contains("{5h}"))
+Prefs.showSession = true
+Prefs.showHistory = false
 Prefs.showMoney = false
 Prefs.showTokens = false
 

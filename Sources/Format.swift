@@ -91,11 +91,40 @@ enum Fmt {
         return "\(n)"
     }
 
-    // «1,2м/2,2м» - потрачено и весь лимит одной парой. Косая черта вместо
-    // «из»: в строке меню каждый знак на счету, а смысл тот же.
-    static func pair(_ spent: String, _ full: String?) -> String {
-        guard let full = full else { return spent }
-        return spent + "/" + full
+    // Столбики за последние дни: «▁▃█▂▁▄▇».
+    //
+    // Зачем: «≈$12 за окно» не отвечает на вопрос, который человек задаёт
+    // на самом деле, - это много или как обычно. Без базы для сравнения
+    // любая цифра читается как тревожная.
+    //
+    // Высота считается от МАКСИМУМА недели, а не от какого-то абсолюта:
+    // абсолюта здесь нет и быть не может, лимит в токенах никто не публикует.
+    // График отвечает только на «как относительно своих же дней».
+    //
+    // Ноль рисуется точкой, а не самым низким столбиком: «ничего» и
+    // «немного» - разные ответы, а нижний блок Unicode выглядит как
+    // «немного».
+    static func spark(_ values: [Int]) -> String {
+        let glyphs = ["\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}",
+                      "\u{2585}", "\u{2586}", "\u{2587}", "\u{2588}"]
+        guard let top = values.max(), top > 0 else {
+            return String(repeating: "\u{00B7}", count: values.count)
+        }
+        return values.map { v -> String in
+            guard v > 0 else { return "\u{00B7}" }
+            // Округляем вверх: день с одним запросом должен быть виден
+            // хоть чем-то, иначе график врёт про пустой день.
+            let idx = Int(ceil(Double(v) / Double(top) * Double(glyphs.count))) - 1
+            return glyphs[max(0, min(glyphs.count - 1, idx))]
+        }.joined()
+    }
+
+    // Подписи дней под столбиками: «пн вт ср чт пт сб вс».
+    static func dayLetters(_ dates: [Date], calendar: Calendar = .current) -> String {
+        return dates.map { d -> String in
+            let wd = calendar.component(.weekday, from: d)
+            return String(weekdayShort(wd).prefix(1))
+        }.joined()
     }
 
     static func bar(_ pct: Int, width: Int? = nil) -> String {
@@ -150,13 +179,12 @@ enum BarTitle {
         ("{fable}",      L("Fable за неделю", "Fable this week")),
         ("{haiku}",      L("Haiku за неделю", "Haiku this week")),
         ("{models}",     L("все модели подряд: O, S, F", "all models in a row: O, S, F")),
-        ("{tokens}",     L("токены: потрачено/весь лимит", "tokens: spent/full limit")),
+        ("{tokens}",     L("токены за окно", "tokens this window")),
         ("{worst}",      L("самый нагруженный лимит", "the busiest limit")),
         ("{active}",     L("лимит, который упрётся первым", "the limit that hits first")),
         ("{extra}",      L("потрачено сверх лимита", "extra usage spent")),
         ("{extra.pct}",  L("сверх лимита, процент", "extra usage percent")),
         ("{money}",      L("во сколько обошлось окно", "what this window cost")),
-        ("{money.limit}",L("во сколько обойдётся весь лимит", "what the full limit is worth")),
     ]
 
     static func render(_ template: String, usage: Usage,
@@ -199,9 +227,9 @@ enum BarTitle {
         if let a = usage.active { put("{active}", "\(a.short) \(a.pct)%") } else { put("{active}", "") }
 
         // Знак «≈» ставится здесь, а не в MoneyView: в строке меню он несёт
-        // смысл (это оценка), а в отчёте рядом уже есть подпись словами.
+        // смысл - счёт идёт по нашему прайсу и только по видимым машинам,
+        // а в отчёте рядом уже есть подпись словами.
         put("{money}", money.map { $0.spent > 0 ? "\u{2248}" + $0.spentText : "" } ?? "")
-        put("{money.limit}", money?.fullText.map { "\u{2248}" + $0 } ?? "")
         put("{tokens}", tokens.map { $0.isEmpty ? "" : $0.text } ?? "")
 
         let e = usage.extra

@@ -110,7 +110,6 @@ enum CLI {
                 let mv = Money.view(for: b, in: w)
                 if mv.spent > 0 {
                     moneyTail = "  \u{2248}" + mv.spentText
-                    if let full = mv.fullText { moneyTail += L(" из \u{2248}", " of \u{2248}") + full }
                 }
             }
             print("  \(bold)\(Fmt.pad(b.long, 20))\(reset)"

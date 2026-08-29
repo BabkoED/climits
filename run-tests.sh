@@ -19,7 +19,9 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/Prefs.swift \
   Sources/Format.swift \
   Sources/Pricing.swift \
+  Sources/PricingFeed.swift \
   Sources/Transcripts.swift \
+  Sources/History.swift \
   Sources/Version.swift \
   Sources/RemoteScan.swift \
   Tests/main.swift

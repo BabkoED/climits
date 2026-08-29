@@ -7,10 +7,16 @@ import Foundation
 // Считаем сами - по токенам из локальных расшифровок и по этому прайсу.
 //
 // ВАЖНО: цены меняются, и захардкоженная таблица однажды начнёт врать молча.
-// Поэтому она перекрывается файлом, который можно править руками:
-//     ~/Library/Application Support/climits/pricing.json
-// Формат тот же, что у значений по умолчанию ниже. Что не указано в файле -
-// берётся из встроенной таблицы.
+// Поэтому с 1.3 она перекрывается двумя слоями, снизу вверх:
+//   1) скачанный прайс LiteLLM - раз в сутки, см. PricingFeed и PricingFetch;
+//   2) файл, который правят руками:
+//      ~/Library/Application Support/climits/pricing.json
+// Формат у обоих слоёв один и тот же. Ручной сильнее скачанного: человек,
+// открывший этот файл, знает что-то, чего не знаем ни мы, ни LiteLLM, -
+// например, свою корпоративную цену.
+//
+// Встроенная таблица теперь не основной источник, а последнее дно: то, по
+// чему считаем, когда сети не было ни разу. Дата её видна в меню.
 struct ModelPrice: Equatable {
     let input: Double        // $ за 1M входных
     let output: Double       // $ за 1M выходных
@@ -29,6 +35,10 @@ enum Pricing {
     // Прайс Anthropic на 28.08.2026, $ за миллион токенов.
     // У Sonnet 5 до 31.08.2026 действует вводная цена $2/$10 - здесь стоит
     // обычная, чтобы таблица не начала занижать со следующей недели.
+    // В скачанном прайсе на 29.08.2026 стоит как раз вводная $2/$10, и это
+    // правильно: пока она действует, по ней и считаем, а сменится - LiteLLM
+    // поправит у себя в тот же день. Расхождение этих двух чисел - не ошибка,
+    // а ровно та причина, по которой слой со скачиванием и появился.
     static let builtin: [String: ModelPrice] = [
         "opus":   .standard(input: 5,  output: 25),
         "fable":  .standard(input: 10, output: 50),
@@ -49,34 +59,64 @@ enum Pricing {
     }
 
     static var overrideURL: URL {
+        return supportDir.appendingPathComponent("pricing.json")
+    }
+
+    // Кэш скачанного прайса LiteLLM, уже разобранного в нашу форму.
+    static var remoteURL: URL {
+        return supportDir.appendingPathComponent("pricing-remote.json")
+    }
+
+    static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask)[0]
-        return base.appendingPathComponent("climits/pricing.json")
+        return base.appendingPathComponent("climits", isDirectory: true)
     }
 
     private static var cached: [String: ModelPrice]? = nil
+    // Откуда взята цена - для подписи в меню. Без неё «$12» одинаково
+    // выглядит и когда прайс свежий, и когда сеть не отвечала месяц.
+    private(set) static var remoteStamp: Date? = nil
 
+    // Кладём поверх таблицы то, что нашлось в файле нашего формата.
+    // Один разбор на два источника: ручной pricing.json и кэш LiteLLM.
+    // Проверки одни и те же намеренно - скачанный файл доверия заслуживает
+    // не больше написанного руками, а формат у него в любой момент может
+    // поменяться на той стороне.
+    private static func apply(_ data: Data, into t: inout [String: ModelPrice]) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        for (family, value) in obj {
+            guard let d = value as? [String: Any],
+                  let i = jsonNumber(d["input"]),
+                  let o = jsonNumber(d["output"]) else { continue }
+            // Файл правит человек, и в нём может оказаться что угодно:
+            // отрицательное число, ноль, «nan», значение на порядки
+            // больше правдоподобного. Молча принять такое - значит
+            // показать бессмыслицу как расчёт. Ограничиваем разумным
+            // диапазоном и отбрасываем непригодное.
+            guard let vi = sane(i), let vo = sane(o) else { continue }
+            var p = ModelPrice.standard(input: vi, output: vo)
+            if let cw = sane(jsonNumber(d["cache_write"])) { p.cacheWrite = cw }
+            if let cr = sane(jsonNumber(d["cache_read"])) { p.cacheRead = cr }
+            t[family.lowercased()] = p
+        }
+    }
+
+    // Три слоя, снизу вверх: встроенная таблица, скачанный прайс, ручная
+    // правка. Порядок именно такой. Скачанное бьёт встроенное, потому что
+    // оно свежее по определению. Ручное бьёт всё, потому что человек, который
+    // открыл pricing.json и вписал туда число, знает что-то, чего не знаем
+    // ни мы, ни LiteLLM, - например, свою корпоративную цену.
     static func table() -> [String: ModelPrice] {
         if let c = cached { return c }
         var t = builtin
-        if let data = try? Data(contentsOf: overrideURL),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for (family, value) in obj {
-                guard let d = value as? [String: Any],
-                      let i = jsonNumber(d["input"]),
-                      let o = jsonNumber(d["output"]) else { continue }
-                // Файл правит человек, и в нём может оказаться что угодно:
-                // отрицательное число, ноль, «nan», значение на порядки
-                // больше правдоподобного. Молча принять такое - значит
-                // показать бессмыслицу как расчёт. Ограничиваем разумным
-                // диапазоном и отбрасываем непригодное.
-                guard let vi = sane(i), let vo = sane(o) else { continue }
-                var p = ModelPrice.standard(input: vi, output: vo)
-                if let cw = sane(jsonNumber(d["cache_write"])) { p.cacheWrite = cw }
-                if let cr = sane(jsonNumber(d["cache_read"])) { p.cacheRead = cr }
-                t[family.lowercased()] = p
-            }
+        if let data = try? Data(contentsOf: remoteURL) {
+            apply(data, into: &t)
+            remoteStamp = PricingFeed.decodeStamp(data).map { Date(timeIntervalSince1970: $0) }
+        } else {
+            remoteStamp = nil
         }
+        if let data = try? Data(contentsOf: overrideURL) { apply(data, into: &t) }
         cached = t
         return t
     }
@@ -96,6 +136,21 @@ enum Pricing {
     }
 
     // Знает ли таблица эту модель на самом деле, или мы подставили запасную.
+    // Чем считали - словами, для подписи в меню. Дата важнее слова
+    // «LiteLLM»: она отвечает на вопрос «а не устарело ли», а название
+    // источника не отвечает ни на что.
+    static func originText() -> String {
+        _ = table()
+        guard let stamp = remoteStamp else {
+            return L("прайс встроенный, обновиться не удалось",
+                     "built-in prices, no update fetched")
+        }
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.setLocalizedDateFormatFromTemplate("d MMM")
+        return L("прайс от \(f.string(from: stamp))", "prices as of \(f.string(from: stamp))")
+    }
+
     static func isKnown(_ model: String) -> Bool {
         let m = model.lowercased()
         return ["fable", "opus", "sonnet", "haiku"].contains { m.contains($0) }
