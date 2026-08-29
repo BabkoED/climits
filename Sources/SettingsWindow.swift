@@ -168,8 +168,9 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
         // Раньше здесь были только имена макросов подряд - «{5h} {5h.left}
         // {7d}...». По ним видно, что макросы существуют, и совершенно
-        // непонятно, что каждый значит. Теперь с пояснением, по два в строке.
-        stack.addArrangedSubview(small(macroHint()))
+        // непонятно, что каждый значит. Теперь это кнопки: пояснение
+        // всплывает подсказкой, а нажатие вставляет макрос в шаблон.
+        for row in macroButtons() { stack.addArrangedSubview(row) }
         stack.addArrangedSubview(small(L("Пока «свой формат» выключен, поле повторяет галочки - включил и правь готовое. Пустые макросы убираются вместе с разделителем.",
                                          "While custom format is off, the field mirrors the checkboxes - switch it on and edit what is already there. Empty macros are dropped along with their separator.")))
 
@@ -397,20 +398,59 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
-    // Макросы с пояснениями, по два в строке: восемнадцать строк подряд
-    // выше самого окна настроек, одна строка - нечитаемая каша.
-    private func macroHint() -> String {
-        var lines: [String] = []
-        var pair: [String] = []
+    // Макросы кнопками, по четыре в ряд.
+    //
+    // Подпись у кнопки короткая - само имя макроса, - а пояснение висит
+    // подсказкой: восемнадцать пояснений подряд выше самого окна настроек,
+    // а без них имена ни о чём не говорят.
+    //
+    // Нажатие вставляет макрос в место, где стоит курсор, или в конец, если
+    // в поле не пишут. Это и есть «конструктор»: собрать строку, не помня
+    // наизусть ни одного имени.
+    private func macroButtons() -> [NSView] {
+        var rows: [NSView] = []
+        var current: [NSView] = []
         for (macro, hint) in BarTitle.macros {
-            pair.append(Fmt.pad(macro + " " + hint, 40))
-            if pair.count == 2 {
-                lines.append(pair.joined().trimmingCharacters(in: .whitespaces))
-                pair = []
+            let b = NSButton(title: macro, target: self, action: #selector(insertMacro(_:)))
+            b.bezelStyle = .inline
+            b.controlSize = .small
+            b.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+            b.toolTip = hint
+            b.identifier = NSUserInterfaceItemIdentifier(macro)
+            current.append(b)
+            if current.count == 4 {
+                rows.append(fieldRow(current))
+                current = []
             }
         }
-        if !pair.isEmpty { lines.append(pair.joined().trimmingCharacters(in: .whitespaces)) }
-        return lines.joined(separator: "\n")
+        if !current.isEmpty { rows.append(fieldRow(current)) }
+        return rows
+    }
+
+    @objc private func insertMacro(_ sender: NSButton) {
+        let macro = sender.identifier?.rawValue ?? ""
+        guard !macro.isEmpty else { return }
+        // Вставка правит шаблон, а шаблон действует только со «своим
+        // форматом». Включаем его сами, а не отказываем: человек, нажавший
+        // на макрос, ровно этого и хочет, а молчаливое «ничего не произошло»
+        // выглядит как поломка.
+        if !Prefs.useCustomTemplate {
+            Prefs.useCustomTemplate = true
+            customToggle.state = .on
+            templateField.isEnabled = true
+        }
+        var t = templateField.stringValue
+        if let editor = templateField.currentEditor() {
+            let r = editor.selectedRange
+            let ns = NSMutableString(string: t)
+            ns.replaceCharacters(in: r, with: macro)
+            t = ns as String
+        } else {
+            t = TemplateEdit.add([macro], to: t)
+        }
+        templateField.stringValue = t
+        Prefs.customTemplate = t
+        applied()
     }
 
     private func small(_ s: String) -> NSTextField {
@@ -456,13 +496,35 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
         default: break
         }
-        // Правка галочек означает, что человек хочет быстрый выбор, а не
-        // шаблон: молча оставить включённым «свой формат» - значит показать
-        // ему, что галочки ни на что не влияют.
+        // При включённом «своём формате» галочка ДОПОЛНЯЕТ строку, а не
+        // заменяет её.
+        //
+        // Раньше здесь стояло обратное: любая галочка выключала свой формат
+        // и затирала написанное. Логика была «раз жмёт галочки - значит
+        // хочет быстрый выбор». На деле человек собирает строку как
+        // конструктор: галочками добавляет куски, руками правит порядок,
+        // и один случайный клик стирал всю работу.
         if Prefs.useCustomTemplate {
-            Prefs.useCustomTemplate = false
-            customToggle.state = .off
-            templateField.isEnabled = false
+            let key = sender.identifier?.rawValue ?? ""
+            var t = templateField.stringValue
+            if key == "showLeft" {
+                // «Сколько до сброса» - не свой макрос, а добавка к чужим:
+                // отдельно от процента время в строке ни о чём не говорит.
+                // Поэтому добавляем и убираем его у тех окон, что уже есть.
+                for base in ["{5h}", "{7d}"] where t.contains(base) {
+                    let left = String(base.dropLast()) + ".left}"
+                    t = on ? TemplateEdit.add([base, left], to: t)
+                           : TemplateEdit.remove([left], from: t)
+                }
+            } else {
+                let macros = TemplateEdit.macros(for: key, withLeft: Prefs.showLeft)
+                t = on ? TemplateEdit.add(macros, to: t)
+                       : TemplateEdit.remove(macros, from: t)
+            }
+            templateField.stringValue = t
+            Prefs.customTemplate = t
+            applied()
+            return
         }
         // Поле шаблона повторяет галочки, пока свой формат выключен. Иначе
         // человек включает его и видит либо пустоту, либо то, что собиралось

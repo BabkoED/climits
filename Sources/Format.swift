@@ -181,7 +181,10 @@ enum BarTitle {
         ("{models}",     L("все модели подряд: O, S, F", "all models in a row: O, S, F")),
         ("{tokens}",     L("токены за окно", "tokens this window")),
         ("{worst}",      L("самый нагруженный лимит", "the busiest limit")),
+        ("{worst.left}", L("до сброса у него", "time left on it")),
         ("{active}",     L("лимит, который упрётся первым", "the limit that hits first")),
+        ("{active.left}",L("до сброса у него", "time left on it")),
+        ("{active.reset}",L("когда он сбросится: пн 03:00", "when it resets: Mon 03:00")),
         ("{extra}",      L("потрачено сверх лимита", "extra usage spent")),
         ("{extra.pct}",  L("сверх лимита, процент", "extra usage percent")),
         ("{money}",      L("во сколько обошлось окно", "what this window cost")),
@@ -223,8 +226,33 @@ enum BarTitle {
             .joined(separator: " \u{00B7} ")
         put("{models}", models)
 
-        if let w = usage.worst { put("{worst}", "\(w.short) \(w.pct)%") } else { put("{worst}", "") }
-        if let a = usage.active { put("{active}", "\(a.short) \(a.pct)%") } else { put("{active}", "") }
+        // Время до сброса у «того, который упрётся первым» - отдельным
+        // макросом, а не частью {active}.
+        //
+        // Иначе строка «7д 62% 2д 23ч» получается только у того, кому
+        // подошёл именно такой порядок и такой разделитель, а всем
+        // остальным - никак. Разделять их - работа шаблона, наше дело
+        // дать оба куска.
+        //
+        // Само по себе это заметно на недельном лимите: «7д 62%» не
+        // отвечает, шесть часов до сброса или три дня, а решение
+        // «работать дальше или подождать» держится ровно на этом.
+        if let w = usage.worst {
+            put("{worst}", "\(w.short) \(w.pct)%")
+            put("{worst.left}", w.resetsAt != nil ? Fmt.left(w.resetsAt) : "")
+        } else {
+            put("{worst}", "")
+            put("{worst.left}", "")
+        }
+        if let a = usage.active {
+            put("{active}", "\(a.short) \(a.pct)%")
+            put("{active.left}", a.resetsAt != nil ? Fmt.left(a.resetsAt) : "")
+            put("{active.reset}", Fmt.clock(a.resetsAt))
+        } else {
+            put("{active}", "")
+            put("{active.left}", "")
+            put("{active.reset}", "")
+        }
 
         // Знак «≈» ставится здесь, а не в MoneyView: в строке меню он несёт
         // смысл - счёт идёт по нашему прайсу и только по видимым машинам,
@@ -246,7 +274,7 @@ enum BarTitle {
                                             withTemplate: "")
         }
 
-        s = collapse(s)
+        s = tidy(s)
         if s.isEmpty { s = "\(usage.worst?.short ?? "") \(usage.worst?.pct ?? 0)%" }
         if usage.isStale { s = s.isEmpty ? "~" : s + "~" }  // честный признак несвежих цифр
         return s
@@ -254,7 +282,11 @@ enum BarTitle {
 
     // Схлопываем разделители, оставшиеся от пустых макросов: « ·  · », « · »
     // в начале и в конце, двойные пробелы.
-    private static func collapse(_ input: String) -> String {
+    //
+    // Не private: тем же самым чистится шаблон, из которого галочка убрала
+    // свой макрос. Две разные чистки разошлись бы - в строке меню пусто
+    // схлопывалось бы, а в поле настроек оставалось висеть « · ».
+    static func tidy(_ input: String) -> String {
         var s = input
         let rules: [(String, String)] = [
             ("[ \t]+", " "),
@@ -269,5 +301,61 @@ enum BarTitle {
                                             withTemplate: repl)
         }
         return s.trimmingCharacters(in: .whitespaces)
+    }
+}
+
+// Галочки как конструктор шаблона.
+//
+// Пока «свой формат» выключен, галочки собирают строку с нуля - это
+// поведение осталось. Когда включён, они правят ТУ строку, которая уже
+// написана: тик добавляет свой макрос, снятие убирает. До этого любая
+// галочка выключала «свой формат» и затирала написанное целиком - то есть
+// человек, собравший строку руками, терял её от одного случайного клика.
+enum TemplateEdit {
+    // Какие макросы стоят за галочкой. Пара «{5h} {5h.left}» - это
+    // действительно пара: время без процента в строке меню читается как
+    // отдельное число неизвестно про что.
+    static func macros(for key: String, withLeft: Bool) -> [String] {
+        switch key {
+        case "showIcon":    return ["{icon}"]
+        case "showSession": return withLeft ? ["{5h}", "{5h.left}"] : ["{5h}"]
+        case "showWeekly":  return withLeft ? ["{7d}", "{7d.left}"] : ["{7d}"]
+        case "showModels":  return ["{models}"]
+        case "showExtra":   return ["{extra}"]
+        // Деньги, токены и история в строку меню не идут по отдельному
+        // правилу - см. Prefs.defaultTemplateFromCheckboxes.
+        default:            return []
+        }
+    }
+
+    static func contains(_ macro: String, in template: String) -> Bool {
+        return template.contains(macro)
+    }
+
+    // Добавляем в конец, кроме кружка: он слева от всего по смыслу -
+    // это индикатор, а не число.
+    static func add(_ macros: [String], to template: String) -> String {
+        var s = template
+        for m in macros where !contains(m, in: s) {
+            if m == "{icon}" {
+                s = s.isEmpty ? m : m + " " + s
+            } else if s.isEmpty {
+                s = m
+            } else if macros.count > 1, m.hasSuffix(".left}") {
+                // Время идёт вплотную к своему проценту, без разделителя:
+                // «57% 5м · 92% 1д3ч» читается как два окна, а
+                // «57% · 5м · 92% · 1д3ч» - как четыре числа подряд.
+                s += " " + m
+            } else {
+                s += " \u{00B7} " + m
+            }
+        }
+        return BarTitle.tidy(s)
+    }
+
+    static func remove(_ macros: [String], from template: String) -> String {
+        var s = template
+        for m in macros { s = s.replacingOccurrences(of: m, with: "") }
+        return BarTitle.tidy(s)
     }
 }

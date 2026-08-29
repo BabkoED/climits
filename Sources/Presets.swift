@@ -87,8 +87,10 @@ enum Presets {
             ("{icon} {models}", L("по моделям: O, S, F", "per model: O, S, F")),
             ("{icon} {5h} {5h.left} \u{00B7} {money}",
              L("окно и деньги", "window and money")),
-            ("{icon} {active} \u{00B7} {tokens}", L("что упрётся первым, и токены",
-                                                    "what hits first, and tokens")),
+            ("{icon} {active} {active.left}", L("что упрётся первым, и когда отпустит",
+                                                "what hits first, and when it lets go")),
+            ("{icon} {active} {active.left} \u{00B7} {money}",
+             L("то же плюс деньги", "the same plus money")),
         ])
     }
 }
