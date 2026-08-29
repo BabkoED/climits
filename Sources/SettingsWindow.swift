@@ -155,8 +155,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                          "On the right is the dropdown, not the menu bar line: there is always room there. Money and tokens are measured usage, not a share of a limit - Anthropic publishes no plan size anywhere. Counted from transcripts of the machines the app can see: also working on a server, add it below or the numbers are off by multiples.")))
         stack.addArrangedSubview(small(L("Столбики истории отвечают на «это много или как обычно», прогноз - на «упрусь ли раньше, чем сбросится»: он считается по своим же замерам процента, размер лимита для него не нужен.",
                                          "History bars answer \"is this a lot or a normal day\"; the forecast answers \"will I hit the wall before the reset\" - computed from our own percentage samples, no plan size needed.")))
-        stack.addArrangedSubview(small(L("Для своего формата есть и то, чего нет в галочках: {worst} {active} {active.left} {active.reset} {money} {tokens} {extra.pct} {5h.reset} {7d.left} {opus} {sonnet} {fable} {haiku}. Что каждый значит - в README.",
-                                         "The custom format also has what the checkboxes do not: {worst} {active} {active.left} {active.reset} {money} {tokens} {extra.pct} {5h.reset} {7d.left} {opus} {sonnet} {fable} {haiku}. What each means is in the README.")))
+        stack.addArrangedSubview(small(L("Галочками собирается всё, что вообще бывает в строке. Руками в своём формате дописываются только отдельные модели - {opus} {sonnet} {fable} {haiku} - и деньги с токенами, если очень нужны наверху: {money} {tokens}.",
+                                         "The checkboxes cover everything the line can hold. Only single models - {opus} {sonnet} {fable} {haiku} - and money or tokens up top, if you really want them, are typed by hand: {money} {tokens}.")))
 
         stack.addArrangedSubview(spacer(6))
         previewLabel = NSTextField(labelWithString: "")
@@ -427,13 +427,20 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // случаев один на сотню, и ради него восемнадцать строк занимали пол-окна.
     // Кому надо - имена перечислены строкой под галочками.
     private func checkGrid() -> NSView {
+        // Порядок сверху вниз - как в самой строке меню: кружок, окно,
+        // время, неделя, потом то, что добавляют реже. Так галочка стоит
+        // там, где человек ждёт увидеть её кусок в результате.
         let left: [(String, String, Bool)] = [
             ("showIcon", L("Кружок загрузки", "Load dot"), Prefs.showIcon),
             ("showSession", L("Процент текущего окна", "Current window percent"), Prefs.showSession),
             ("showLeft", L("Сколько до сброса", "Time until reset"), Prefs.showLeft),
+            ("showResetClock", L("Часы сброса: пн 03:00", "Reset clock: Mon 03:00"), Prefs.showResetClock),
             ("showWeekly", L("Недельный кап", "Weekly cap"), Prefs.showWeekly),
+            ("showWorst", L("Самый нагруженный лимит", "The busiest limit"), Prefs.showWorst),
+            ("showActive", L("Что упрётся первым", "What hits first"), Prefs.showActive),
             ("showModels", L("Лимиты по моделям", "Per-model limits"), Prefs.showModels),
             ("showExtra", L("Потрачено сверх лимита", "Extra usage spent"), Prefs.showExtra),
+            ("showExtraPct", L("Сверх лимита, процент", "Extra usage, percent"), Prefs.showExtraPct),
         ]
         let right: [(String, String, Bool)] = [
             ("showMoney", L("Деньги по прайсу API", "Money at API prices"), Prefs.showMoney),
@@ -528,6 +535,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showWeekly": Prefs.showWeekly = on
         case "showModels": Prefs.showModels = on
         case "showExtra": Prefs.showExtra = on
+        case "showWorst": Prefs.showWorst = on
+        case "showActive": Prefs.showActive = on
+        case "showResetClock": Prefs.showResetClock = on
+        case "showExtraPct": Prefs.showExtraPct = on
         case "showMoney": Prefs.showMoney = on
         case "showTokens": Prefs.showTokens = on
         case "showHistory": Prefs.showHistory = on

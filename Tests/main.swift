@@ -794,6 +794,85 @@ Prefs.showHistory = false
 Prefs.showMoney = false
 Prefs.showTokens = false
 
+
+// ---- галочки собирают всю строку -------------------------------------------
+//
+// «Доступно, если знаешь имя макроса и впишешь его руками» - это не
+// доступно: имя надо где-то увидеть, а увидеть его было негде, кроме
+// README. Теперь у каждого куска есть галочка.
+print("\nгалочки собирают всю строку")
+
+Prefs.showIcon = false
+Prefs.showSession = true
+Prefs.showLeft = true
+Prefs.showWeekly = false
+Prefs.showModels = false
+Prefs.showExtra = false
+Prefs.showWorst = false
+Prefs.showActive = false
+Prefs.showResetClock = false
+Prefs.showExtraPct = false
+
+check("окно и время", Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left}")
+// Часы сброса цепляются к своему окну, а не встают отдельным куском:
+// «пн 03:00» в отрыве от процента не говорит, чей это сброс.
+Prefs.showResetClock = true
+check("часы сброса прижаты к окну",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} {5h.reset}")
+Prefs.showResetClock = false
+
+Prefs.showActive = true
+check("«что упрётся первым» со своим временем",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {active} {active.left}")
+Prefs.showResetClock = true
+check("и со своими часами",
+      Prefs.defaultTemplateFromCheckboxes(),
+      "{5h} {5h.left} {5h.reset} \u{00B7} {active} {active.left} {active.reset}")
+Prefs.showActive = false
+Prefs.showResetClock = false
+
+Prefs.showWorst = true
+check("самый нагруженный - тоже со временем",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {worst} {worst.left}")
+Prefs.showLeft = false
+check("без времени - только он сам",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} \u{00B7} {worst}")
+Prefs.showLeft = true
+Prefs.showWorst = false
+
+Prefs.showExtra = true
+Prefs.showExtraPct = true
+check("процент перерасхода идёт после самой суммы",
+      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {extra} \u{00B7} {extra.pct}")
+Prefs.showExtra = false
+Prefs.showExtraPct = false
+
+// Конструктор знает про новые галочки: без этого тик по ним при включённом
+// «своём формате» не делал бы ничего.
+check("конструктор знает «что упрётся первым»",
+      TemplateEdit.macros(for: "showActive", withLeft: true) == ["{active}", "{active.left}"])
+check("и самый нагруженный",
+      TemplateEdit.macros(for: "showWorst", withLeft: false) == ["{worst}"])
+check("и часы сброса",
+      TemplateEdit.macros(for: "showResetClock", withLeft: true) == ["{5h.reset}"])
+check("и процент перерасхода",
+      TemplateEdit.macros(for: "showExtraPct", withLeft: true) == ["{extra.pct}"])
+
+// Всё собранное галочками обязано давать осмысленную строку - без
+// висящих скобок и пустых разделителей.
+Prefs.showIcon = true
+Prefs.showWeekly = true
+Prefs.showWorst = true
+Prefs.showActive = true
+Prefs.showModels = true
+Prefs.showExtra = true
+Prefs.showExtraPct = true
+Prefs.showResetClock = true
+let everything = BarTitle.render(Prefs.defaultTemplateFromCheckboxes(), usage: a)
+check("всё сразу рисуется без скобок", !everything.contains("{"))
+check("и не пусто", !everything.isEmpty)
+
+
 // ---- срок жизни кэша и быстрый режим ---------------------------------------
 //
 // Два места, где приложение молча занижало расход. Найдены 29.08.2026 не

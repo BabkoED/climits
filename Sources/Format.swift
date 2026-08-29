@@ -322,6 +322,13 @@ enum TemplateEdit {
         case "showWeekly":  return withLeft ? ["{7d}", "{7d.left}"] : ["{7d}"]
         case "showModels":  return ["{models}"]
         case "showExtra":   return ["{extra}"]
+        case "showWorst":   return withLeft ? ["{worst}", "{worst.left}"] : ["{worst}"]
+        case "showActive":  return withLeft ? ["{active}", "{active.left}"] : ["{active}"]
+        // Часы сброса цепляются к тому окну, что уже есть в строке. Своего
+        // места у них нет: «пн 03:00» в отрыве от процента не говорит, чей
+        // это сброс.
+        case "showResetClock": return ["{5h.reset}"]
+        case "showExtraPct": return ["{extra.pct}"]
         // Деньги, токены и история в строку меню не идут по отдельному
         // правилу - см. Prefs.defaultTemplateFromCheckboxes.
         default:            return []

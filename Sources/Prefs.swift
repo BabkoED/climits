@@ -32,6 +32,25 @@ struct Prefs {
         get { bool("showModels", false) } set { d.set(newValue, forKey: "showModels") } }
     static var showExtra: Bool {
         get { bool("showExtra", true) } set { d.set(newValue, forKey: "showExtra") } }
+
+    // --- то, что раньше было доступно только через свой формат ------------
+    //
+    // Эти четыре куска существовали макросами и вписывались руками. Галочек
+    // у них не было по одной причине: их придумывали позже остальных, когда
+    // список галочек уже казался длинным. На деле «доступно, если знаешь имя
+    // и впишешь его сам» - это не доступно: имя надо где-то увидеть, а
+    // увидеть его было негде, кроме README.
+    static var showWorst: Bool {
+        get { bool("showWorst", false) } set { d.set(newValue, forKey: "showWorst") } }
+    static var showActive: Bool {
+        get { bool("showActive", false) } set { d.set(newValue, forKey: "showActive") } }
+    // Часы сброса - «пн 03:00». Отвечает не на «сколько осталось», а на
+    // «попадёт сброс на рабочий день или на выходной», и это разные вопросы:
+    // «через 4д 2ч» второго не говорит.
+    static var showResetClock: Bool {
+        get { bool("showResetClock", false) } set { d.set(newValue, forKey: "showResetClock") } }
+    static var showExtraPct: Bool {
+        get { bool("showExtraPct", false) } set { d.set(newValue, forKey: "showExtraPct") } }
     static var showTokens: Bool {
         get { bool("showTokens", false) } set { d.set(newValue, forKey: "showTokens") } }
 
@@ -196,9 +215,19 @@ struct Prefs {
         // Процент выключили, а время до сброса нужно всё равно - иначе
         // строка вообще перестаёт отвечать на «когда отпустит».
         else if showLeft { parts.append("{5h.left}") }
+        // Часы сброса идут сразу за своим окном: «37% 2ч 13м пн 03:00» -
+        // это одно место, а не два разных числа.
+        if showSession && showResetClock { parts[parts.count - 1] += " {5h.reset}" }
         if showWeekly  { parts.append(showLeft ? "{7d} {7d.left}" : "{7d}") }
+        if showWorst   { parts.append(showLeft ? "{worst} {worst.left}" : "{worst}") }
+        if showActive {
+            var piece = showLeft ? "{active} {active.left}" : "{active}"
+            if showResetClock { piece += " {active.reset}" }
+            parts.append(piece)
+        }
         if showModels  { parts.append("{models}") }
         if showExtra   { parts.append("{extra}") }
+        if showExtraPct { parts.append("{extra.pct}") }
         // Деньги, токены и история сюда НЕ попадают, даже когда галочки
         // включены. У остальных галочек одно значение на обе поверхности,
         // у этих - только на выпадающее меню: в трее три-четыре знака
