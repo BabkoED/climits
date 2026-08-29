@@ -385,11 +385,26 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         return row
     }
 
+    // Ряд полей. В конце ряда - распорка, и это здесь главное.
+    //
+    // Без неё горизонтальный стек раздаёт лишнюю ширину между своими
+    // элементами: пока окно узкое, поля стоят рядом, а на широком окне
+    // первое поле прижимается влево, остальные улетают вправо, и ряд
+    // «шрифт строки 13 ... шрифт меню 12 внимание с 50 тревога с 80»
+    // читается как четыре разных места, а не один набор.
+    //
+    // Ровно эта же болезнь была у таблицы макросов и лечится тем же:
+    // пустышка цепляется за ширину слабее всех, весь избыток достаётся ей.
     private func fieldRow(_ items: [NSView]) -> NSStackView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 14
         items.forEach { row.addArrangedSubview($0) }
+        let filler = NSView()
+        filler.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
+        filler.setContentCompressionResistancePriority(NSLayoutConstraint.Priority(1),
+                                                       for: .horizontal)
+        row.addArrangedSubview(filler)
         return row
     }
 
