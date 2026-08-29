@@ -590,8 +590,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // - и до сих пор единственным способом узнать, что получилось, был
     // человек со скриншотом. Это дорого и медленно: три версии подряд
     // правились вслепую.
-    func showSettingsForShot() {
+    func showSettingsForShot(width: CGFloat?) {
         openSettings()
+        // Растянутое окно - отдельный случай, и именно в нём ломалась
+        // вёрстка трижды подряд: ряды полей и таблицы раздают лишнюю
+        // ширину между своими элементами, и на узком окне этого не видно
+        // вовсе. Снимок только узкого окна такую поломку не ловит.
+        if let w = width, let win = settingsWindow?.window {
+            var f = win.frame
+            f.size.width = w
+            win.setFrame(f, display: true)
+        }
     }
 
     @objc private func openSettings() {

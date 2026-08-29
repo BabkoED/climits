@@ -32,23 +32,31 @@ jobs:
 
       - name: запустить и снять
         run: |
+          shoot() {   # $1 - имя файла, $2 - ширина окна или пусто
+            CLIMITS_UI_SHOT=1 CLIMITS_UI_SHOT_WIDTH="$2" \
+              build/climits.app/Contents/MacOS/climits &
+            local pid=$!
+            sleep 12
+            screencapture -x -o "shot/$1" || echo "screencapture упал"
+            kill "$pid" 2>/dev/null || true
+            sleep 2
+            local size
+            size=$(stat -f%z "shot/$1" 2>/dev/null || echo 0)
+            echo "$1: $size байт"
+            if [ "$size" -lt 20000 ]; then echo "::warning::$1 подозрительно мал"; fi
+          }
+          mkdir -p shot
           # Бинарник напрямую, а не через open: так переменная окружения
           # доходит без плясок с Launch Services. Терминала на stdout нет,
           # поэтому приложение уходит в оконный режим, а не в отчёт.
-          CLIMITS_UI_SHOT=1 build/climits.app/Contents/MacOS/climits &
-          APP_PID=$!
-          # Окно строится не мгновенно: сетка, шрифты, список хостов ssh.
-          sleep 12
-          mkdir -p shot
-          # -x без звука затвора, -o без тени вокруг окна.
-          screencapture -x -o shot/settings.png || echo "screencapture упал"
-          kill "$APP_PID" 2>/dev/null || true
+          #
+          # Два снимка, и второй важнее. Ряды полей и таблицы раздают лишнюю
+          # ширину между своими элементами: на окне по умолчанию всё стоит
+          # ровно, а на растянутом разъезжается по краям. Трижды подряд
+          # ловилось только глазами Антона.
+          shoot settings.png ""
+          shoot settings-wide.png 1400
           ls -la shot/
-          # Чёрный или пустой снимок весит подозрительно мало - скажем
-          # об этом прямо, иначе в ветку уедет картинка ни о чём.
-          SIZE=$(stat -f%z shot/settings.png 2>/dev/null || echo 0)
-          echo "размер снимка: $SIZE байт"
-          if [ "$SIZE" -lt 20000 ]; then echo "::warning::снимок подозрительно мал"; fi
 
       - name: выложить в ветку shots
         run: |
@@ -57,7 +65,7 @@ jobs:
           git checkout -q -b shots
           git config user.name "climits ui-shot"
           git config user.email "noreply@github.com"
-          git add settings.png
+          git add settings.png settings-wide.png
           git commit -q -m "снимок настроек с ${GITHUB_REF_NAME}"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
         env:

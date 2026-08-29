@@ -30,7 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // терминальный режим (см. разбор аргументов выше), и приложение
         // напечатало бы отчёт вместо запуска окна.
         if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT"] == "1" {
-            controller?.showSettingsForShot()
+            let wide = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_WIDTH"]
+                .flatMap { Double($0) }
+                .map { CGFloat($0) }
+            controller?.showSettingsForShot(width: wide)
         }
     }
 }
