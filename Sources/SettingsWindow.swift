@@ -22,10 +22,28 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     ]
 
     convenience init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 940),
-                         styleMask: [.titled, .closable],
+        // Высота окна - по экрану, а не по содержимому.
+        //
+        // Раньше здесь стояло жёсткое 940, и пока настроек было мало, это
+        // работало. Настройки выросли, окно упёрлось в низ экрана, и нижняя
+        // часть - вторая машина, каталоги, версия - просто оказалась за
+        // краем: прокрутки не было, размер окна не менялся. Выглядело это
+        // не как «не влезло», а как «этого в приложении нет».
+        //
+        // На макбуке с его 900 точками по высоте вычесть надо ощутимо:
+        // строка меню сверху, док снизу, заголовок окна. visibleFrame это
+        // уже учитывает, но запас всё равно нужен - окно, впритык равное
+        // видимой области, ставится под самый край.
+        let maxHeight: CGFloat = 940
+        let available = (NSScreen.main?.visibleFrame.height ?? maxHeight) - 60
+        let height = max(400, min(maxHeight, available))
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: height),
+                         styleMask: [.titled, .closable, .resizable],
                          backing: .buffered, defer: false)
         w.title = L("Настройки climits", "climits settings")
+        // Ниже этого окно становится бесполезным: подвал с версией съедает
+        // низ, а на прокрутку остаётся полоска в две строки.
+        w.minSize = NSSize(width: 520, height: 320)
         w.center()
         self.init(window: w)
         build()
@@ -33,16 +51,63 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     private func build() {
         guard let content = window?.contentView else { return }
+
+        // Версия и ссылка прибиты к низу окна и НЕ прокручиваются.
+        //
+        // Внутри прокрутки они были бы честной строкой, до которой никто
+        // не долистывает: версия нужна ровно в тот момент, когда что-то
+        // пошло не так и надо сказать какую. Место под ней - самое дешёвое
+        // в окне, а найти её здесь можно не читая остального.
+        let footer = versionLine()
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(footer)
+
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        // Фон рисует само окно: с прозрачной прокруткой тёмная тема
+        // остаётся тёмной без отдельной настройки цвета.
+        scroll.drawsBackground = false
+        content.addSubview(scroll)
+
+        // Документ прокрутки перевёрнут: у обычной NSView начало координат
+        // внизу, и содержимое прижималось бы к нижнему краю, а прокрутка
+        // открывалась бы на конце списка вместо начала.
+        let doc = FlippedView()
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = doc
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+        doc.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
+
+            footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+            footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+
+            // Ширина документа равна ширине видимой области: без этого
+            // текст не переносится, а уезжает вправо, и вместо вертикальной
+            // прокрутки появляется горизонтальная.
+            doc.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            doc.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            doc.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+
+            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: doc.topAnchor, constant: 20),
+            // Нижняя граница документа идёт от содержимого - именно она
+            // и задаёт высоту прокрутки.
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -20),
         ])
 
         stack.addArrangedSubview(header(L("Что показывать в строке меню",
@@ -240,8 +305,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         stack.addArrangedSubview(small(L("Несколько - через пробел. Вида ~/work/.claude/projects.",
                                          "Several - separated by spaces. Like ~/work/.claude/projects.")))
 
-        stack.addArrangedSubview(spacer(10))
-        stack.addArrangedSubview(versionLine())
+        // Версия живёт в подвале окна, вне прокрутки - см. build().
+        stack.addArrangedSubview(spacer(4))
 
         updatePreview()
     }
@@ -618,4 +683,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                           exponent: 2, currency: "USD", percentGiven: nil)
         return Usage(buckets: buckets, extra: extra, fetchedAt: now, isStale: false, rawBody: "{}")
     }()
+}
+
+// Перевёрнутая система координат: начало сверху, как в вебе и как ждёт
+// прокрутка. У NSView по умолчанию начало внизу.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { return true }
 }
