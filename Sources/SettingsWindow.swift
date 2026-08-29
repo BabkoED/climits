@@ -398,27 +398,36 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
-    // Макросы кнопками, по четыре в ряд.
+    // Макросы кнопками, по две в ряд.
     //
-    // Подпись у кнопки короткая - само имя макроса, - а пояснение висит
-    // подсказкой: восемнадцать пояснений подряд выше самого окна настроек,
-    // а без них имена ни о чём не говорят.
+    // Нажимается вся строка целиком - «{icon} кружок загрузки», - а не одно
+    // имя с подсказкой по наведению. Разница не косметическая: подсказку
+    // надо сначала догадаться вызвать, а до тех пор «{worst}» не значит
+    // ничего. Нажимать хочется по тому, что понял, а понятно как раз
+    // пояснение.
     //
-    // Нажатие вставляет макрос в место, где стоит курсор, или в конец, если
-    // в поле не пишут. Это и есть «конструктор»: собрать строку, не помня
+    // По две в ряд, а не по четыре: с пояснением строка длинная, и четыре
+    // таких в ряд уехали бы за край окна.
+    //
+    // Нажатие вставляет макрос туда, где стоит курсор, или в конец, если
+    // в поле не пишут. Это и есть конструктор: собрать строку, не помня
     // наизусть ни одного имени.
     private func macroButtons() -> [NSView] {
         var rows: [NSView] = []
         var current: [NSView] = []
         for (macro, hint) in BarTitle.macros {
-            let b = NSButton(title: macro, target: self, action: #selector(insertMacro(_:)))
+            let b = NSButton(title: macro + "  " + hint,
+                             target: self, action: #selector(insertMacro(_:)))
             b.bezelStyle = .inline
             b.controlSize = .small
+            b.alignment = .left
             b.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            b.toolTip = hint
+            b.toolTip = L("вставить \(macro) в формат", "insert \(macro) into the format")
             b.identifier = NSUserInterfaceItemIdentifier(macro)
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.widthAnchor.constraint(equalToConstant: 250).isActive = true
             current.append(b)
-            if current.count == 4 {
+            if current.count == 2 {
                 rows.append(fieldRow(current))
                 current = []
             }
