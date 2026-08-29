@@ -205,6 +205,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(header(L("Вид", "Appearance")))
 
+        // Три подраздела, и порядок в них не случайный: цвет, потом знаки,
+        // потом шрифт, потом пороги. Сначала то, что видно издалека,
+        // в конце то, из-за чего цвет меняется.
+        stack.addArrangedSubview(subheader(L("Цвета трёх уровней", "Colours of the three levels")))
         stack.addArrangedSubview(fieldRow([
             field(L("спокойно", "calm"), "colorCalm", Prefs.colorCalm, width: 80),
             field(L("внимание", "warning"), "colorWarn", Prefs.colorWarn, width: 80),
@@ -213,6 +217,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         stack.addArrangedSubview(small(L("Пусто - системный цвет. Можно словом (red, orange) или кодом (#ff3b30).",
                                          "Empty means system colour. A word (red, orange) or a hex code (#ff3b30).")))
 
+        stack.addArrangedSubview(subheader(L("Шкала и кружок", "Bar and dot")))
         stack.addArrangedSubview(fieldRow([
             combo(L("шкала", "bar"), "barFilled", Prefs.barFilled, Presets.barFilled, width: 150),
             combo(L("фон", "empty"), "barEmpty", Prefs.barEmpty, Presets.barEmpty, width: 150),
@@ -224,16 +229,28 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         stack.addArrangedSubview(small(L("Кружки - три знака через запятую: спокойно, внимание, тревога. Длина шкалы - от 4 до 40. Из списка можно выбрать, а можно вписать своё, включая эмодзи.",
                                          "Dots are three glyphs separated by commas: calm, warning, alarm. Bar width is 4 to 40. Pick from the list or type your own, emoji included.")))
 
+        // Шрифты и пороги стояли в одном ряду - четыре поля по сорок точек
+        // подряд. Читалось как один набор чисел, хотя это разные вещи:
+        // шрифт про размер букв, порог про то, когда кружок краснеет.
+        // Разведены по рядам и подписаны.
+        stack.addArrangedSubview(spacer(4))
+        stack.addArrangedSubview(subheader(L("Шрифт", "Font")))
         stack.addArrangedSubview(fieldRow([
-            field(L("шрифт строки", "bar font"), "fontSize", "\(Prefs.fontSize)", width: 40),
-            field(L("шрифт меню", "menu font"), "menuFontSize", "\(Prefs.menuFontSize)", width: 40),
-            field(L("внимание с", "warn at"), "warnAt", "\(Prefs.warnAt)", width: 40),
-            field(L("тревога с", "alarm at"), "alertAt", "\(Prefs.alertAt)", width: 40),
+            field(L("в строке", "in the bar"), "fontSize", "\(Prefs.fontSize)", width: 40),
+            field(L("в меню", "in the menu"), "menuFontSize", "\(Prefs.menuFontSize)", width: 40),
+            combo(L("имя", "name"), "fontName", Prefs.fontName, Presets.fontName, width: 220),
         ]))
-        stack.addArrangedSubview(combo(L("имя шрифта", "font name"), "fontName", Prefs.fontName,
-                                       Presets.fontName, width: 260))
-        stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Шрифты от 9 до 20, пороги от 1 до 100; за пределами значение зажимается, а не ломается. Severity от сервера всё равно главнее наших порогов.",
-                                         "Empty means the system monospaced font. Fonts 9 to 20, thresholds 1 to 100; outside that the value is clamped, not broken. Server severity still beats our thresholds.")))
+        stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Размер от 9 до 20; за пределами значение зажимается, а не ломается.",
+                                         "Empty means the system monospaced font. Size 9 to 20; outside that the value is clamped, not broken.")))
+
+        stack.addArrangedSubview(spacer(4))
+        stack.addArrangedSubview(subheader(L("Когда тревожиться", "When to worry")))
+        stack.addArrangedSubview(fieldRow([
+            field(L("внимание с, %", "warn at, %"), "warnAt", "\(Prefs.warnAt)", width: 40),
+            field(L("тревога с, %", "alarm at, %"), "alertAt", "\(Prefs.alertAt)", width: 40),
+        ]))
+        stack.addArrangedSubview(small(L("Меняют цвет строки и кружка. Это наша выдумка на случай, когда сервер молчит: если в ответе есть severity, слушаем его - тот, кто считает лимит, знает о нём больше нас.",
+                                         "These change the colour of the line and the dot. They are our own guess for when the server says nothing: if the response carries severity, we follow it - whoever counts the limit knows more about it than we do.")))
 
         stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(header(L("Вторая машина", "Second machine")))
