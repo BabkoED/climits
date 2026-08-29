@@ -18,16 +18,29 @@ import Foundation
 // Встроенная таблица теперь не основной источник, а последнее дно: то, по
 // чему считаем, когда сети не было ни разу. Дата её видна в меню.
 struct ModelPrice: Equatable {
-    let input: Double        // $ за 1M входных
-    let output: Double       // $ за 1M выходных
-    var cacheWrite: Double   // запись в кэш
-    var cacheRead: Double    // чтение из кэша
+    let input: Double          // $ за 1M входных
+    let output: Double         // $ за 1M выходных
+    var cacheWrite: Double     // запись в кэш на пять минут
+    var cacheWrite1h: Double   // запись в кэш на час
+    var cacheRead: Double      // чтение из кэша
 
-    // Кэш обычно стоит производные от входа: запись дороже в 1.25 раза
-    // (пятиминутный срок жизни), чтение дешевле в десять раз.
+    // Кэш стоит производные от входа, но записи ДВЕ РАЗНЫХ ЦЕНЫ, и это
+    // не мелочь: пятиминутная запись дороже входа в 1.25 раза, часовая -
+    // в 2 раза. Чтение дешевле входа в десять раз, срок жизни на него
+    // не влияет.
+    //
+    // Почему это выяснилось только 29.08.2026. Раньше считалось, что запись
+    // одна и всегда по 1.25. Проверка на восьми парных прогонах эвалов:
+    // реконструкция из токенов давала $4.71 против $5.75, названных самим
+    // Claude Code. Подбор множителя дал ровно 2.00, и с ним сумма сошлась
+    // до цента. Дальше нашлась и причина - в стенограммах лежит разбивка
+    // `usage.cache_creation` на `ephemeral_5m_input_tokens` и
+    // `ephemeral_1h_input_tokens`, и весь трафик недели оказался часовым.
+    // Ошибка была не в мелочи, а в 10% недельной суммы.
     static func standard(input: Double, output: Double) -> ModelPrice {
         return ModelPrice(input: input, output: output,
-                          cacheWrite: input * 1.25, cacheRead: input * 0.1)
+                          cacheWrite: input * 1.25, cacheWrite1h: input * 2,
+                          cacheRead: input * 0.1)
     }
 }
 
@@ -44,7 +57,16 @@ enum Pricing {
         "fable":  .standard(input: 10, output: 50),
         "sonnet": .standard(input: 3,  output: 15),
         "haiku":  .standard(input: 1,  output: 5),
+        // Быстрый режим - та же модель, но вдвое дороже, и в стенограмме
+        // он виден полем `usage.speed`. Доступен только на Opus, поэтому
+        // вариант с суффиксом здесь один. Если человек включит /fast, а мы
+        // продолжим считать по обычной цене, приложение занизит расход вдвое
+        // и не скажет об этом.
+        "opus-fast": .standard(input: 10, output: 50),
     ]
+
+    // Суффикс семейства для быстрого режима.
+    static let fastSuffix = "-fast"
 
     // Неизвестная модель: считаем по Sonnet и честно помечаем это в отчёте.
     // Ноль был бы хуже - он молча занижает итог.
@@ -132,7 +154,19 @@ enum Pricing {
 
     static func price(for model: String) -> ModelPrice {
         let t = table()
-        return t[family(of: model)] ?? t[fallbackFamily] ?? .standard(input: 3, output: 15)
+        // Точное совпадение проверяем ПЕРВЫМ. Сюда приходят не только имена
+        // моделей, но и ключи семейств, в том числе «opus-fast»: деньги
+        // считаются по ключам таблицы окна. Без этой строки «opus-fast»
+        // свернулось бы в «opus» и надбавка за быстрый режим потерялась бы.
+        if let exact = t[model] { return exact }
+        let fam = family(of: model)
+        if model.hasSuffix(fastSuffix), let base = t[fam] {
+            // Скачанный прайс про быстрый режим может не знать. Тогда берём
+            // обычную цену этого же семейства, а не запасную: недоучесть
+            // надбавку - минус проценты, свалиться на sonnet - минус втрое.
+            return base
+        }
+        return t[fam] ?? t[fallbackFamily] ?? .standard(input: 3, output: 15)
     }
 
     // Знает ли таблица эту модель на самом деле, или мы подставили запасную.

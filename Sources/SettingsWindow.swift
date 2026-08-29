@@ -171,7 +171,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // {7d}...». По ним видно, что макросы существуют, и совершенно
         // непонятно, что каждый значит. Теперь это кнопки: пояснение
         // всплывает подсказкой, а нажатие вставляет макрос в шаблон.
-        for row in macroButtons() { stack.addArrangedSubview(row) }
+        stack.addArrangedSubview(macroGrid())
         stack.addArrangedSubview(small(L("Пока «свой формат» выключен, поле повторяет галочки - включил и правь готовое. Пустые макросы убираются вместе с разделителем.",
                                          "While custom format is off, the field mirrors the checkboxes - switch it on and edit what is already there. Empty macros are dropped along with their separator.")))
 
@@ -399,19 +399,25 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
-    // Макросы: нажимаемое имя и обычная подпись рядом.
+    // Макросы: нажимаемое имя и обычная подпись рядом, в две пары в ряд.
     //
-    // Кнопка - только само имя, «{icon}». Пояснение стоит рядом текстом
-    // и не нажимается. Кнопка во всю строку вместе с пояснением занимала
-    // вдвое больше места и выглядела как «нажми меня», хотя нажимать
-    // хотелось не восемнадцать раз, а два-три.
+    // Свёрстано NSGridView, а не рядами из стеков. Разница видна сразу:
+    // у горизонтального стека колонки шириной по своему содержимому, и
+    // когда во второй паре стоит «{5h}» с коротким именем и длинным
+    // пояснением, а в соседнем ряду наоборот, - вертикали не совпадают
+    // нигде. Получается текст, накиданный в свободное место. У таблицы
+    // ширина колонки общая на весь столбец, и вертикали держатся сами.
+    //
+    // Кнопка - только само имя, «{icon}». Пояснение рядом текстом и не
+    // нажимается: кнопка во всю строку занимала вдвое больше места и
+    // выглядела как «нажми меня» восемнадцать раз подряд.
     //
     // Кнопка залипающая: нажал - макрос в строке, отжал - его нет.
     // Состояние берётся из самого шаблона, а не запоминается отдельно,
     // поэтому правка текста руками сразу видна по кнопкам.
-    private func macroButtons() -> [NSView] {
-        var rows: [NSView] = []
-        var current: [NSView] = []
+    private func macroGrid() -> NSView {
+        var rows: [[NSView]] = []
+        var cells: [NSView] = []
         for (macro, hint) in BarTitle.macros {
             let b = NSButton(title: macro, target: self, action: #selector(toggleMacro(_:)))
             b.setButtonType(.pushOnPushOff)
@@ -421,24 +427,43 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             b.toolTip = L("добавить \(macro) в формат или убрать оттуда",
                           "add \(macro) to the format, or take it out")
             b.identifier = NSUserInterfaceItemIdentifier(macro)
-            b.translatesAutoresizingMaskIntoConstraints = false
-            b.widthAnchor.constraint(equalToConstant: 108).isActive = true
             macroToggles[macro] = b
 
-            let pair = NSStackView()
-            pair.orientation = .horizontal
-            pair.spacing = 5
-            pair.addArrangedSubview(b)
-            pair.addArrangedSubview(small(hint))
-            current.append(pair)
-            if current.count == 2 {
-                rows.append(fieldRow(current))
-                current = []
+            let label = small(hint)
+            // Однострочно: перенос внутри ячейки ломает высоту ряда,
+            // и таблица перестаёт быть таблицей.
+            label.usesSingleLineMode = true
+            label.maximumNumberOfLines = 1
+
+            cells.append(b)
+            cells.append(label)
+            if cells.count == 4 {
+                rows.append(cells)
+                cells = []
             }
         }
-        if !current.isEmpty { rows.append(fieldRow(current)) }
+        if !cells.isEmpty {
+            // Ряд обязан быть полным: у таблицы число ячеек в ряду
+            // фиксировано, недостающие - пустые заглушки.
+            while cells.count < 4 { cells.append(NSView()) }
+            rows.append(cells)
+        }
+
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 4
+        grid.columnSpacing = 8
+        // Кнопки тянутся на всю ширину своей колонки: иначе «{icon}»
+        // и «{active.reset}» разной длины, и левый край второго столбца
+        // ходит туда-сюда.
+        grid.column(at: 0).xPlacement = .fill
+        grid.column(at: 2).xPlacement = .fill
+        grid.column(at: 1).xPlacement = .leading
+        grid.column(at: 3).xPlacement = .leading
+        // Зазор между парами - чтобы пояснение первой пары не слипалось
+        // с кнопкой второй.
+        grid.column(at: 2).leadingPadding = 20
         syncMacroToggles()
-        return rows
+        return grid
     }
 
     // Кнопки показывают то, что в шаблоне на самом деле: и после правки
