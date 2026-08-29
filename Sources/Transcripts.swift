@@ -56,7 +56,8 @@ struct WindowUsage {
                 output: max(0, have.output - tally.output),
                 cacheWrite: max(0, have.cacheWrite - tally.cacheWrite),
                 cacheRead: max(0, have.cacheRead - tally.cacheRead),
-                requests: max(0, have.requests - tally.requests))
+                requests: max(0, have.requests - tally.requests),
+                cacheWrite1h: max(0, have.cacheWrite1h - tally.cacheWrite1h))
         }
         out.byFamily = out.byFamily.filter { $0.value.total > 0 || $0.value.requests > 0 }
         return out
@@ -196,13 +197,23 @@ enum Transcripts {
             // не работа модели, считать их по запасной цене значит выдумывать
             // расход, а оговорка «нет цены для <synthetic>» в меню - шум.
             if model.hasPrefix("<") { continue }
-            let family = Pricing.family(of: model)
+            // Быстрый режим - отдельный ключ семейства, потому что это та же
+            // модель по вдвое большей цене. Признак лежит в самом usage,
+            // поэтому режим считается по каждому запросу, а не по настройке.
+            var family = Pricing.family(of: model)
+            if (usage["speed"] as? String) == "fast" { family += Pricing.fastSuffix }
 
+            // Часовая запись в кэш стоит вдвое от входа, пятиминутная - 1.25.
+            // Поле `cache_creation_input_tokens` не различает их, разбивка
+            // лежит рядом в `cache_creation`. Если её нет (старые записи),
+            // часовая доля остаётся нулём и всё считается по-старому.
+            let breakdown = usage["cache_creation"] as? [String: Any]
             let add = TokenTally(input: intOf(usage["input_tokens"]),
                                  output: intOf(usage["output_tokens"]),
                                  cacheWrite: intOf(usage["cache_creation_input_tokens"]),
                                  cacheRead: intOf(usage["cache_read_input_tokens"]),
-                                 requests: 1)
+                                 requests: 1,
+                                 cacheWrite1h: intOf(breakdown?["ephemeral_1h_input_tokens"]))
             for (i, cutoff) in cutoffs.enumerated() where when >= cutoff {
                 out[i].byFamily[family] = (out[i].byFamily[family] ?? TokenTally()) + add
                 if !model.isEmpty && !Pricing.isKnown(model) { out[i].unknownModels.insert(model) }

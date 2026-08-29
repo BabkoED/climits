@@ -198,6 +198,11 @@ struct TokenTally: Equatable {
     var cacheWrite = 0
     var cacheRead = 0
     var requests = 0
+    // Часовая запись - ЧАСТЬ cacheWrite, а не добавка к нему. Так сделано
+    // намеренно: total и все существующие сложения остаются верными сами
+    // по себе, а старые данные без разбивки просто считаются по цене
+    // пятиминутной, как и раньше.
+    var cacheWrite1h = 0
 
     var total: Int { return input + output + cacheWrite + cacheRead }
 
@@ -206,13 +211,20 @@ struct TokenTally: Equatable {
                           output: a.output + b.output,
                           cacheWrite: a.cacheWrite + b.cacheWrite,
                           cacheRead: a.cacheRead + b.cacheRead,
-                          requests: a.requests + b.requests)
+                          requests: a.requests + b.requests,
+                          cacheWrite1h: a.cacheWrite1h + b.cacheWrite1h)
     }
 
     func cost(_ p: ModelPrice) -> Double {
+        // Зажимаем: часовая часть не может быть больше всей записи. Если
+        // данные разъехались, лучше посчитать по пятиминутной цене, чем
+        // получить отрицательное слагаемое и занизить итог.
+        let h = min(max(0, cacheWrite1h), max(0, cacheWrite))
+        let m5 = cacheWrite - h
         return (Double(input) * p.input
               + Double(output) * p.output
-              + Double(cacheWrite) * p.cacheWrite
+              + Double(m5) * p.cacheWrite
+              + Double(h) * p.cacheWrite1h
               + Double(cacheRead) * p.cacheRead) / 1_000_000.0
     }
 }

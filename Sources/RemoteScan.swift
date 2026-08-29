@@ -203,7 +203,11 @@ enum RemoteScan {
                         output: Int(jsonNumber(v["output"]) ?? 0),
                         cacheWrite: Int(jsonNumber(v["cache_write"]) ?? 0),
                         cacheRead: Int(jsonNumber(v["cache_read"]) ?? 0),
-                        requests: Int(jsonNumber(v["requests"]) ?? 0))
+                        requests: Int(jsonNumber(v["requests"]) ?? 0),
+                        // Старая версия скрипта на той стороне этого поля
+                        // не пришлёт - тогда ноль, и часовая надбавка просто
+                        // не учтётся. Это лучше, чем отказаться от ответа.
+                        cacheWrite1h: Int(jsonNumber(v["cache_write_1h"]) ?? 0))
                 }
             }
             if let u = item["unknown"] as? [String] { w.unknownModels = Set(u) }
@@ -301,18 +305,33 @@ for dirpath, dirnames, filenames in os.walk(root):
                 continue
             low = model.lower()
             fam = next((f for f in FAMILIES if f in low), FALLBACK)
+            # Быстрый режим - та же модель по двойной цене, признак лежит
+            # в самом usage. Отдельный ключ семейства, как и на маке.
+            if usage.get("speed") == "fast":
+                fam += "-fast"
 
             def num(key):
                 v = usage.get(key)
                 return int(v) if isinstance(v, (int, float)) else 0
 
+            # Часовая запись в кэш стоит вдвое от входа против 1.25 у
+            # пятиминутной, а общее поле их не различает: разбивка лежит
+            # в usage.cache_creation. Нет разбивки - часовая доля ноль,
+            # считается как раньше.
+            cc = usage.get("cache_creation")
+            w1h = 0
+            if isinstance(cc, dict):
+                v = cc.get("ephemeral_1h_input_tokens")
+                w1h = int(v) if isinstance(v, (int, float)) else 0
+
             add = (num("input_tokens"), num("output_tokens"),
-                   num("cache_creation_input_tokens"), num("cache_read_input_tokens"), 1)
+                   num("cache_creation_input_tokens"), num("cache_read_input_tokens"), 1,
+                   w1h)
             for i, cutoff in enumerate(cutoffs):
                 if t < cutoff:
                     continue
-                acc = wins[i]["families"].setdefault(fam, [0, 0, 0, 0, 0])
-                for k in range(5):
+                acc = wins[i]["families"].setdefault(fam, [0, 0, 0, 0, 0, 0])
+                for k in range(6):
                     acc[k] += add[k]
                 if model and not any(f in low for f in FAMILIES):
                     wins[i]["unknown"].add(model)
@@ -321,7 +340,8 @@ out = []
 for w in wins:
     out.append({
         "families": {f: {"input": v[0], "output": v[1], "cache_write": v[2],
-                         "cache_read": v[3], "requests": v[4]}
+                         "cache_read": v[3], "requests": v[4],
+                         "cache_write_1h": v[5]}
                      for f, v in w["families"].items()},
         "unknown": sorted(w["unknown"]),
         "truncated": w["truncated"],

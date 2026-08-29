@@ -794,5 +794,70 @@ Prefs.showHistory = false
 Prefs.showMoney = false
 Prefs.showTokens = false
 
+// ---- срок жизни кэша и быстрый режим ---------------------------------------
+//
+// Два места, где приложение молча занижало расход. Найдены 29.08.2026 не
+// глазами, а сверкой: реконструкция стоимости восьми парных прогонов из
+// токенов дала $4.71 против $5.75, названных самим Claude Code. Разница
+// целиком объяснилась ценой записи в кэш.
+print("\nсрок жизни кэша и быстрый режим")
+
+let opusP = Pricing.price(for: "claude-opus-5")
+check("пятиминутная запись - вход x1.25", "\(opusP.cacheWrite)", "6.25")
+check("часовая запись - вход x2", "\(opusP.cacheWrite1h)", "10.0")
+
+// Миллион записанных в кэш токенов: по старой цене $6.25, по часовой $10.
+let write5m = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000,
+                         cacheRead: 0, requests: 1, cacheWrite1h: 0)
+let write1h = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000,
+                         cacheRead: 0, requests: 1, cacheWrite1h: 1_000_000)
+check("миллион пятиминутной записи", MoneyView.money(write5m.cost(opusP)), "$6.25")
+check("миллион часовой записи", MoneyView.money(write1h.cost(opusP)), "$10")
+
+// Смешанное сообщение: половина туда, половина сюда.
+let mixed = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000,
+                       cacheRead: 0, requests: 1, cacheWrite1h: 500_000)
+// $8.125 округляется к чётному - это поведение форматтера, не счёта.
+check("половина на половину", MoneyView.money(mixed.cost(opusP)), "$8.12")
+
+// Битые данные не должны давать отрицательное слагаемое.
+let broken = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000,
+                        cacheRead: 0, requests: 1, cacheWrite1h: 9_000_000)
+check("часовая доля больше всей записи - зажимается",
+      MoneyView.money(broken.cost(opusP)), "$10")
+
+// Старые записи без разбивки считаются как раньше, а не в ноль.
+let legacy = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000, cacheRead: 0, requests: 1)
+check("без разбивки - по пятиминутной цене", MoneyView.money(legacy.cost(opusP)), "$6.25")
+
+let fastP = Pricing.price(for: "opus-fast")
+check("быстрый режим вдвое дороже по входу", "\(fastP.input)", "10.0")
+check("и по выходу", "\(fastP.output)", "50.0")
+check("обычный ключ остался прежним", "\(Pricing.price(for: "opus").input)", "5.0")
+// Незнакомое семейство с суффиксом не должно проваливаться в sonnet:
+// это занизило бы втрое, а не на надбавку.
+check("незнакомый быстрый не падает на запасную цену",
+      Pricing.price(for: "haiku-fast").input == Pricing.price(for: "haiku").input)
+
+// Разбор живой формы записи: разбивка лежит в usage.cache_creation,
+// признак быстрого режима - в usage.speed.
+let tmp2 = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("climits-cache-ttl-test", isDirectory: true)
+try? FileManager.default.removeItem(at: tmp2)
+try? FileManager.default.createDirectory(at: tmp2.appendingPathComponent("proj"),
+                                         withIntermediateDirectories: true)
+let jsonl2 = [
+  "{\"timestamp\":\"\(iso(-600))\",\"message\":{\"id\":\"m1\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20,\"cache_creation_input_tokens\":16350,\"cache_creation\":{\"ephemeral_1h_input_tokens\":16350,\"ephemeral_5m_input_tokens\":0},\"speed\":\"standard\"}}}",
+  "{\"timestamp\":\"\(iso(-500))\",\"message\":{\"id\":\"m2\",\"model\":\"claude-opus-5\",\"usage\":{\"input_tokens\":7,\"output_tokens\":9,\"speed\":\"fast\"}}}",
+].joined(separator: "\n")
+try? jsonl2.write(to: tmp2.appendingPathComponent("proj/session.jsonl"),
+                  atomically: true, encoding: .utf8)
+let win2 = Transcripts.usage(since: Date().addingTimeInterval(-3600), dir: tmp2)
+check("часовая запись вычитана из разбивки", "\(win2.byFamily["opus"]?.cacheWrite1h ?? -1)", "16350")
+check("общее поле записи тоже на месте", "\(win2.byFamily["opus"]?.cacheWrite ?? -1)", "16350")
+check("быстрый режим ушёл в своё семейство", win2.byFamily["opus-fast"] != nil)
+check("и не смешался с обычным", "\(win2.byFamily["opus"]?.output ?? -1)", "20")
+try? FileManager.default.removeItem(at: tmp2)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)
