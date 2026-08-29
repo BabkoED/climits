@@ -18,6 +18,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/UsageModel.swift \
   Sources/Prefs.swift \
   Sources/Format.swift \
+  Sources/Presets.swift \
   Sources/Pricing.swift \
   Sources/PricingFeed.swift \
   Sources/Transcripts.swift \

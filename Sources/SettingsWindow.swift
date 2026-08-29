@@ -77,7 +77,15 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         customToggle.state = Prefs.useCustomTemplate ? .on : .off
         stack.addArrangedSubview(customToggle)
 
-        templateField = NSTextField()
+        // Список готовых форматов, но поле редактируемое: чаще всего человек
+        // открывает список не чтобы сменить вид, а чтобы подсмотреть, как
+        // вообще выглядит правильная строка.
+        let templateBox = NSComboBox()
+        templateBox.isEditable = true
+        templateBox.completes = false
+        templateBox.addItems(withObjectValues: Presets.templates)
+        templateBox.numberOfVisibleItems = 6
+        templateField = templateBox
         templateField.stringValue = Prefs.customTemplate
         templateField.delegate = self
         templateField.identifier = NSUserInterfaceItemIdentifier("customTemplate")
@@ -93,8 +101,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         rebuild.controlSize = .small
         stack.addArrangedSubview(rebuild)
 
-        let hint = BarTitle.macros.map { $0.0 }.joined(separator: "  ")
-        stack.addArrangedSubview(small(hint))
+        // Раньше здесь были только имена макросов подряд - «{5h} {5h.left}
+        // {7d}...». По ним видно, что макросы существуют, и совершенно
+        // непонятно, что каждый значит. Теперь с пояснением, по два в строке.
+        stack.addArrangedSubview(small(macroHint()))
         stack.addArrangedSubview(small(L("Пока «свой формат» выключен, поле повторяет галочки - включил и правь готовое. Пустые макросы убираются вместе с разделителем.",
                                          "While custom format is off, the field mirrors the checkboxes - switch it on and edit what is already there. Empty macros are dropped along with their separator.")))
 
@@ -154,11 +164,15 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                          "Empty means system colour. A word (red, orange) or a hex code (#ff3b30).")))
 
         stack.addArrangedSubview(fieldRow([
-            field(L("шкала", "bar"), "barFilled", Prefs.barFilled, width: 40),
-            field(L("фон", "empty"), "barEmpty", Prefs.barEmpty, width: 40),
-            field(L("длина", "width"), "barWidth", "\(Prefs.barWidth)", width: 40),
-            field(L("кружки", "dots"), "iconSet", Prefs.iconSet, width: 90),
+            combo(L("шкала", "bar"), "barFilled", Prefs.barFilled, Presets.barFilled, width: 150),
+            combo(L("фон", "empty"), "barEmpty", Prefs.barEmpty, Presets.barEmpty, width: 150),
         ]))
+        stack.addArrangedSubview(fieldRow([
+            combo(L("кружки", "dots"), "iconSet", Prefs.iconSet, Presets.iconSet, width: 190),
+            field(L("длина шкалы", "bar width"), "barWidth", "\(Prefs.barWidth)", width: 40),
+        ]))
+        stack.addArrangedSubview(small(L("Кружки - три знака через запятую: спокойно, внимание, тревога. Длина шкалы - от 4 до 40. Из списка можно выбрать, а можно вписать своё, включая эмодзи.",
+                                         "Dots are three glyphs separated by commas: calm, warning, alarm. Bar width is 4 to 40. Pick from the list or type your own, emoji included.")))
 
         stack.addArrangedSubview(fieldRow([
             field(L("шрифт строки", "bar font"), "fontSize", "\(Prefs.fontSize)", width: 40),
@@ -166,9 +180,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             field(L("внимание с", "warn at"), "warnAt", "\(Prefs.warnAt)", width: 40),
             field(L("тревога с", "alarm at"), "alertAt", "\(Prefs.alertAt)", width: 40),
         ]))
-        stack.addArrangedSubview(field(L("имя шрифта", "font name"), "fontName", Prefs.fontName, width: 200))
-        stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Пороги в процентах; severity от сервера всё равно главнее.",
-                                         "Empty means the system monospaced font. Thresholds in percent; server severity still wins.")))
+        stack.addArrangedSubview(combo(L("имя шрифта", "font name"), "fontName", Prefs.fontName,
+                                       Presets.fontName, width: 260))
+        stack.addArrangedSubview(small(L("Пусто - системный моноширинный. Шрифты от 9 до 20, пороги от 1 до 100; за пределами значение зажимается, а не ломается. Severity от сервера всё равно главнее наших порогов.",
+                                         "Empty means the system monospaced font. Fonts 9 to 20, thresholds 1 to 100; outside that the value is clamped, not broken. Server severity still beats our thresholds.")))
 
         stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(header(L("Вторая машина", "Second machine")))
@@ -274,6 +289,35 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         return row
     }
 
+    // То же поле, но со списком предложенного. Список подсказывает, ЧТО
+    // сюда вписывают, а поле остаётся редактируемым - своё значение никто
+    // не запрещает.
+    private func combo(_ label: String, _ key: String, _ value: String,
+                       _ presets: [String], width: CGFloat) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 6
+        let l = NSTextField(labelWithString: label)
+        l.font = NSFont.systemFont(ofSize: 11)
+        row.addArrangedSubview(l)
+        let b = NSComboBox()
+        b.isEditable = true
+        // completes = false намеренно: список показывается с пояснением
+        // («● - кружок»), и автодополнение дописывало бы это пояснение
+        // прямо в поле, то есть в значение.
+        b.completes = false
+        b.addItems(withObjectValues: presets)
+        b.numberOfVisibleItems = 8
+        b.stringValue = value
+        b.delegate = self
+        b.identifier = NSUserInterfaceItemIdentifier(key)
+        b.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: width).isActive = true
+        row.addArrangedSubview(b)
+        return row
+    }
+
     private func fieldRow(_ items: [NSView]) -> NSStackView {
         let row = NSStackView()
         row.orientation = .horizontal
@@ -288,10 +332,33 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         t.font = NSFont.boldSystemFont(ofSize: 13)
         return t
     }
+    // Макросы с пояснениями, по два в строке: восемнадцать строк подряд
+    // выше самого окна настроек, одна строка - нечитаемая каша.
+    private func macroHint() -> String {
+        var lines: [String] = []
+        var pair: [String] = []
+        for (macro, hint) in BarTitle.macros {
+            pair.append(Fmt.pad(macro + " " + hint, 40))
+            if pair.count == 2 {
+                lines.append(pair.joined().trimmingCharacters(in: .whitespaces))
+                pair = []
+            }
+        }
+        if !pair.isEmpty { lines.append(pair.joined().trimmingCharacters(in: .whitespaces)) }
+        return lines.joined(separator: "\n")
+    }
+
     private func small(_ s: String) -> NSTextField {
         let t = NSTextField(labelWithString: s)
-        t.font = NSFont.systemFont(ofSize: 10)
+        t.font = s.contains("\n")
+            ? NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+            : NSFont.systemFont(ofSize: 10)
         t.textColor = .secondaryLabelColor
+        // Многострочная подпись без этого показывает первую строку и
+        // многоточие: у метки по умолчанию одна строка.
+        t.usesSingleLineMode = false
+        t.lineBreakMode = .byWordWrapping
+        t.maximumNumberOfLines = 0
         return t
     }
     private func spacer(_ h: CGFloat) -> NSView {
@@ -342,13 +409,21 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // Выбор мышью из списка не проходит через controlTextDidEndEditing:
     // без этого выбранный адрес виден в поле, но никуда не записан.
     func comboBoxSelectionDidChange(_ notification: Notification) {
+        // Через главную очередь: в момент уведомления stringValue у поля
+        // ещё старый, и записалось бы предыдущее значение.
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let box = self.remoteField,
-                  let picked = box.objectValueOfSelectedItem as? String else { return }
+            guard let self = self,
+                  let box = notification.object as? NSComboBox,
+                  let raw = box.objectValueOfSelectedItem as? String else { return }
+            // В списке лежит «значение - пояснение». В поле и в настройки
+            // идёт только значение: пояснение туда попасть не должно ни
+            // при каких обстоятельствах - оно станет частью шкалы или
+            // шаблона и вылезет в строку меню.
+            let picked = Presets.value(of: raw)
             box.stringValue = picked
-            Prefs.remoteHost = picked
-            self.remoteResult.stringValue = ""
-            self.applied()
+            let key = box.identifier?.rawValue ?? ""
+            if key == "remoteHost" { self.remoteResult.stringValue = "" }
+            self.apply(key: key, value: picked)
         }
     }
 
@@ -442,7 +517,19 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         apply(key: key, value: f.stringValue)
     }
 
-    private func apply(key: String, value v: String) {
+    private static let presetKeys: Set<String> = [
+        "barFilled", "barEmpty", "iconSet", "fontName", "customTemplate",
+    ]
+
+    private func apply(key: String, value raw: String) {
+        // Выбор мышью в NSComboBox сначала кладёт в поле показанную строку
+        // целиком - «● - кружок», - и только потом приходит уведомление
+        // о выборе. Если снять пояснение только там, то в промежутке
+        // в настройках успевает полежать «● - кружок», и предпросмотр
+        // моргает мусором. Снимаем здесь, на обоих путях сразу.
+        let v = SettingsWindowController.presetKeys.contains(key)
+            ? Presets.value(of: raw)
+            : raw
         switch key {
         case "remoteHost":   Prefs.remoteHost = v; applied(); return
         // Поле одно, а путей может быть несколько: разделяем пробелом при

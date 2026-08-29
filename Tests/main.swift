@@ -675,6 +675,47 @@ if let enc = History.encode(straight) {
 }
 
 
+
+// ---- предложенные значения -------------------------------------------------
+//
+// Поля вида - свободный текст, и по пустому полю не догадаться, что туда
+// вписывают. Список подсказывает; проверяется здесь то, что из него нельзя
+// выбрать заведомо сломанное значение.
+print("\nпредложенные значения")
+
+check("пояснение снимается", Presets.value(of: Presets.item("\u{25CF}", "кружок")), "\u{25CF}")
+// Человек мог не выбирать из списка, а вписать своё - тогда возвращаем
+// вписанное как есть.
+check("своё значение остаётся собой", Presets.value(of: "\u{25D4},\u{25D1},\u{25D5}"),
+      "\u{25D4},\u{25D1},\u{25D5}")
+check("значение с дефисом внутри не режется", Presets.value(of: "a-b"), "a-b")
+
+// Набор кружков из двух или четырёх знаков приложение молча отбросит
+// и возьмёт свой - то есть выбор из списка выглядел бы как «не работает».
+for item in Presets.iconSet {
+    let parts = Presets.value(of: item).split(separator: ",")
+    check("набор кружков «\(Presets.value(of: item))» - ровно три знака",
+          parts.count == 3 && parts.allSatisfy { !$0.isEmpty })
+}
+for item in Presets.barFilled + Presets.barEmpty {
+    check("знак шкалы не пуст", !Presets.value(of: item).isEmpty)
+}
+check("у каждого предложенного есть пояснение",
+      (Presets.barFilled + Presets.barEmpty + Presets.iconSet + Presets.fontName
+        + Presets.templates).allSatisfy { $0.contains(Presets.separator) })
+
+// Предложенный формат обязан давать осмысленную строку: макрос с опечаткой
+// вырезался бы молча, и человек увидел бы полупустую строку меню.
+for item in Presets.templates {
+    let t = Presets.value(of: item)
+    let rendered = BarTitle.render(t, usage: a,
+                                   money: MoneyView.make(spent: 12.0, partial: true),
+                                   tokens: TokensView(spent: 1_240_000))
+    check("формат «\(t)» даёт непустую строку", !rendered.isEmpty)
+    check("и в ней не остаётся фигурных скобок", !rendered.contains("{"))
+}
+
+
 // ---- деньги и токены не просачиваются в трей -------------------------------
 //
 // В строке меню места три-четыре знака, и заняты они тем, что отвечает на

@@ -76,6 +76,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func refresh(force: Bool) {
+        // Прайс проверяем и здесь, а не только при запуске. Приложение в
+        // трее живёт неделями между перезапусками: с проверкой только на
+        // старте «раз в сутки» означало бы «один раз за всё время работы»,
+        // и цены после подорожания так и остались бы прошлыми. Сам вызов
+        // дешёвый - смотрит отметку времени и обычно сразу возвращается.
+        PricingFetch.refreshIfStale { [weak self] in self?.updateTitle() }
         if inFlight { return }
         inFlight = true
         UsageAPI.shared.fetch(ttl: ttl, force: force) { [weak self] result in
