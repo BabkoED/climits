@@ -9,7 +9,11 @@ import Foundation
 //   climits --json     сырой ответ API
 //   climits --doctor   диагностика: связка ключей, токен, срок, запрос
 enum CLI {
-    static let version = "1.1.2"
+    // Версия - из бандла, той же дорогой, что и User-Agent. Строкой она
+    // здесь уже стояла и разошлась: отчёт --doctor печатал «climits 1.1.2»
+    // на установленной 1.5.1, и по шапке отчёта нельзя было понять, какую
+    // сборку человек запустил.
+    static var version: String { return Prefs.appVersion }
 
     static var isTTY: Bool { return isatty(1) == 1 }
 
@@ -163,6 +167,14 @@ enum CLI {
 
         print(Fmt.pad("User-Agent", 18) + Prefs.userAgent
             .components(separatedBy: CharacterSet(charactersIn: "\r\n\0")).joined(separator: " "))
+
+        // Сколько чтений и какого размера. Разные размеры при одинаковом
+        // имени - это две разные записи, и разбираться дальше надо с той,
+        // что отдаётся первой.
+        let raws = Keychain.rawEntries()
+        print(Fmt.pad(L("Чтений", "Reads"), 18)
+            + L("\(raws.count), размеры: \(raws.map { "\($0.count)" }.joined(separator: ", "))",
+                "\(raws.count), sizes: \(raws.map { "\($0.count)" }.joined(separator: ", "))"))
 
         let dups = Keychain.duplicateAccounts(allowDump: true)
         print(Fmt.pad(L("Дубликаты", "Duplicates"), 18)

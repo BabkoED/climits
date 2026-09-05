@@ -963,5 +963,54 @@ check("быстрый режим ушёл в своё семейство", win2.
 check("и не смешался с обычным", "\(win2.byFamily["opus"]?.output ?? -1)", "20")
 try? FileManager.default.removeItem(at: tmp2)
 
+
+// ---- запись из связки ключей -----------------------------------------------
+//
+// Разбор записи проверяется на записи ТОГО ЖЕ размера и строения, что на
+// живой машине: у активного пользователя к токену Claude Code примешана
+// гора mcpOAuth, и запись выходит за двадцать килобайт. Повод к проверке
+// был настоящий: 06.09.2026 приложение сказало «запись есть, но токен из
+// неё не читается» ровно на такой записи.
+print("\nсвязка ключей")
+
+var mcp: [String: Any] = [:]
+for i in 0..<60 {
+    mcp["plugin:group\(i):srv|\(String(format: "%016x", i))"] = [
+        "accessToken": String(repeating: "a", count: 220),
+        "clientId": "cid-\(i)",
+        "discoveryState": ["authorizationServerUrl": "https://example.com/\(i)",
+                           "oauthMetadataFound": true],
+        "serverName": "srv\(i)",
+    ]
+}
+let far = Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000
+let nested: [String: Any] = [
+    "claudeAiOauth": [
+        "accessToken": "sk-ant-oat01-" + String(repeating: "x", count: 300),
+        "expiresAt": far,
+        "refreshToken": "sk-ant-ort01-" + String(repeating: "y", count: 300),
+        "scopes": ["user:inference", "user:profile"],
+        "subscriptionType": "team",
+    ],
+    "mcpOAuth": mcp,
+]
+let bigRaw = String(data: try! JSONSerialization.data(withJSONObject: nested), encoding: .utf8)!
+check("запись за 20 килобайт разбирается", bigRaw.count > 20_000)
+check("токен вынут из большой записи", "\(Keychain.parse(bigRaw)?.value.count ?? 0)", "313")
+check("живой токен не считается истёкшим", Keychain.parse(bigRaw)?.isExpired == false)
+
+// Срок приходит в МИЛЛИСЕКУНДАХ. Без деления дата уезжает в 57-й тысячный
+// год, и «истёк ли токен» перестаёт значить что-либо.
+let stale = ["claudeAiOauth": ["accessToken": "tok", "expiresAt": 1_600_000_000_000.0]]
+let staleRaw = String(data: try! JSONSerialization.data(withJSONObject: stale), encoding: .utf8)!
+check("истёкший токен виден истёкшим", Keychain.parse(staleRaw)?.isExpired == true)
+
+// Плоская форма и голый токен - обе встречались на живых машинах.
+check("плоская форма тоже разбирается",
+      Keychain.parse("{\"accessToken\": \"tok-flat\"}")?.value ?? "", "tok-flat")
+check("запись без обёртки - это сам токен",
+      Keychain.parse("sk-ant-oat01-abc")?.value ?? "", "sk-ant-oat01-abc")
+check("битый JSON не выдаётся за токен", Keychain.parse("{\"accessToken\":") == nil)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

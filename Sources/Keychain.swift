@@ -182,7 +182,30 @@ struct Keychain {
     // честный HTTP 401 на живой с виду токен. Поэтому список кандидатов
     // строится один раз, а разбираться, который из них рабочий, приходится
     // уже по ответу сервера.
+    // Сырьё всех записей, одним заходом.
+    //
+    // Отдельно от разбора по измеренной причине. Раньше security звали
+    // трижды за одну попытку: в candidates, потом ещё раз в token - и
+    // сообщение «запись есть, но токен из неё не читается» составлялось из
+    // РАЗНЫХ чтений: не разобралось одно, а показывалось строение другого.
+    // Отчёт --doctor при этом выглядел противоречиво: структура на месте,
+    // ключ accessToken на месте, а «пригодных записей 0». Отличить осечку
+    // самой security от неразобранной записи по такому отчёту нельзя, а
+    // чинятся они по-разному.
+    static func rawEntries() -> [String] {
+        var out: [String] = []
+        if let r = rawEntry() { out.append(r) }
+        for acct in duplicateAccounts() where !acct.isEmpty {
+            if let r = rawEntry(account: acct), !out.contains(r) { out.append(r) }
+        }
+        return out
+    }
+
     static func candidates() -> [KeychainToken] {
+        return candidates(from: rawEntries())
+    }
+
+    static func candidates(from raws: [String]) -> [KeychainToken] {
         var found: [KeychainToken] = []
         var seen = Set<String>()
 
@@ -192,8 +215,7 @@ struct Keychain {
             found.append(t)
         }
 
-        add(rawEntry())
-        for acct in duplicateAccounts() { add(rawEntry(account: acct)) }
+        for r in raws { add(r) }
 
         // Живые вперёд, а внутри каждой группы - у кого срок дальше.
         // Запись без expiresAt считаем живой: на части сборок поля просто нет,
@@ -206,11 +228,15 @@ struct Keychain {
 
     // Основная точка входа: лучший из кандидатов или ошибка с понятной причиной.
     static func token() throws -> KeychainToken {
-        let all = candidates()
+        let raws = rawEntries()
+        let all = candidates(from: raws)
         if let best = all.first, !best.isExpired { return best }
         if let newest = all.first { throw KeychainError.expired(newest.expiresAt) }
         // Кандидатов нет вовсе: либо записи нет, либо она не разбирается.
-        guard let raw = rawEntry() else { throw KeychainError.notFound }
+        // Сообщение строится по ТЕМ ЖЕ байтам, что и не разобрались:
+        // перечитывать здесь заново - значит показать строение другого
+        // чтения и увести починку не туда.
+        guard let raw = raws.first else { throw KeychainError.notFound }
         throw KeychainError.unparsable(previewRedacted: redact(raw))
     }
 
