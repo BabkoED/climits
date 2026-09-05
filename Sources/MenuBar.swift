@@ -433,9 +433,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                  "data from \(at) \u{00B7} refresh failed")
     }
 
-    // Строка лимита - ОДНА: полоска, короткое имя, процент, сколько
-    // осталось. Второй ряд появляется только под деньги и токены, мелким
-    // серым: это уже не «работать дальше или подождать», а справка.
+    // Строка лимита - ОДНА, и второго ряда нет вовсе: полоска, короткое
+    // имя, процент, сколько осталось, деньги и токены. Всё, что было
+    // внизу, поместилось в тот же ряд, как только оттуда ушли часы сброса.
     //
     // Было наоборот - два ряда всегда, и верхний уходил целиком под
     // подпись «5-часовое окно». Ряд ради подписи, которую заменяет «5ч»,
@@ -494,6 +494,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NSTextTab(textAlignment: .left,  location: xName),
             NSTextTab(textAlignment: .right, location: xPct),
             NSTextTab(textAlignment: .left,  location: xPct + ch),
+            // Деньги и токены - своей колонкой, а не сразу за остатком:
+            // у «22м» и «3д 3ч» разная ширина, и без колонки суммы гуляли
+            // бы от строки к строке.
+            NSTextTab(textAlignment: .left,  location: xPct + ch * 8),
         ]
         para.lineSpacing = 2
         return Columns(cell: ch, capW: capW,
@@ -530,24 +534,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         put("\t\(b.pct)%", mono, accent)
         put("\t" + Fmt.untilReset(b.resetsAt), mono, .secondaryLabelColor)
 
-        // Часы сброса - здесь же, приглушённее остатка. Отдельного ряда они
-        // не стоят: «пн 03:00» - девять знаков, а ряд под них удваивал бы
-        // высоту меню даже при выключенных деньгах.
-        let clock = Fmt.clock(b.resetsAt)
-        if !clock.isEmpty {
-            put("  " + clock, NSFont.monospacedSystemFont(
-                ofSize: CGFloat(Prefs.menuFontSize) - 1, weight: .regular),
-                .tertiaryLabelColor)
-        }
-
-        let extra = tail(for: b)
-        if !extra.isEmpty {
-            // Два табулятора после перевода строки - тот же отступ, что у
-            // имени: хвост читается как продолжение этой строки, а не как
-            // отдельный пункт меню.
-            put("\n\t\t" + extra,
-                NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1),
-                .secondaryLabelColor)
+        // Деньги и токены - в том же ряду, на месте часов сброса.
+        //
+        // Часов здесь больше нет намеренно (слово Антона 05.09.2026): на
+        // вопрос «когда обнулится» уже отвечает отсчёт рядом, а «вс 02:59»
+        // повторял тот же ответ другими словами и занимал место, которое
+        // стоит дороже - под то, что больше нигде не сказано. Макрос
+        // {5h.reset} для строки трея остался, там отсчёта может не быть.
+        let spent = spentTail(for: b)
+        if !spent.isEmpty {
+            put("\t" + spent, mono, .secondaryLabelColor)
         }
 
         // Стиль абзаца - на всю строку разом, а не по кускам: у картинки
@@ -559,13 +555,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
-    // Второй ряд: во сколько обошлось окно и сколько токенов. По умолчанию
-    // пуст - и тогда его нет совсем.
+    // Хвост строки: во сколько обошлось окно и сколько токенов. Пусто,
+    // пока обе галочки сняты, - и тогда строка кончается остатком.
     //
     // Деньги и токены - измеренный расход по видимым машинам, а не доля
     // лимита: сколько всего выдано, Anthropic не говорит. «≈» здесь про
     // прайс и про неполноту машин, а не про догадку о размере лимита.
-    private func tail(for b: Bucket) -> String {
+    private func spentTail(for b: Bucket) -> String {
         var parts: [String] = []
         let w = window(for: b)
         if Prefs.showMoney {
@@ -730,6 +726,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         usage = UsageParser.parse(body: body, fetchedAt: Date(), isStale: false)
         lastError = nil
         updateTitle()
+
+        // Деньги и токены в CI взять неоткуда: расшифровок на машине нет.
+        // А теперь именно они стоят в конце ряда - снимок без них проверял
+        // бы ровно ту часть строки, которая и так не менялась. Поэтому окна
+        // заполняются руками, а галочки включаются на время снимка.
+        Prefs.showMoney = true
+        Prefs.showTokens = true
+        var sw = WindowUsage()
+        sw.byFamily["opus"] = TokenTally(input: 120_000, output: 45_000,
+                                         cacheWrite: 900_000, cacheRead: 74_000_000,
+                                         requests: 310, cacheWrite1h: 0)
+        sessionWindow = sw
+        var ww = WindowUsage()
+        ww.byFamily["opus"] = TokenTally(input: 1_500_000, output: 420_000,
+                                         cacheWrite: 9_000_000, cacheRead: 890_000_000,
+                                         requests: 3_800, cacheWrite1h: 0)
+        ww.byFamily["fable"] = TokenTally(input: 90_000, output: 30_000,
+                                          cacheWrite: 400_000, cacheRead: 21_000_000,
+                                          requests: 240, cacheWrite1h: 0)
+        weeklyWindow = ww
 
         // Тёмная тема задаётся САМОМУ МЕНЮ, а не системе и не приложению.
         // Проверено двумя прогонами: `defaults write -g AppleInterfaceStyle`
