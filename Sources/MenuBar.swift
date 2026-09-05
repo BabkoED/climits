@@ -494,10 +494,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NSTextTab(textAlignment: .left,  location: xName),
             NSTextTab(textAlignment: .right, location: xPct),
             NSTextTab(textAlignment: .left,  location: xPct + ch),
-            // Деньги и токены - своей колонкой, а не сразу за остатком:
-            // у «22м» и «3д 3ч» разная ширина, и без колонки суммы гуляли
-            // бы от строки к строке.
+            // Деньги и токены - каждое своей колонкой, а не сразу за
+            // остатком: у «22м» и «3д 3ч» разная ширина, у «≈$5.20» и
+            // «≈$532» тоже, и без колонок оба числа гуляли бы от строки
+            // к строке. Восемь клеток под деньги - это «≈$99.99» и запас.
             NSTextTab(textAlignment: .left,  location: xPct + ch * 8),
+            NSTextTab(textAlignment: .left,  location: xPct + ch * 16),
         ]
         para.lineSpacing = 2
         return Columns(cell: ch, capW: capW,
@@ -541,9 +543,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // повторял тот же ответ другими словами и занимал место, которое
         // стоит дороже - под то, что больше нигде не сказано. Макрос
         // {5h.reset} для строки трея остался, там отсчёта может не быть.
-        let spent = spentTail(for: b)
-        if !spent.isEmpty {
-            put("\t" + spent, mono, .secondaryLabelColor)
+        // Пустая колонка проходится табулятором насквозь: если денег нет,
+        // а токены есть, второй табулятор ставит их на своё место, а не
+        // подтягивает влево.
+        let sp = spentParts(for: b)
+        if !sp.money.isEmpty || !sp.tokens.isEmpty {
+            put("\t" + sp.money, mono, .secondaryLabelColor)
+            if !sp.tokens.isEmpty { put("\t" + sp.tokens, mono, .tertiaryLabelColor) }
         }
 
         // Стиль абзаца - на всю строку разом, а не по кускам: у картинки
@@ -561,18 +567,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Деньги и токены - измеренный расход по видимым машинам, а не доля
     // лимита: сколько всего выдано, Anthropic не говорит. «≈» здесь про
     // прайс и про неполноту машин, а не про догадку о размере лимита.
-    private func spentTail(for b: Bucket) -> String {
-        var parts: [String] = []
+    private func spentParts(for b: Bucket) -> (money: String, tokens: String) {
         let w = window(for: b)
+        var money = ""
+        var tokens = ""
         if Prefs.showMoney {
             let mv = Money.view(for: b, in: w)
-            if mv.spent > 0 { parts.append("\u{2248}" + mv.spentText) }
+            if mv.spent > 0 { money = "\u{2248}" + mv.spentText }
         }
         if Prefs.showTokens {
             let tv = Money.tokens(for: b, in: w)
-            if !tv.isEmpty { parts.append(tv.text) }
+            if !tv.isEmpty { tokens = tv.text }
         }
-        return parts.joined(separator: "  \u{00B7} ")
+        return (money, tokens)
     }
 
     // «Сверх лимита» - такая же строка, как у лимитов: полоска, имя,
