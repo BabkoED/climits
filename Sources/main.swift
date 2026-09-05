@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // терминальный режим (см. разбор аргументов выше), и приложение
         // напечатало бы отчёт вместо запуска окна.
         let shot = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT"] ?? ""
+        // Тёмная тема для снимка задаётся ПРИЛОЖЕНИЮ, а не системе.
+        // `defaults write -g AppleInterfaceStyle Dark` в CI не сработал
+        // вовсе: снимки светлой и тёмной вышли побайтово похожими, то есть
+        // проверка тёмной темы просто не состоялась. Своё оформление
+        // приложение слушает всегда, без сеанса оконного сервера.
+        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_DARK"] == "1" {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
         if shot == "1" {
             let wide = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_WIDTH"]
                 .flatMap { Double($0) }

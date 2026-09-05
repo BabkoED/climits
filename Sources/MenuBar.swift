@@ -256,15 +256,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 }
                 menu.addItem(.separator())
             }
-            // Ширина колонки имени - одна на всё меню. Считай её каждая
-            // строка сама по себе - у «5ч» и у «Sonnet» проценты встали бы
-            // в разных колонках, и столбиком числа читаться перестали бы.
-            let nameCells = u.buckets.map { $0.short.count }.max() ?? 4
+            // «Сверх лимита» участвует в подсчёте колонки наравне со
+            // строками лимитов: он стоит в тех же колонках, и если считать
+            // ширину без него, его собственное имя налезет на процент.
+            let nameCells = (u.buckets.map { $0.short.count } + [extraName.count]).max() ?? 4
+            let cols = columns(nameCells: nameCells, font: Palette.menuFont)
             for b in u.buckets {
-                menu.addItem(row(for: b, active: u.active?.key == b.key, nameCells: nameCells))
+                menu.addItem(row(for: b, active: u.active?.key == b.key, cols: cols))
             }
             menu.addItem(.separator())
-            menu.addItem(extraRow(u.extra))
+            menu.addItem(extraRow(u.extra, cols: cols))
             if Prefs.showMoney || Prefs.showTokens {
                 menu.addItem(dim(estimateNote()))
                 if let e = remoteError {
@@ -453,20 +454,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return w > 0 ? w : max(4, font.pointSize * 0.6)
     }
 
-    private func row(for b: Bucket, active: Bool, nameCells: Int) -> NSMenuItem {
-        let accent = Palette.color(for: b)
-        let item = NSMenuItem()
-        item.isEnabled = true
+    // Колонки строки лимита. Считаются один раз на всё меню и раздаются
+    // строкам: посчитай их каждая строка сама - у «5ч» и у «Sonnet»
+    // проценты встали бы в разных местах, и столбиком числа читаться
+    // перестали бы.
+    private struct Columns {
+        let cell: CGFloat     // ширина знака моноширинного шрифта
+        let capW: CGFloat     // длина нарисованной полоски
+        let capH: CGFloat     // её толщина
+        let para: NSParagraphStyle
+    }
 
-        let mono = Palette.menuFont
+    private func columns(nameCells: Int, font mono: NSFont) -> Columns {
         let ch = cellWidth(mono)
-        let capH = CapsuleBar.height(fontSize: CGFloat(Prefs.menuFontSize))
+        let capW = CapsuleBar.width(cells: Prefs.barWidth, unit: ch)
 
         // Полоска знаками занимает всю ширину клетки, рисованная - половину.
         // Считать колонку по одной из них нельзя: при выключенной капсуле
         // шкала перескочила бы через свой табулятор, и имя лимита улетело
         // бы на СЛЕДУЮЩИЙ - то есть в правую колонку процента.
-        let capW = CapsuleBar.width(cells: Prefs.barWidth, unit: ch)
         let barW = Prefs.menuCapsule ? capW : ch * CGFloat(Prefs.barWidth)
 
         // Колонка указателя - от ширины знака, а не числом точек: «▸» на
@@ -481,17 +487,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // правый табулятор, уезжает на следующий, то есть в конец строки.
         // Плюс пробел на отбивку и четыре знака под «100%».
         let xPct = xName + ch * CGFloat(max(4, nameCells) + 1 + 4)
-        let xLeft = xPct + ch
 
         let para = NSMutableParagraphStyle()
         para.tabStops = [
             NSTextTab(textAlignment: .left,  location: xBar),
             NSTextTab(textAlignment: .left,  location: xName),
             NSTextTab(textAlignment: .right, location: xPct),
-            NSTextTab(textAlignment: .left,  location: xLeft),
+            NSTextTab(textAlignment: .left,  location: xPct + ch),
         ]
         para.lineSpacing = 2
+        return Columns(cell: ch, capW: capW,
+                       capH: CapsuleBar.height(fontSize: CGFloat(Prefs.menuFontSize)),
+                       para: para)
+    }
 
+    private func row(for b: Bucket, active: Bool, cols: Columns) -> NSMenuItem {
+        let accent = Palette.color(for: b)
+        let item = NSMenuItem()
+        item.isEnabled = true
+
+        let mono = Palette.menuFont
         let title = NSMutableAttributedString()
         func put(_ s: String, _ f: NSFont, _ c: NSColor) {
             title.append(NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: c]))
@@ -504,7 +519,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         if Prefs.menuCapsule {
             title.append(CapsuleBar.attachment(percent: b.pct, color: accent,
-                                               width: capW, height: capH, font: mono))
+                                               width: cols.capW, height: cols.capH, font: mono))
         } else {
             put(Fmt.bar(b.pct), mono, accent)
         }
@@ -538,7 +553,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Стиль абзаца - на всю строку разом, а не по кускам: у картинки
         // куска со стилем нет вовсе, и табуляторы после неё считались бы
         // по умолчанию, то есть каждые 28 точек.
-        title.addAttribute(.paragraphStyle, value: para,
+        title.addAttribute(.paragraphStyle, value: cols.para,
                            range: NSRange(location: 0, length: title.length))
         item.attributedTitle = title
         return item
@@ -564,30 +579,59 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return parts.joined(separator: "  \u{00B7} ")
     }
 
-    private func extraRow(_ e: Extra) -> NSMenuItem {
-        let text: String
-        var color = NSColor.labelColor
-        if !e.enabled {
-            text = "  " + L("Сверх лимита: выключено", "Extra usage: off")
-            color = NSColor.secondaryLabelColor
-        } else if let limit = e.limitMinor, limit > 0 {
-            let p = e.percent ?? 0
-            text = "  " + L("Сверх лимита: ", "Extra usage: ")
-                 + e.usedText + L(" из ", " of ") + e.money(limit) + "  (\(p)%)"
-            color = Palette.color(forPercent: p, severity: "normal")
-        } else {
-            // Лимит не задан - не выдумываем «из —», а честно поясняем.
-            text = "  " + L("Сверх лимита: ", "Extra usage: ") + e.usedText
-                 + L(" за месяц, персональный лимит не задан",
-                     " this month, no personal cap set")
+    // «Сверх лимита» - такая же строка, как у лимитов: полоска, имя,
+    // процент, деньги хвостом. Вопрос у неё тот же самый - сколько от
+    // потолка съедено, - и отвечать на него другим языком незачем.
+    // Раньше это был абзац текста в моноширинном шрифте: рядом с
+    // однострочными лимитами он читался как чужая вставка.
+    //
+    // Три случая, и они разные по смыслу. Выключено - процента нет и быть
+    // не может, полоски тоже. Потолок не задан - деньги есть, доли нет,
+    // и это сказано словами, а не нарисовано пустой шкалой. Всё есть -
+    // полная строка.
+    private var extraName: String { return L("Сверх", "Extra") }
+
+    private func extraRow(_ e: Extra, cols: Columns) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.isEnabled = true
+
+        let mono = Palette.menuFont
+        let small = NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1)
+        let title = NSMutableAttributedString()
+        func put(_ s: String, _ f: NSFont, _ c: NSColor) {
+            title.append(NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: c]))
         }
-        let i = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-        i.isEnabled = true
-        i.attributedTitle = NSAttributedString(string: text, attributes: [
-            .font: Palette.menuFont,
-            .foregroundColor: color,
-        ])
-        return i
+
+        if !e.enabled {
+            put("\t\t" + L("Сверх лимита: выключено", "Extra usage: off"),
+                small, .secondaryLabelColor)
+        } else if let limit = e.limitMinor, limit > 0, let p = e.percent {
+            let accent = Palette.color(forPercent: p, severity: "normal")
+            put("\t", mono, .labelColor)
+            if Prefs.menuCapsule {
+                title.append(CapsuleBar.attachment(percent: p, color: accent,
+                                                   width: cols.capW, height: cols.capH,
+                                                   font: mono))
+            } else {
+                put(Fmt.bar(p), mono, accent)
+            }
+            put("\t" + extraName, mono, .labelColor)
+            put("\t\(p)%", mono, accent)
+            put("\t" + e.usedText + L(" из ", " of ") + e.money(limit),
+                mono, .secondaryLabelColor)
+        } else {
+            // Потолок не задан - не выдумываем «из —» и не рисуем шкалу,
+            // которой не от чего считаться.
+            put("\t\t" + L("Сверх лимита: ", "Extra usage: ") + e.usedText
+                + L(" за месяц, персональный лимит не задан",
+                    " this month, no personal cap set"),
+                small, .secondaryLabelColor)
+        }
+
+        title.addAttribute(.paragraphStyle, value: cols.para,
+                           range: NSRange(location: 0, length: title.length))
+        item.attributedTitle = title
+        return item
     }
 
     private func plain(_ s: String) -> NSMenuItem {

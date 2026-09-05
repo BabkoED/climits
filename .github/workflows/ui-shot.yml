@@ -48,15 +48,14 @@ jobs:
           # Меню снимается отдельной функцией: открытие меню - не окно,
           # ему нужны свои две секунды на выход из didFinishLaunching и
           # цифры, которых в CI взять негде (см. showMenuForShot).
-          shoot_menu() {   # $1 - имя файла, $2 - тема оформления
-            if [ "$2" = dark ]; then defaults write -g AppleInterfaceStyle Dark; fi
-            CLIMITS_UI_SHOT=menu build/climits.app/Contents/MacOS/climits &
+          shoot_menu() {   # $1 - имя файла, $2 - 1, если тёмная тема
+            CLIMITS_UI_SHOT=menu CLIMITS_UI_SHOT_DARK="$2" \
+              build/climits.app/Contents/MacOS/climits &
             local pid=$!
             sleep 14
             screencapture -x -o "shot/$1" || echo "screencapture упал"
             kill "$pid" 2>/dev/null || true
             sleep 2
-            if [ "$2" = dark ]; then defaults delete -g AppleInterfaceStyle || true; fi
             local size
             size=$(stat -f%z "shot/$1" 2>/dev/null || echo 0)
             echo "$1: $size байт"
@@ -76,8 +75,8 @@ jobs:
           # Обе темы: подложка полоски - это цвет уровня с прозрачностью,
           # и то, что в светлой теме читается, в тёмной может слиться с
           # фоном меню. Одна тема из двух проверяет половину.
-          shoot_menu menu-light.png light
-          shoot_menu menu-dark.png dark
+          shoot_menu menu-light.png ""
+          shoot_menu menu-dark.png 1
           ls -la shot/
 
       - name: выложить в ветку shots
