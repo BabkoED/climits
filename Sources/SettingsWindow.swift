@@ -218,6 +218,12 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                          "Empty means system colour. A word (red, orange) or a hex code (#ff3b30).")))
 
         stack.addArrangedSubview(subheader(L("Шкала и кружок", "Bar and dot")))
+        // Галочка стоит ПЕРЕД знаками, а не после: она решает, значат ли
+        // они что-нибудь в меню вообще. Снятая - возвращает прежний вид
+        // из знаков, и тогда «шкала» и «фон» снова правят то, что видно.
+        addCheck(stack, "menuCapsule",
+                 L("Полоской, а не знаками", "Draw the bar, not glyphs"),
+                 Prefs.menuCapsule)
         stack.addArrangedSubview(fieldRow([
             combo(L("шкала", "bar"), "barFilled", Prefs.barFilled, Presets.barFilled, width: 150),
             combo(L("фон", "empty"), "barEmpty", Prefs.barEmpty, Presets.barEmpty, width: 150),
@@ -226,8 +232,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             combo(L("кружки", "dots"), "iconSet", Prefs.iconSet, Presets.iconSet, width: 190),
             field(L("длина шкалы", "bar width"), "barWidth", "\(Prefs.barWidth)", width: 40),
         ]))
-        stack.addArrangedSubview(small(L("Кружки - три знака через запятую: спокойно, внимание, тревога. Длина шкалы - от 4 до 40. Из списка можно выбрать, а можно вписать своё, включая эмодзи.",
-                                         "Dots are three glyphs separated by commas: calm, warning, alarm. Bar width is 4 to 40. Pick from the list or type your own, emoji included.")))
+        stack.addArrangedSubview(small(L("Кружки - три знака через запятую: спокойно, внимание, тревога. Длина шкалы - от 4 до 40. Из списка можно выбрать, а можно вписать своё, включая эмодзи. Пока шкала рисуется полоской, «шкала» и «фон» работают только в терминальном отчёте; длина считается в тех же клетках.",
+                                         "Dots are three glyphs separated by commas: calm, warning, alarm. Bar width is 4 to 40. Pick from the list or type your own, emoji included. While the bar is drawn, \"bar\" and \"empty\" only apply to the terminal report; the width is counted in the same cells.")))
 
         // Шрифты и пороги стояли в одном ряду - четыре поля по сорок точек
         // подряд. Читалось как один набор чисел, хотя это разные вещи:
@@ -543,6 +549,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showTokens": Prefs.showTokens = on
         case "showHistory": Prefs.showHistory = on
         case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
+        // Вид шкалы в меню - не кусок строки трея, макроса за ним нет.
+        // Уходим сразу, не заглядывая в шаблон: иначе галочка «вида»
+        // прошла бы через сборку строки меню и потрогала её ни за чем.
+        case "menuCapsule": Prefs.menuCapsule = on; applied(); return
         default: break
         }
         // При включённом «своём формате» галочка ДОПОЛНЯЕТ строку, а не

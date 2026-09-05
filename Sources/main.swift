@@ -29,11 +29,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Переменной окружения, а не ключом запуска: ключ означал бы
         // терминальный режим (см. разбор аргументов выше), и приложение
         // напечатало бы отчёт вместо запуска окна.
-        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT"] == "1" {
+        let shot = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT"] ?? ""
+        if shot == "1" {
             let wide = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_WIDTH"]
                 .flatMap { Double($0) }
                 .map { CGFloat($0) }
             controller?.showSettingsForShot(width: wide)
+        } else if shot == "menu" {
+            // Через очередь, а не прямо здесь: открытие меню крутит свой
+            // цикл событий и не возвращается, пока меню открыто. Вызови мы
+            // его в didFinishLaunching - app.run() не начался бы вовсе.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.controller?.showMenuForShot()
+            }
         }
     }
 }

@@ -256,8 +256,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 }
                 menu.addItem(.separator())
             }
+            // Ширина колонки имени - одна на всё меню. Считай её каждая
+            // строка сама по себе - у «5ч» и у «Sonnet» проценты встали бы
+            // в разных колонках, и столбиком числа читаться перестали бы.
+            let nameCells = u.buckets.map { $0.short.count }.max() ?? 4
             for b in u.buckets {
-                menu.addItem(row(for: b, active: u.active?.key == b.key))
+                menu.addItem(row(for: b, active: u.active?.key == b.key, nameCells: nameCells))
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra))
@@ -428,86 +432,136 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                  "data from \(at) \u{00B7} refresh failed")
     }
 
-    // Строка лимита - всегда две: подпись и процент сверху, шкала и всё
-    // посчитанное снизу. Однострочного вида больше нет: он экономил высоту,
-    // но на нём не помещалось ни денег, ни токенов, а колонки в нём держались
-    // добивкой пробелами - то есть только в моноширинном шрифте.
+    // Строка лимита - ОДНА: полоска, короткое имя, процент, сколько
+    // осталось. Второй ряд появляется только под деньги и токены, мелким
+    // серым: это уже не «работать дальше или подождать», а справка.
     //
-    // Колонки держат ТАБУЛЯТОРЫ, и это главное здесь. Подпись и шкала стоят
-    // на одном табуляторе, поэтому левый край текста и левый край полоски
-    // совпадают в любом шрифте и при любой длине подписи. Пробелами это не
-    // делается: три пробела моноширинного шрифта шире трёх пробелов
-    // обычного, и полоска уезжала правее подписи.
-    // 24, а не «сколько-нибудь»: если указатель окажется шире табулятора,
-    // строка уедет на СЛЕДУЮЩИЙ табулятор - то есть подпись активного лимита
-    // прыгнет к правому краю. «▸» шире 24 точек не бывает даже на самом
-    // крупном шрифте, который разрешают настройки.
-    private static let textColumn: CGFloat = 24   // где начинается и подпись, и шкала
+    // Было наоборот - два ряда всегда, и верхний уходил целиком под
+    // подпись «5-часовое окно». Ряд ради подписи, которую заменяет «5ч»,
+    // удваивал высоту меню на ровном месте.
+    //
+    // Колонки держат ТАБУЛЯТОРЫ, а не пробелы: пробел пропорционального
+    // шрифта уже пробела моноширинного, и добивка разъезжается ровно там,
+    // где человек сменил шрифт. Табулятор процента - ПРАВЫЙ: у «3%» и
+    // «100%» разная ширина, по левому краю числа стояли бы лесенкой.
 
-    private func row(for b: Bucket, active: Bool) -> NSMenuItem {
+    // Ширина знака моноширинного шрифта - единица измерения всех колонок.
+    // Ноль на всякий случай отбиваем: шрифт из настроек может не найтись,
+    // и делить колонки на ноль - значит сложить их все в одну точку.
+    private func cellWidth(_ font: NSFont) -> CGFloat {
+        let w = ("0" as NSString).size(withAttributes: [.font: font]).width
+        return w > 0 ? w : max(4, font.pointSize * 0.6)
+    }
+
+    private func row(for b: Bucket, active: Bool, nameCells: Int) -> NSMenuItem {
         let accent = Palette.color(for: b)
         let item = NSMenuItem()
         item.isEnabled = true
 
+        let mono = Palette.menuFont
+        let ch = cellWidth(mono)
+        let capH = CapsuleBar.height(fontSize: CGFloat(Prefs.menuFontSize))
+
+        // Полоска знаками занимает всю ширину клетки, рисованная - половину.
+        // Считать колонку по одной из них нельзя: при выключенной капсуле
+        // шкала перескочила бы через свой табулятор, и имя лимита улетело
+        // бы на СЛЕДУЮЩИЙ - то есть в правую колонку процента.
+        let capW = CapsuleBar.width(cells: Prefs.barWidth, unit: ch)
+        let barW = Prefs.menuCapsule ? capW : ch * CGFloat(Prefs.barWidth)
+
+        // Колонка указателя - от ширины знака, а не числом точек: «▸» на
+        // шрифте 20 вдвое шире, чем на 9, и жёсткие 24 точки означали бы
+        // то запас в три пробела, то перескок на следующий табулятор.
+        let xBar = max(12, (ch * 1.6).rounded())
+        let xName = xBar + barW + ch
+        // Правый край числа. Колонку имени считаем по САМОМУ длинному имени
+        // из тех, что пришли, а не по «Sonnet»: имя модели придумывает
+        // Anthropic, и на девятибуквенном зашитая ширина означала бы, что
+        // имя налезает на правый табулятор процента - а текст, переросший
+        // правый табулятор, уезжает на следующий, то есть в конец строки.
+        // Плюс пробел на отбивку и четыре знака под «100%».
+        let xPct = xName + ch * CGFloat(max(4, nameCells) + 1 + 4)
+        let xLeft = xPct + ch
+
         let para = NSMutableParagraphStyle()
-        para.tabStops = [NSTextTab(textAlignment: .left, location: MenuBarController.textColumn)]
+        para.tabStops = [
+            NSTextTab(textAlignment: .left,  location: xBar),
+            NSTextTab(textAlignment: .left,  location: xName),
+            NSTextTab(textAlignment: .right, location: xPct),
+            NSTextTab(textAlignment: .left,  location: xLeft),
+        ]
         para.lineSpacing = 2
 
-        // Указатель стоит ДО табулятора, в своей колонке шириной в отступ:
-        // иначе активная строка сдвигала бы подпись относительно остальных.
-        let mark = active ? "\u{25B8}" : ""
-        let title = NSMutableAttributedString(
-            string: "\(mark)\t\(b.long)\n",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) + 1),
-                .paragraphStyle: para,
-            ])
+        let title = NSMutableAttributedString()
+        func put(_ s: String, _ f: NSFont, _ c: NSColor) {
+            title.append(NSAttributedString(string: s, attributes: [.font: f, .foregroundColor: c]))
+        }
 
-        // Процент - сразу после шкалы, не наверху отдельной строкой: одно
-        // место для взгляда вместо двух. Именно после, а не перед - шкала
-        // у Fmt.bar всегда фиксированной длины (Prefs.barWidth, добито
-        // пустыми клетками), а у процента ширина гуляет от «3%» до «100%».
-        // Поставь его первым - сами шкалы разъезжались бы по горизонтали
-        // на пару знаков от строки к строке.
-        //
-        // Цвет процента - тот же accent, что у шкалы: числом повторяется
+        // Указатель стоит ДО первого табулятора, в своей колонке: иначе
+        // активная строка сдвигала бы полоску относительно остальных.
+        put(active ? "\u{25B8}" : "", mono, accent)
+        put("\t", mono, .labelColor)
+
+        if Prefs.menuCapsule {
+            title.append(CapsuleBar.attachment(percent: b.pct, color: accent,
+                                               width: capW, height: capH, font: mono))
+        } else {
+            put(Fmt.bar(b.pct), mono, accent)
+        }
+
+        put("\t" + b.short, mono, .labelColor)
+        // Цвет процента - тот же accent, что у полоски: числом повторяется
         // тот же сигнал, что и цветом, а не идёт особняком нейтральным.
-        title.append(NSAttributedString(string: "\t" + Fmt.bar(b.pct) + " \(b.pct)%", attributes: [
-            .font: Palette.menuFont,
-            .foregroundColor: accent,
-            .paragraphStyle: para,
-        ]))
+        put("\t\(b.pct)%", mono, accent)
+        put("\t" + Fmt.untilReset(b.resetsAt), mono, .secondaryLabelColor)
 
-        title.append(NSAttributedString(string: tail(for: b), attributes: [
-            .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1),
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .paragraphStyle: para,
-        ]))
+        // Часы сброса - здесь же, приглушённее остатка. Отдельного ряда они
+        // не стоят: «пн 03:00» - девять знаков, а ряд под них удваивал бы
+        // высоту меню даже при выключенных деньгах.
+        let clock = Fmt.clock(b.resetsAt)
+        if !clock.isEmpty {
+            put("  " + clock, NSFont.monospacedSystemFont(
+                ofSize: CGFloat(Prefs.menuFontSize) - 1, weight: .regular),
+                .tertiaryLabelColor)
+        }
 
+        let extra = tail(for: b)
+        if !extra.isEmpty {
+            // Два табулятора после перевода строки - тот же отступ, что у
+            // имени: хвост читается как продолжение этой строки, а не как
+            // отдельный пункт меню.
+            put("\n\t\t" + extra,
+                NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize) - 1),
+                .secondaryLabelColor)
+        }
+
+        // Стиль абзаца - на всю строку разом, а не по кускам: у картинки
+        // куска со стилем нет вовсе, и табуляторы после неё считались бы
+        // по умолчанию, то есть каждые 28 точек.
+        title.addAttribute(.paragraphStyle, value: para,
+                           range: NSRange(location: 0, length: title.length))
         item.attributedTitle = title
         return item
     }
 
-    // Хвост второй строки: когда сброс, во сколько обошлось, сколько токенов.
+    // Второй ряд: во сколько обошлось окно и сколько токенов. По умолчанию
+    // пуст - и тогда его нет совсем.
     //
     // Деньги и токены - измеренный расход по видимым машинам, а не доля
     // лимита: сколько всего выдано, Anthropic не говорит. «≈» здесь про
     // прайс и про неполноту машин, а не про догадку о размере лимита.
     private func tail(for b: Bucket) -> String {
-        var s = "  " + Fmt.untilReset(b.resetsAt)
-        let clock = Fmt.clock(b.resetsAt)
-        if !clock.isEmpty { s += " \u{00B7} " + clock }
-
+        var parts: [String] = []
         let w = window(for: b)
         if Prefs.showMoney {
             let mv = Money.view(for: b, in: w)
-            if mv.spent > 0 { s += "  \u{00B7} \u{2248}" + mv.spentText }
+            if mv.spent > 0 { parts.append("\u{2248}" + mv.spentText) }
         }
         if Prefs.showTokens {
             let tv = Money.tokens(for: b, in: w)
-            if !tv.isEmpty { s += "  \u{00B7} " + tv.text }
+            if !tv.isEmpty { parts.append(tv.text) }
         }
-        return s
+        return parts.joined(separator: "  \u{00B7} ")
     }
 
     private func extraRow(_ e: Extra) -> NSMenuItem {
@@ -601,6 +655,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             f.size.width = w
             win.setFrame(f, display: true)
         }
+    }
+
+    // Снимок выпадающего меню - тем же способом, что и окно настроек.
+    //
+    // Вёрстку строки лимита не видит ни -parse, ни тесты: колонки, отступы,
+    // высота ряда и то, рисуется ли картинка внутри пункта меню вообще, -
+    // всё это существует только на настоящем macOS. До этого снимка
+    // единственным способом узнать было поставить сборку Антону.
+    //
+    // Цифры выдуманы намеренно: в CI нет ни ключа, ни сети, и настоящее
+    // меню показало бы «загружаю…». Проценты подобраны так, чтобы в кадр
+    // попали все три уровня тревоги разом - спокойный, внимание, тревога:
+    // снимок с одним цветом подтверждает только одну треть.
+    func showMenuForShot() {
+        let iso = ISO8601DateFormatter()
+        let soon = iso.string(from: Date().addingTimeInterval(2 * 3600 + 14 * 60))
+        let later = iso.string(from: Date().addingTimeInterval(3 * 86400 + 4 * 3600))
+        let body = """
+        {
+          "five_hour":        {"utilization": 57.0, "resets_at": "\(soon)"},
+          "seven_day":        {"utilization": 13.0, "resets_at": "\(later)"},
+          "seven_day_opus":   {"utilization": 92.0, "resets_at": "\(later)"},
+          "seven_day_sonnet": {"utilization": 4.0,  "resets_at": "\(later)"},
+          "nimbus_quill":     {"utilization": 20.0, "resets_at": "\(later)"},
+          "extra_usage": {"is_enabled": true, "monthly_limit": 20000,
+                          "used_credits": 13963.0, "decimal_places": 2}
+        }
+        """
+        usage = UsageParser.parse(body: body, fetchedAt: Date(), isStale: false)
+        lastError = nil
+        updateTitle()
+        NSApp.activate(ignoringOtherApps: true)
+        // Кликом по своей же кнопке: программного «покажи меню статус-
+        // элемента» у AppKit нет, а popUpMenu рисует его не там - в углу
+        // экрана вместо строки меню, то есть снимает не то, что видит
+        // человек. Вызов не возвращается, пока меню открыто: это и нужно -
+        // снимок делает соседний процесс.
+        statusItem.button?.performClick(nil)
     }
 
     @objc private func openSettings() {

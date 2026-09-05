@@ -45,6 +45,23 @@ jobs:
             echo "$1: $size байт"
             if [ "$size" -lt 20000 ]; then echo "::warning::$1 подозрительно мал"; fi
           }
+          # Меню снимается отдельной функцией: открытие меню - не окно,
+          # ему нужны свои две секунды на выход из didFinishLaunching и
+          # цифры, которых в CI взять негде (см. showMenuForShot).
+          shoot_menu() {   # $1 - имя файла, $2 - тема оформления
+            if [ "$2" = dark ]; then defaults write -g AppleInterfaceStyle Dark; fi
+            CLIMITS_UI_SHOT=menu build/climits.app/Contents/MacOS/climits &
+            local pid=$!
+            sleep 14
+            screencapture -x -o "shot/$1" || echo "screencapture упал"
+            kill "$pid" 2>/dev/null || true
+            sleep 2
+            if [ "$2" = dark ]; then defaults delete -g AppleInterfaceStyle || true; fi
+            local size
+            size=$(stat -f%z "shot/$1" 2>/dev/null || echo 0)
+            echo "$1: $size байт"
+            if [ "$size" -lt 20000 ]; then echo "::warning::$1 подозрительно мал"; fi
+          }
           mkdir -p shot
           # Бинарник напрямую, а не через open: так переменная окружения
           # доходит без плясок с Launch Services. Терминала на stdout нет,
@@ -56,6 +73,11 @@ jobs:
           # ловилось только глазами Антона.
           shoot settings.png ""
           shoot settings-wide.png 1400
+          # Обе темы: подложка полоски - это цвет уровня с прозрачностью,
+          # и то, что в светлой теме читается, в тёмной может слиться с
+          # фоном меню. Одна тема из двух проверяет половину.
+          shoot_menu menu-light.png light
+          shoot_menu menu-dark.png dark
           ls -la shot/
 
       - name: выложить в ветку shots
@@ -65,8 +87,8 @@ jobs:
           git checkout -q -b shots
           git config user.name "climits ui-shot"
           git config user.email "noreply@github.com"
-          git add settings.png settings-wide.png
-          git commit -q -m "снимок настроек с ${GITHUB_REF_NAME}"
+          git add settings.png settings-wide.png menu-light.png menu-dark.png
+          git commit -q -m "снимок настроек и меню с ${GITHUB_REF_NAME}"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -20,6 +20,10 @@ func check(_ name: String, _ got: String, _ want: String) {
     }
 }
 
+func check(_ name: String, _ got: Double, _ want: Double) {
+    check(name, String(format: "%.3f", got), String(format: "%.3f", want))
+}
+
 func check(_ name: String, _ cond: Bool) {
     checks += 1
     if cond { print("  ok   \(name)") }
@@ -584,6 +588,27 @@ check("пустой день - точка, а не полоска", Fmt.spark([0
 check("всё по нулям - одни точки", Fmt.spark([0, 0, 0]), "\u{00B7}\u{00B7}\u{00B7}")
 check("день с одним запросом всё равно виден", Fmt.spark([1, 1_000_000]).first != "\u{00B7}")
 check("пустой список не ломает", Fmt.spark([]), "")
+
+// ---- заливка нарисованной полоски ------------------------------------------
+//
+// Единственная арифметика капсулы. Само рисование не проверяется ничем -
+// AppKit на Linux нет, - поэтому весь счёт вынесен сюда, где он виден.
+print("\nполоска лимита")
+
+check("пусто - это пусто, а не ниточка", Fmt.fillWidth(pct: 0, total: 50, minVisible: 6), 0.0)
+check("половина - половина", Fmt.fillWidth(pct: 50, total: 50, minVisible: 6), 25.0)
+check("сто процентов - вся длина", Fmt.fillWidth(pct: 100, total: 50, minVisible: 6), 50.0)
+// 1% от пятидесяти точек - полточки, то есть невидимо. Начавшееся окно
+// не должно выглядеть как нетронутое.
+check("один процент виден", Fmt.fillWidth(pct: 1, total: 50, minVisible: 6), 6.0)
+check("процент больше порога видимости не подтягивается",
+      Fmt.fillWidth(pct: 40, total: 50, minVisible: 6), 20.0)
+check("мусор снизу зажимается", Fmt.fillWidth(pct: -20, total: 50, minVisible: 6), 0.0)
+check("мусор сверху тоже", Fmt.fillWidth(pct: 300, total: 50, minVisible: 6), 50.0)
+// Короткая полоска не должна вылезать за собственную длину: длину меняет
+// настройка, а порог видимости считается от толщины.
+check("порог видимости не длиннее самой полоски",
+      Fmt.fillWidth(pct: 1, total: 4, minVisible: 6), 4.0)
 
 // Сутки берутся у календаря: при переходе на летнее время они длиной
 // 23 и 25 часов, и вычитание 86400 разъехалось бы дважды в год.

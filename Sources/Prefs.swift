@@ -183,6 +183,15 @@ struct Prefs {
     static var barWidth: Int {
         get { max(4, min(40, int("barWidth", 14))) } set { d.set(newValue, forKey: "barWidth") } }
 
+    // Чем рисовать шкалу в выпадающем меню: капсулой или знаками.
+    //
+    // Знаки никуда не делись и остаются единственным вариантом там, где
+    // картинки не бывает, - в терминальном отчёте. Настройки «шкала» и
+    // «фон» правят именно их, поэтому при включённой капсуле они работают
+    // только в терминале, о чём в окне настроек сказано словами.
+    static var menuCapsule: Bool {
+        get { bool("menuCapsule", true) } set { d.set(newValue, forKey: "menuCapsule") } }
+
     // Кружок слева: три знака через запятую, от спокойного к тревожному.
     static var iconSet: String {
         get { let s = str("iconSet", "\u{25D4},\u{25D1},\u{25D5}"); return s.isEmpty ? "\u{25D4},\u{25D1},\u{25D5}" : s }
