@@ -730,6 +730,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         usage = UsageParser.parse(body: body, fetchedAt: Date(), isStale: false)
         lastError = nil
         updateTitle()
+
+        // Тёмная тема задаётся САМОМУ МЕНЮ, а не системе и не приложению.
+        // Проверено двумя прогонами: `defaults write -g AppleInterfaceStyle`
+        // в CI не сработал вовсе, `NSApp.appearance` - тоже: меню
+        // статус-элемента своё оформление у приложения не наследует.
+        // Оба раза снимок «тёмной» выходил светлым, то есть подложка
+        // полоски на тёмном фоне так и оставалась непроверенной.
+        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_DARK"] == "1" {
+            statusItem.menu?.appearance = NSAppearance(named: .darkAqua)
+        }
         NSApp.activate(ignoringOtherApps: true)
         // Кликом по своей же кнопке: программного «покажи меню статус-
         // элемента» у AppKit нет, а popUpMenu рисует его не там - в углу
