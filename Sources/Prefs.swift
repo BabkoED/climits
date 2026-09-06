@@ -180,8 +180,14 @@ struct Prefs {
     static var barEmpty: String {
         get { let s = str("barEmpty", "\u{2591}"); return s.isEmpty ? "\u{2591}" : s }
         set { d.set(newValue, forKey: "barEmpty") } }
+    // Умолчание 10, а не 14 (06.09.2026). Считано tools/menu-width.py:
+    // каждая клетка шкалы стоит меню 3.6 pt по ширине, и четыре лишние
+    // клетки давали 340 pt при разумных для меню статуса 250-320.
+    // Меньше 10 идти не стал: на восьми клетках шаг заливки становится
+    // заметно грубым, а выигрыш всего 7 pt. У кого настроено своё
+    // значение - оно сохраняется, умолчание на него не влияет.
     static var barWidth: Int {
-        get { max(4, min(40, int("barWidth", 14))) } set { d.set(newValue, forKey: "barWidth") } }
+        get { max(4, min(40, int("barWidth", 10))) } set { d.set(newValue, forKey: "barWidth") } }
 
     // Чем рисовать шкалу в выпадающем меню: капсулой или знаками.
     //
