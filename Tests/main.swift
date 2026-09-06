@@ -1012,5 +1012,31 @@ check("запись без обёртки - это сам токен",
       Keychain.parse("sk-ant-oat01-abc")?.value ?? "", "sk-ant-oat01-abc")
 check("битый JSON не выдаётся за токен", Keychain.parse("{\"accessToken\":") == nil)
 
+// Почему не разобралось. Настоящий случай 06.09.2026: поле accessToken в
+// записи есть, отчёт это показывает, а токена нет - и по отчёту нельзя
+// понять, чинить логином или приложением.
+check("у целой записи причины нет", Keychain.why(bigRaw) == nil)
+check("пустой токен назван пустым",
+      Keychain.why("{\"claudeAiOauth\":{\"accessToken\":\"\"}}") ?? "",
+      L("accessToken пустой", "accessToken is empty"))
+check("не строка названа не строкой",
+      Keychain.why("{\"claudeAiOauth\":{\"accessToken\":12345}}") ?? "",
+      L("accessToken не строка", "accessToken is not a string"))
+check("нет поля - так и сказано",
+      Keychain.why("{\"claudeAiOauth\":{\"expiresAt\":1}}") ?? "",
+      L("нет поля accessToken", "no accessToken field"))
+check("не JSON назван не JSON", Keychain.why("хлам") ?? "", L("запись не JSON", "entry is not JSON"))
+
+// Выкладка строения не должна выносить наружу ни одного значения строки -
+// её копируют в чат целиком.
+let shape = Keychain.structure(bigRaw)
+check("в выкладке нет самого токена", !shape.contains("sk-ant-oat01-"))
+check("и нет чужих токенов из mcpOAuth", !shape.contains(String(repeating: "a", count: 220)))
+check("длина токена видна", shape.contains("claudeAiOauth.accessToken=" + L("строка 313", "string 313")))
+check("посторонние разделы свёрнуты в счёт",
+      shape.contains(L("mcpOAuth: 60 разделов", "mcpOAuth: 60 sections")))
+// Ради этого всё и затевалось: с телефона выкладка должна читаться целиком.
+check("выкладка короткая, а не двадцать килобайт", shape.count < 500)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

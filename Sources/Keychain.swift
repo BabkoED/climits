@@ -27,7 +27,7 @@ struct KeychainToken {
 
 enum KeychainError: Error, LocalizedError {
     case notFound
-    case unparsable(previewRedacted: String)
+    case unparsable(reason: String)
     case expired(Date?)
 
     var errorDescription: String? {
@@ -35,9 +35,14 @@ enum KeychainError: Error, LocalizedError {
         case .notFound:
             return L("не нашёл токен в связке ключей. Залогинься один раз: claude",
                      "no token in the keychain. Log in once: claude")
-        case .unparsable:
-            return L("запись в связке ключей есть, но токен из неё не читается",
-                     "keychain entry found, but the token cannot be parsed")
+        case .unparsable(let reason):
+            // Причина в самом сообщении, а не только в --doctor: строка
+            // «токен не читается» одинаково выглядела и при пустом поле
+            // (лечится повторным логином), и при смене формата записи
+            // (лечится правкой приложения). Разные починки - разные слова.
+            let why = reason.isEmpty ? "" : " (" + reason + ")"
+            return L("токен из записи не читается\(why). Залогинься заново: claude, потом /login",
+                     "cannot read the token from the entry\(why). Log in again: claude, then /login")
         case .expired(let when):
             let tail: String
             if let w = when {
@@ -237,7 +242,24 @@ struct Keychain {
         // перечитывать здесь заново - значит показать строение другого
         // чтения и увести починку не туда.
         guard let raw = raws.first else { throw KeychainError.notFound }
-        throw KeychainError.unparsable(previewRedacted: redact(raw))
+        throw KeychainError.unparsable(reason: why(raw) ?? "")
+    }
+
+    // Почему запись не дала токена. Ровно тот вопрос, на который не отвечал
+    // отчёт 06.09.2026: поле accessToken в записи было, а токена не было.
+    // Возвращает nil, если причины нет - то есть токен на месте.
+    static func why(_ raw: String) -> String? {
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return L("запись не JSON", "entry is not JSON") }
+        let node = (obj["claudeAiOauth"] as? [String: Any]) ?? obj
+        guard let v = node["accessToken"] else {
+            return L("нет поля accessToken", "no accessToken field")
+        }
+        if let str = v as? String {
+            return str.isEmpty ? L("accessToken пустой", "accessToken is empty") : nil
+        }
+        return L("accessToken не строка", "accessToken is not a string")
     }
 
     // Для --doctor: показать СТРОЕНИЕ записи, не печатая ни одного значения.
@@ -252,22 +274,64 @@ struct Keychain {
     // Поэтому теперь печатаются только имена ключей. Для ответа на вопрос
     // «что вообще лежит в записи» этого достаточно, а утечь тут нечему.
     static func redact(_ s: String) -> String {
+        guard let obj = json(s) else { return notJSON(s) }
+        return leaves(obj).joined(separator: "  ")
+    }
+
+    // То же самое, но по делу: раздел с токеном целиком, остальные - счётчиком.
+    //
+    // Полная выкладка у активного пользователя - это двадцать килобайт
+    // mcpOAuth, из которых к делу относятся семь строк. Антон вставлял её
+    // в чат дважды: с телефона такое не читается, а нужен один раздел.
+    static func structure(_ s: String) -> String {
+        guard let obj = json(s) else { return notJSON(s) }
+        var out: [String] = []
+        if let node = obj["claudeAiOauth"] as? [String: Any] {
+            out += leaves(node, prefix: "claudeAiOauth")
+        }
+        for k in obj.keys.sorted() where k != "claudeAiOauth" {
+            if let nested = obj[k] as? [String: Any] {
+                out.append(L("\(k): \(nested.count) разделов", "\(k): \(nested.count) sections"))
+            } else {
+                out.append(k + "=" + describe(obj[k] as Any))
+            }
+        }
+        return out.joined(separator: "  ")
+    }
+
+    private static func json(_ s: String) -> [String: Any]? {
         guard let data = s.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return "не JSON, " + String(s.count) + " байт" }
+        else { return nil }
+        return obj
+    }
 
-        func keys(_ d: [String: Any], prefix: String = "") -> [String] {
-            var out: [String] = []
-            for k in d.keys.sorted() {
-                let path = prefix.isEmpty ? k : prefix + "." + k
-                if let nested = d[k] as? [String: Any] {
-                    out += keys(nested, prefix: path)
-                } else {
-                    out.append(path)
-                }
+    private static func notJSON(_ s: String) -> String {
+        return L("не JSON, \(s.count) байт", "not JSON, \(s.count) bytes")
+    }
+
+    // Утечь нечему: у строк печатается только длина. Числа и флаги идут как
+    // есть - секрета в них нет, а срок действия виден сразу.
+    private static func describe(_ v: Any) -> String {
+        if let str = v as? String { return L("строка \(str.count)", "string \(str.count)") }
+        if let arr = v as? [Any] { return L("список \(arr.count)", "list \(arr.count)") }
+        if v is NSNull { return L("пусто", "null") }
+        return "\(v)"
+    }
+
+    // Имена листьев с типом и длиной. Одних имён мало: 06.09.2026 отчёт
+    // показывал accessToken на месте, а токена не было, и отличить «поле
+    // пустое» от «поле не строка» было нечем.
+    private static func leaves(_ d: [String: Any], prefix: String = "") -> [String] {
+        var out: [String] = []
+        for k in d.keys.sorted() {
+            let path = prefix.isEmpty ? k : prefix + "." + k
+            if let nested = d[k] as? [String: Any] {
+                out += leaves(nested, prefix: path)
+            } else {
+                out.append(path + "=" + describe(d[k] as Any))
             }
-            return out
         }
-        return keys(obj).joined(separator: "  ")
+        return out
     }
 }

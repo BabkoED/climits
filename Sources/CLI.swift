@@ -199,7 +199,7 @@ enum CLI {
             let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             print(Fmt.pad(L("Токен", "Token"), 18) + red + msg + reset)
             if let r = raw {
-                print(Fmt.pad(L("Структура", "Structure"), 18) + Keychain.redact(r))
+                print(Fmt.pad(L("Структура", "Structure"), 18) + Keychain.structure(r))
             }
             return 1
         }
