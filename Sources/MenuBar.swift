@@ -259,7 +259,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // «Сверх лимита» участвует в подсчёте колонки наравне со
             // строками лимитов: он стоит в тех же колонках, и если считать
             // ширину без него, его собственное имя налезет на процент.
-            let nameCells = (u.buckets.map { $0.short.count } + [extraName.count]).max() ?? 4
+            // Верхняя граница обязательна: без неё ширина меню зависит от
+            // того, как Anthropic назовёт следующую модель. См. Fmt.clip.
+            let nameCells = min(MenuBarController.nameLimit,
+                                (u.buckets.map { $0.short.count } + [extraName.count]).max() ?? 4)
             let cols = columns(nameCells: nameCells, font: Palette.menuFont)
             for b in u.buckets {
                 menu.addItem(row(for: b, active: u.active?.key == b.key, cols: cols))
@@ -449,6 +452,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Ширина знака моноширинного шрифта - единица измерения всех колонок.
     // Ноль на всякий случай отбиваем: шрифт из настроек может не найтись,
     // и делить колонки на ноль - значит сложить их все в одну точку.
+    // Десять знаков покрывают все нынешние имена («Sonnet», «Fable», «Сверх»,
+    // «5ч») с запасом и не дают меню разрастись от чужого длинного имени.
+    static let nameLimit = 10
+
     private func cellWidth(_ font: NSFont) -> CGFloat {
         let w = ("0" as NSString).size(withAttributes: [.font: font]).width
         return w > 0 ? w : max(4, font.pointSize * 0.6)
@@ -530,7 +537,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             put(Fmt.bar(b.pct), mono, accent)
         }
 
-        put("\t" + b.short, mono, .labelColor)
+        put("\t" + Fmt.clip(b.short, MenuBarController.nameLimit), mono, .labelColor)
         // Цвет процента - тот же accent, что у полоски: числом повторяется
         // тот же сигнал, что и цветом, а не идёт особняком нейтральным.
         put("\t\(b.pct)%", mono, accent)
