@@ -658,12 +658,21 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 switch r {
-                case .success(let windows) where !windows.isEmpty:
-                    let w = windows[0]
+                case .success(let a) where !a.windows.isEmpty:
+                    let w = a.windows[0]
                     let t = w.totals
+                    let money = MoneyView.make(spent: w.cost, partial: true).spentMarked
+                    // Сессии тем же ответом и приехали - значит и проверка
+                    // должна про них сказать. Иначе «оттуда ничего не
+                    // видно» и «оттуда никто не работает» выглядят
+                    // одинаково, а это разные вещи.
+                    let ss = Sessions.summary(a.sessions)
+                    let tail = ss.total > 0
+                        ? L(", сессий \(ss.total)", ", \(ss.total) sessions")
+                        : L(", сессий не видно", ", no sessions visible")
                     self.remoteResult.stringValue = L(
-                        "за 5 часов оттуда: \(Fmt.compact(t.total)) токенов, \(t.requests) запросов, \u{2248}\(MoneyView.money(w.cost))",
-                        "last 5 hours there: \(Fmt.compact(t.total)) tokens, \(t.requests) requests, \u{2248}\(MoneyView.money(w.cost))")
+                        "за 5 часов оттуда: \(Fmt.compact(t.total)) токенов, \(t.requests) запросов, \(money)\(tail)",
+                        "last 5 hours there: \(Fmt.compact(t.total)) tokens, \(t.requests) requests, \(money)\(tail)")
                 case .success:
                     self.remoteResult.stringValue = L("ответ пуст", "empty answer")
                 case .failure(let e):
