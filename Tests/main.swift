@@ -449,6 +449,35 @@ case .success(let a):
 case .failure(let e):
     check("серверная сессия доехала: \(e.text)", false)
 }
+// Память приезжает ТОЛЬКО с той стороны - значит этот разбор и есть
+// единственный путь, которым она вообще попадает на экран. Локальный
+// замер убран по слову Антона: на маке памяти много, сложности на сервере.
+let withMemory = """
+{"windows": [{"families": {}, "unknown": [], "truncated": false}],
+ "sessions": [{"pid": 7, "name": "work-99", "cwd": "Work",
+               "rss_mb": 113, "swap_mb": 262}],
+ "memory": {"total": 3915, "available": 1224,
+            "swap_total": 7030, "swap_free": 5287}}
+"""
+switch RemoteScan.parse(Data(withMemory.utf8), expected: 1, host: "vps7") {
+case .success(let a):
+    check("память сессии доехала", a.sessions.first?.memoryText ?? "",
+          "113+262 " + L("МБ", "MB"))
+    check("память машины доехала", a.memory.totalMB == 3915)
+    check("занятый своп считается как всего минус свободный",
+          a.memory.swapUsedMB == 7030 - 5287)
+    check("и это видно словами", a.memory.text.contains(L("занято 2,6 из 3,8", "2.6 of 3.8")))
+    // Строка про машину появляется только при заданном адресе: иначе
+    // непонятно, чью память показываем. Поймано на снимке из CI.
+    let withHost = Sessions.lines(a.sessions, remoteHost: "vps7", there: a.memory)
+    check("при заданном адресе строка про сервер есть",
+          withHost.notes.contains { $0.hasPrefix("vps7: ") })
+    let noHost = Sessions.lines(a.sessions, remoteHost: "", there: a.memory)
+    check("без адреса её нет", !noHost.notes.contains { $0.contains("3,8") || $0.contains("3.8") })
+case .failure(let e):
+    check("ответ с памятью разобран: \(e.text)", false)
+}
+
 switch RemoteScan.parse(Data("не json".utf8), expected: 1) {
 case .success: check("мусор вместо ответа не принимается за ноль", false)
 case .failure: check("мусор вместо ответа не принимается за ноль", true)
@@ -1285,23 +1314,10 @@ check("без доступного показываем только всего"
 check("пустая память молчит", MachineMemory().text, "")
 check("и считается пустой", MachineMemory().isEmpty)
 
-// Замер на живых данных: числа обязаны сойтись с тем, что видит система.
-let live = Sessions.machineMemory()
-check("всего ОЗУ измерено", live.totalMB > 0)
-check("занято не больше, чем всего", live.availableMB <= live.totalMB)
-check("занятый своп не больше всего свопа", live.swapUsedMB <= live.swapTotalMB)
-
 // Имя сессии человек задаёт сам через /rename - предел должен пускать
 // осмысленное название, а не обрезать до «Тариф Аль…».
 check("имя сессии не режется по колонке лимитов", Sessions.nameLimit > 10)
 check("«Тариф Альфы» уцелеет", Fmt.clip("Тариф Альфы", Sessions.nameLimit), "Тариф Альфы")
-
-// Замер на живых данных: свой же процесс обязан иметь ненулевой RSS.
-// На Linux это /proc, на macOS - ps; здесь проверяется тот путь,
-// который есть в этой системе.
-let mine = Sessions.memory(pids: [Int(getpid())])
-check("свой процесс измеряется", (mine[Int(getpid())]?.rss ?? 0) > 0)
-check("чужого мёртвого pid в выдаче нет", Sessions.memory(pids: [999_999]).isEmpty)
 
 // ---- возраст против остатка ------------------------------------------------
 // Две функции, потому что округлять их надо в разные стороны: остаток

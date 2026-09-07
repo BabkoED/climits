@@ -42,9 +42,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // текущими.
     private var localSessions: [AgentSession] = []
     private var remoteSessions: [AgentSession] = []
-    // Память машин: своя мерится перед показом меню, серверная приезжает
-    // раз в обход вместе с деньгами.
-    private var localMemory = MachineMemory()
+    // Память ТОЛЬКО удалённой машины: приезжает раз в обход вместе с
+    // деньгами. Своя не мерится вовсе - на маке памяти обычно много,
+    // сложности бывают на сервере.
     private var remoteMemory = MachineMemory()
     private var sessions: [AgentSession] {
         return Sessions.sorted(localSessions + remoteSessions)
@@ -139,9 +139,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // строка меню. Отдельная функция, а не строка внутри updateTitle,
     // чтобы чтение файлов не оказалось внутри отрисовки.
     private func refreshLocalSessions() {
-        let want = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
-        localSessions = want ? Sessions.read() : []
-        localMemory = want ? Sessions.machineMemory() : MachineMemory()
+        localSessions = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
+            ? Sessions.read()
+            : []
     }
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
@@ -746,7 +746,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // задаёт сам через `/rename`, и десяти знаков ему мало.
         let lines = Sessions.lines(sessions,
                                    remoteHost: Prefs.remoteHost, remoteScanAt: lastScan,
-                                   here: localMemory, there: remoteMemory)
+                                   there: remoteMemory)
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
@@ -914,8 +914,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          rssMB: 270, swapMB: 184),
         ]
         lastScan = Date().addingTimeInterval(-95)
-        localMemory = MachineMemory(totalMB: 32768, availableMB: 18022,
-                                    swapTotalMB: 4096, swapUsedMB: 512)
         remoteMemory = MachineMemory(totalMB: 3915, availableMB: 1224,
                                      swapTotalMB: 7030, swapUsedMB: 1743)
         // Адрес хоста в снимке тоже подставляем: без него строка про
