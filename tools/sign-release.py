@@ -32,6 +32,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import format_datetime
@@ -63,31 +64,29 @@ def sign(data: bytes) -> str:
     return base64.b64encode(Ed25519PrivateKey.from_private_bytes(seed).sign(data)).decode()
 
 
-def gh(path: str) -> dict:
-    import json
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{REPO}{path}",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "climits-sign"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
-
-
 def main():
     if len(sys.argv) != 2:
         die("укажи тег: sign-release.py v1.8.0")
     tag = sys.argv[1]
 
-    rel = gh(f"/releases/tags/{tag}")
-    asset = next((a for a in rel.get("assets", []) if a["name"] == "climits.zip"), None)
-    if not asset:
-        die(f"в релизе {tag} нет climits.zip - сборка ещё идёт?")
-
-    url = asset["browser_download_url"]
+    # Адрес архива предсказуем, и API здесь НЕ нужен.
+    #
+    # Раньше скрипт спрашивал у API ссылку и размер - и упёрся в предел
+    # запросов ровно на выпуске (60 в час без токена, а за день их уходит
+    # больше). Выпуск не должен зависеть от счётчика чужого API, когда
+    # файл лежит по известному адресу; размер мы всё равно считаем по
+    # скачанным байтам, а не верим чужому числу.
+    url = f"https://github.com/{REPO}/releases/download/{tag}/climits.zip"
     print(f"качаю {url}")
-    with urllib.request.urlopen(url, timeout=120) as r:
-        data = r.read()
-    if len(data) != asset["size"]:
-        die(f"скачалось {len(data)} байт вместо {asset['size']}")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            die(f"по адресу {tag} архива нет - сборка ещё идёт?")
+        raise
+    if len(data) < 100_000:
+        die(f"скачалось всего {len(data)} байт - это не сборка")
 
     print(f"  {len(data)} байт, sha256 {hashlib.sha256(data).hexdigest()}")
     signature = sign(data)
@@ -113,7 +112,7 @@ def main():
         "sig": signature,
         "length": str(len(data)),
         "date": format_datetime(datetime.now(timezone.utc)),
-        "notes": rel.get("html_url", ""),
+        "notes": f"https://github.com/{REPO}/releases/tag/{tag}",
     }
     xml = build_feed(item)
     out = pathlib.Path(f"/tmp/{FEED_NAME}")
