@@ -96,6 +96,35 @@ jobs:
           sparkle/bin/sign_update -f throwaway.key payload.bin >>"$R" 2>&1 || true
           sparkle/bin/sign_update --ed-key-file throwaway.key payload.bin >>"$R" 2>&1 || true
 
+          # --- пункт 2, вторая половина: сверка подписи --------------------
+          #
+          # generate_keys в CI ключ не создаёт: -x только выгружает уже
+          # существующий, а создание пишет в логин-связку, которой на
+          # раннере нет. Зато по его же справке приватный ключ - это
+          # base64 от 32-байтового зерна ed25519, и «зерно можно
+          # использовать с другими инструментами».
+          #
+          # Значит зерно делаем сами, подпись считаем и здесь, и на сервере,
+          # и сравниваем. Совпали - подписывать релизы можно на сервере,
+          # и настоящий приватный ключ в GitHub не попадёт никогда.
+          #
+          # Зерно детерминированное и заведомо выбросное: sha256 от строки
+          # «climits-probe-throwaway». Печатать его открыто безопасно.
+          say "сверка подписи: Sparkle против своей"
+          SEED="CtM1N4JieXTqwRG/8Za1JsBgeTF3XqKKf740qg2y9bA="
+          MINE="4BJk/xB2Dnok1uAg6Yji4EMTmXN1hak56nwVTpZ/+xajOToj0HIj4Z+91U/6l8ur596WFDCI7kjtZVYaeK6OAQ=="
+          echo "зерно (выбросное): $SEED" >>"$R"
+          echo "подпись, посчитанная на сервере:" >>"$R"
+          echo "$MINE" >>"$R"
+          echo "подпись, посчитанная sign_update:" >>"$R"
+          echo "$SEED" | sparkle/bin/sign_update --ed-key-file - -p payload.bin >>"$R" 2>&1 || true
+          echo "--- и наоборот: пусть Sparkle проверит МОЮ подпись ---" >>"$R"
+          echo "$SEED" | sparkle/bin/sign_update --verify payload.bin "$MINE" --ed-key-file - >>"$R" 2>&1 \
+            && echo "ВЕРДИКТ: Sparkle принял подпись, сделанную на сервере" >>"$R" \
+            || echo "ВЕРДИКТ: Sparkle мою подпись НЕ принял" >>"$R"
+          echo "--- какой публичный ключ Sparkle выводит из этого зерна ---" >>"$R"
+          echo "ждём: irZjxj2BEJ9WvYxbcemLLsYdhhdEVGQcBIA410s6waI=" >>"$R"
+
           # --- пункт 3: устройство фреймворка ------------------------------
           say "Sparkle.framework: верхний уровень"
           ls -1 sparkle/Sparkle.framework >>"$R" 2>&1 || true
