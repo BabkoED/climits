@@ -904,8 +904,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          since: Date().addingTimeInterval(-70), machine: ""),
             AgentSession(pid: 903, name: "sintra", folder: "sintra",
                          surface: "Terminal", state: .idle, waitingFor: nil,
-                         since: Date().addingTimeInterval(-4200), machine: "",
-                         rssMB: 142, swapMB: 351),
+                         since: Date().addingTimeInterval(-4200), machine: ""),
+            // Памяти у своих сессий в фикстуре нет намеренно: её больше
+            // не мерят и на живой машине. Снимок должен показывать то,
+            // что человек увидит, иначе он проверяет не тот экран.
         ]
         remoteSessions = [
             AgentSession(pid: 904, name: "work-71", folder: "harness",
