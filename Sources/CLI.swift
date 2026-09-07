@@ -220,9 +220,8 @@ enum CLI {
         }
 
         let api = UsageAPI.shared
-        // Путь сокращаем до «~»: --doctor копируют в чат, и имя пользователя
-        // в системном пути там ни к чему.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // Путь сокращаем до «~» тем же home, что объявлен выше: --doctor
+        // копируют в чат, и имя пользователя в системном пути там ни к чему.
         print(Fmt.pad(L("Кэш", "Cache"), 18)
             + api.cacheFile.path.replacingOccurrences(of: home, with: "~"))
         if let age = api.cacheAge {
