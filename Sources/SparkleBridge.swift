@@ -100,6 +100,10 @@ final class SparkleBridge {
     // Отметка «нам только что сказали, что версия последняя». Гасит
     // следующий за этим отказ: он про ту же самую проверку.
     private var sawNoUpdate = false
+    // Что делать, если Sparkle именно ОТКАЖЕТ. Взводится на одно нажатие
+    // и сбрасывается сразу: плановая проверка не должна внезапно открывать
+    // человеку диалог другого обновлятора.
+    private var fallback: (() -> Void)?
 
     #if canImport(Sparkle)
     private var controller: SPUStandardUpdaterController?
@@ -134,9 +138,22 @@ final class SparkleBridge {
         delegate.onAbort = { [weak self] text in
             guard let self = self else { return }
             // Отказ сразу после «версия последняя» - это конец той же
-            // проверки, а не поломка.
-            if self.sawNoUpdate { self.sawNoUpdate = false; return }
+            // проверки, а не поломка. Запасной путь тут не нужен: ответ
+            // получен, он просто отрицательный.
+            if self.sawNoUpdate {
+                self.sawNoUpdate = false
+                self.fallback = nil
+                return
+            }
             self.lastError = text
+            // А вот это настоящий отказ - и тогда переключаемся сами.
+            // Именно этого сигнала мне не хватало, когда я развёл проверку
+            // на два пункта меню: без различия «нет обновлений» и «не
+            // смог» переключение вслепую дёргало бы второй обновлятор
+            // на каждом спокойном ответе.
+            let go = self.fallback
+            self.fallback = nil
+            go?()
         }
         let c = SPUStandardUpdaterController(startingUpdater: false,
                                              updaterDelegate: delegate,
@@ -146,15 +163,23 @@ final class SparkleBridge {
         #endif
     }
 
-    // Вернёт false, если проверить нечем - тогда зовущий идёт запасным путём.
+    // Спросить Sparkle. Вернёт false, если спрашивать нечем прямо сейчас -
+    // тогда зовущий идёт запасным путём немедленно. Вернёт true, если
+    // вопрос задан; отказ придёт позже, и тогда сработает onFailure.
+    //
+    // Два разных случая нарочно разведены: «нечем спросить» видно сразу и
+    // синхронно, «спросил и не вышло» - только по ответу делегата. Свалить
+    // их в одно значило бы либо ждать ответа впустую, либо звать запасной
+    // путь до того, как первый успел ответить.
     @discardableResult
-    func checkForUpdates() -> Bool {
+    func checkForUpdates(onFailure: (() -> Void)? = nil) -> Bool {
         #if canImport(Sparkle)
         guard Prefs.sparkleEnabled else { return false }
         lastError = nil
         sawNoUpdate = false
         startIfEnabled()
         guard let c = controller else { return false }
+        fallback = onFailure
         c.checkForUpdates(nil)
         return true
         #else

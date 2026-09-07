@@ -394,26 +394,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let v = pendingUpdate {
             menu.addItem(dim(L("вышла версия \(v)", "version \(v) is out")))
         }
-        // Два пункта, а не один, и только когда второй путь включён.
+        // ОДИН пункт. Каким путём проверять - забота приложения, не человека.
         //
-        // Так сделано намеренно: решать за человека, что считать отказом
-        // Sparkle и когда падать на запасной путь, значит угадывать коды
-        // чужих ошибок. Пункт «через GitHub» на месте всегда - это и есть
-        // запасной путь, и нажимает его человек.
-        if case .ready = SparkleBridge.shared.state {
-            menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
-                                #selector(checkUpdatesSparkle), key: ""))
-            menu.addItem(action(L("То же, через GitHub\u{2026}", "Same, via GitHub\u{2026}"),
-                                #selector(checkUpdates), key: ""))
-        } else {
-            menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
-                                #selector(checkUpdates), key: ""))
-            // Об отказе Sparkle молчать нельзя: иначе включённая галочка
-            // и неработающий путь с виду одинаковы.
-            if case .failed(let e) = SparkleBridge.shared.state {
-                menu.addItem(dim(L("Sparkle не смог: \(Fmt.clip(e, 40))",
-                                   "Sparkle failed: \(Fmt.clip(e, 40))")))
-            }
+        // Сначала их было два, и причина была настоящей: я не мог отличить
+        // отказ Sparkle от нормального «версия последняя», а переключаться
+        // вслепую значило дёргать второй обновлятор на каждом спокойном
+        // ответе. Различие нашлось - Sparkle сообщает эти два случая разными
+        // вызовами делегата, - и второй пункт стал лишним выбором, которого
+        // человек делать не должен.
+        //
+        // Выключить Sparkle совсем по-прежнему можно, но галочкой в
+        // настройках, а не вторым пунктом в меню: это настройка, а не
+        // ежедневное решение.
+        menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
+                            #selector(checkUpdates), key: ""))
+        // Об отказе Sparkle молчать нельзя даже теперь, когда он не мешает
+        // обновиться: иначе «работает» и «молча падает каждый раз, а
+        // обновляет запасной» выглядят одинаково, и поломка живёт годами.
+        if case .failed(let e) = SparkleBridge.shared.state {
+            menu.addItem(dim(L("Sparkle не смог, шёл через GitHub: \(Fmt.clip(e, 32))",
+                               "Sparkle failed, used GitHub: \(Fmt.clip(e, 32))")))
         }
         menu.addItem(.separator())
         menu.addItem(action(L("Выйти", "Quit"), #selector(quit), key: "q"))
@@ -773,15 +773,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func doRefresh() { refresh(force: true) }
 
-    // Через Sparkle. Не смог даже начать - честно уходим на первый путь,
-    // а не молчим: человек нажал «проверить» и ждёт ответа.
-    @objc private func checkUpdatesSparkle() {
-        NSApp.activate(ignoringOtherApps: true)
-        if !SparkleBridge.shared.checkForUpdates() { checkUpdates() }
-    }
-
+    // Одна кнопка на оба пути.
+    //
+    // Порядок: сначала Sparkle - он для этого и сделан. Нечем спросить
+    // (не собран, выключен галочкой) - сразу свой путь. Спросили и он
+    // отказал - свой путь по ответу делегата, без участия человека.
+    //
+    // «Версия последняя» запасной путь НЕ поднимает: это полученный ответ,
+    // просто отрицательный. Иначе каждый спокойный ответ Sparkle стоил бы
+    // второго обхода GitHub и второго диалога.
     @objc private func checkUpdates() {
         NSApp.activate(ignoringOtherApps: true)
+        let ok = SparkleBridge.shared.checkForUpdates(onFailure: { [weak self] in
+            self?.checkViaGitHub()
+        })
+        if !ok { checkViaGitHub() }
+    }
+
+    // Свой путь: GitHub-релизы со сверкой sha256 из текста релиза.
+    private func checkViaGitHub() {
         Updater.shared.check(silent: false) { [weak self] found in
             self?.pendingUpdate = found
         }
