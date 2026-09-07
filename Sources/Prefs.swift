@@ -10,7 +10,49 @@ import Foundation
 // Галочки просто собирают тот же самый шаблон. Один механизм внутри, два
 // входа снаружи: расхождения между ними невозможны по построению.
 struct Prefs {
-    static let d = UserDefaults.standard
+    static let bundleID = "com.babko.climits"
+
+    // СВОЙ бандл, даже когда бинарник позвали через ссылку из ~/bin.
+    //
+    // Поймано на живой машине 07.09.2026. `--install-cli` кладёт в ~/bin
+    // ссылку на бинарник внутри бандла, и при запуске через неё
+    // `Bundle.main` наш бандл НЕ опознаёт. Следствий три, и все тихие:
+    //   * версия падала в «dev» - отчёт врал про самого себя;
+    //   * `UserDefaults.standard` брал ДРУГОЙ домен, то есть все настройки
+    //     читались значениями по умолчанию. `--doctor` показывал «Sparkle
+    //     выключен» при включённой галочке, а `--short` для statusline
+    //     собирал строку по чужому шаблону, а не по настроенному;
+    //   * `Version.isNewer` на «dev» всегда false - обновления из
+    //     терминала не находились бы вовсе.
+    // Видно это стало только теперь: до сих пор имя в ~/bin занимал
+    // старый скрипт, и ссылку никто не запускал.
+    //
+    // Путь бинарника разрешается от ссылок и от него поднимаемся к .app:
+    // .../climits.app/Contents/MacOS/climits -> .../climits.app
+    static let ownBundle: Bundle = {
+        if Bundle.main.bundleIdentifier == bundleID { return Bundle.main }
+        let raw = Bundle.main.executablePath ?? ProcessInfo.processInfo.arguments.first ?? ""
+        guard !raw.isEmpty else { return Bundle.main }
+        let app = URL(fileURLWithPath: raw)
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent()   // MacOS
+            .deletingLastPathComponent()   // Contents
+            .deletingLastPathComponent()   // climits.app
+        guard app.pathExtension == "app",
+              let b = Bundle(url: app),
+              b.bundleIdentifier == bundleID
+        else { return Bundle.main }
+        return b
+    }()
+
+    // Настройки читаются из домена приложения по ИМЕНИ, а не через
+    // Bundle.main. Подмена включается только когда Bundle.main - не мы:
+    // у графического запуска всё остаётся как было, то есть настройки
+    // человека этой правкой не могут пострадать по построению.
+    static let d: UserDefaults = {
+        if Bundle.main.bundleIdentifier == bundleID { return .standard }
+        return UserDefaults(suiteName: bundleID) ?? .standard
+    }()
 
     static func bool(_ key: String, _ def: Bool) -> Bool {
         return d.object(forKey: key) as? Bool ?? def
@@ -92,9 +134,11 @@ struct Prefs {
     // расходится с настоящей ровно в тот момент, когда её забыли обновить.
     static let repoURL = "https://github.com/BabkoED/climits"
     // Версия берётся из бандла, а не пишется строкой: иначе она расходится
-    // с настоящей ровно в тот момент, когда её забыли обновить.
+    // с настоящей ровно в тот момент, когда её забыли обновить. Из СВОЕГО
+    // бандла, а не из Bundle.main: через ссылку из ~/bin второй не
+    // опознаётся, и отчёт печатал «dev» про выпущенную сборку.
     static var appVersion: String {
-        return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        return ownBundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
     static var defaultUserAgent: String {
         return "climits/\(appVersion) (macOS; +\(repoURL))"

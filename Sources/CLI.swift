@@ -165,6 +165,21 @@ enum CLI {
             return 1
         }
 
+        // Какой бандл считаем своим. Без этой строки запуск через ссылку
+        // из ~/bin выглядел просто как «версия dev и настройки сброшены»,
+        // и на разбор ушло два круга переписки: симптомы называли что
+        // угодно, кроме причины.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let own = Prefs.ownBundle
+        if own.bundleIdentifier == Prefs.bundleID {
+            print(Fmt.pad(L("Бандл", "Bundle"), 18)
+                + own.bundleURL.path.replacingOccurrences(of: home, with: "~"))
+        } else {
+            print(Fmt.pad(L("Бандл", "Bundle"), 18)
+                + L("НЕ ОПОЗНАН - настройки и версия будут не те",
+                    "NOT FOUND - settings and version will be wrong"))
+        }
+
         print(Fmt.pad("User-Agent", 18) + Prefs.userAgent
             .components(separatedBy: CharacterSet(charactersIn: "\r\n\0")).joined(separator: " "))
 
@@ -298,10 +313,17 @@ enum CLI {
     // в statusline и в любых скриптах, а обновление приложения не требовало
     // переустановки команды.
     private static func installCLI() -> Int32 {
-        guard let exe = Bundle.main.executablePath else {
+        // Путь РАЗРЕШАЕТСЯ от ссылок, и это не придирка.
+        //
+        // Позови команду через уже установленную ссылку (`climits
+        // --install-cli`), и Bundle.main.executablePath вернёт саму ссылку.
+        // Тогда мы бы создали ссылку на себя же - и команда перестала бы
+        // работать вовсе, а починить это без знания пути к бандлу нельзя.
+        guard let raw = Bundle.main.executablePath else {
             print(L("не нашёл собственный путь", "could not resolve own path"))
             return 1
         }
+        let exe = URL(fileURLWithPath: raw).resolvingSymlinksInPath().path
         let home = FileManager.default.homeDirectoryForCurrentUser
         let binDir = home.appendingPathComponent("bin", isDirectory: true)
         let link = binDir.appendingPathComponent("climits")
@@ -333,6 +355,12 @@ enum CLI {
                     print(L("то, что лежало на этом месте, отодвинуто: ",
                             "what was there has been moved aside: ") + kept.path)
                 }
+            }
+            // Ссылка на себя же - тупик, из которого команду не вернуть.
+            guard link.resolvingSymlinksInPath().path != exe else {
+                print(L("это и есть та самая ссылка - зови бинарник из бандла напрямую",
+                        "this is that very link - call the binary inside the bundle"))
+                return 1
             }
             try fm.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: exe))
         } catch {

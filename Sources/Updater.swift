@@ -160,7 +160,9 @@ final class Updater {
 
     // --- установка -----------------------------------------------------------
     private func install(_ r: Release) {
-        let bundle = Bundle.main.bundleURL
+        // Свой бандл, а не Bundle.main: через ссылку из ~/bin второй
+        // указывает не на .app, и подмена пошла бы не туда.
+        let bundle = Prefs.ownBundle.bundleURL
         let parent = bundle.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: parent.path) else {
             say(L("Некуда положить", "Nowhere to write"),
