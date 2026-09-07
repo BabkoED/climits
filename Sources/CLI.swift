@@ -241,9 +241,10 @@ enum CLI {
         // с виду не отличаются никак.
         let live = Sessions.read()
         let ss = Sessions.summary(live)
+        let memTail = ss.memoryText.isEmpty ? "" : " \u{00B7} " + ss.memoryText
         print(Fmt.pad(L("Сессии", "Sessions"), 18)
-            + L("\(ss.total) живых: работает \(ss.busy), ждёт \(ss.waiting), простаивает \(ss.idle), без статуса \(ss.unknown)",
-                "\(ss.total) live: working \(ss.busy), waiting \(ss.waiting), idle \(ss.idle), no status \(ss.unknown)"))
+            + L("\(ss.total) живых: работает \(ss.busy), ждёт \(ss.waiting), простаивает \(ss.idle), без статуса \(ss.unknown)\(memTail)",
+                "\(ss.total) live: working \(ss.busy), waiting \(ss.waiting), idle \(ss.idle), no status \(ss.unknown)\(memTail)"))
         if ss.total > 0 && ss.unknown == ss.total {
             print(Fmt.pad("", 18)
                 + L("статус не пишет ни одна - раздел «кто ждёт» будет пуст",

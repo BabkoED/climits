@@ -73,6 +73,29 @@ struct AgentSession: Equatable {
     // «эта»: слово пришлось бы переводить, а переведённое слово в роли
     // признака ломается ровно в одном языке из двух.
     var machine: String
+
+    // Сколько памяти держит эта сессия: в ОЗУ и в свопе, мегабайтами.
+    //
+    // ЗАЧЕМ ЭТО ЗДЕСЬ. Гибернация простаивающих сессий на сервере работает
+    // автоматически (выдавливание страниц раз в минуту, порог час), но
+    // увидеть её работу было НЕГДЕ. Отсюда и родилось желание кнопки
+    // «усыпить»: механизм есть, а обратной связи нет. Своп в строке и
+    // есть эта обратная связь - у обработанной сессии он больше ОЗУ.
+    // Заодно станет видно, если автоматика однажды встанет: сейчас узнать
+    // об этом неоткуда вовсе.
+    //
+    // Ноль означает «не измерили», а не «нуль байт»: на macOS своп по
+    // процессу не отдаётся вовсе, и рисовать там «0 в свопе» было бы
+    // ложью про систему, а не про сессию.
+    var rssMB: Int = 0
+    var swapMB: Int = 0
+
+    // «113 МБ», «113+262 МБ». Пусто, если мерить не удалось.
+    var memoryText: String {
+        guard rssMB > 0 else { return "" }
+        if swapMB > 0 { return "\(rssMB)+\(swapMB) " + L("МБ", "MB") }
+        return "\(rssMB) " + L("МБ", "MB")
+    }
 }
 
 struct SessionSummary: Equatable {
@@ -81,7 +104,28 @@ struct SessionSummary: Equatable {
     var idle = 0
     var unknown = 0
 
+    var rssMB = 0
+    var swapMB = 0
+
     var total: Int { return busy + waiting + idle + unknown }
+
+    // Сколько держат все вместе. Отвечает на «что грузит память сейчас»
+    // одним числом, и ему место в заголовке раздела: там есть ширина.
+    //
+    // Гигабайты от 1024 МБ, иначе «1712 МБ» не читается порядком величины -
+    // а вопрос именно про порядок: влезет ещё одна сессия или нет.
+    var memoryText: String {
+        guard rssMB > 0 else { return "" }
+        func gb(_ mb: Int) -> String {
+            if mb < 1024 { return "\(mb) " + L("МБ", "MB") }
+            let s = String(format: "%.1f", Double(mb) / 1024)
+            return L(s.replacingOccurrences(of: ".", with: ","), s) + L(" ГБ", " GB")
+        }
+        if swapMB > 0 {
+            return gb(rssMB) + L(" + ", " + ") + gb(swapMB) + L(" в свопе", " swapped")
+        }
+        return gb(rssMB)
+    }
 
     // Короткая сводка для строки меню и заголовка раздела.
     //
@@ -167,6 +211,61 @@ enum Sessions {
     // подозрительна, и мы её не показываем.
     static let maxAge: TimeInterval = 24 * 3600
 
+    // --- сколько памяти держат живые сессии --------------------------------
+    //
+    // Два пути, потому что системы дают разное:
+    //   * Linux - /proc/<pid>/status, там и VmRSS, и VmSwap. Читается без
+    //     запуска процессов и проверяется здесь же, на живых данных;
+    //   * macOS - `ps -o rss=`, одним вызовом на все pid сразу. Свопа по
+    //     процессу macOS не отдаёт вовсе, поэтому там останется ноль -
+    //     и это честнее, чем нарисовать «0 в свопе».
+    //
+    // Одним вызовом на все pid, а не по одному на каждый: меню открывается
+    // часто, а запуск процесса стоит куда дороже чтения файла.
+    static func memory(pids: [Int]) -> [Int: (rss: Int, swap: Int)] {
+        guard !pids.isEmpty else { return [:] }
+        #if canImport(Darwin)
+        return macMemory(pids: pids)
+        #else
+        var out: [Int: (rss: Int, swap: Int)] = [:]
+        for pid in pids {
+            guard let text = try? String(contentsOfFile: "/proc/\(pid)/status",
+                                         encoding: .utf8) else { continue }
+            var rss = 0, swap = 0
+            for line in text.split(separator: "\n") {
+                let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                guard f.count >= 2, let kb = Int(f[1]) else { continue }
+                if line.hasPrefix("VmRSS:") { rss = kb / 1024 }
+                if line.hasPrefix("VmSwap:") { swap = kb / 1024 }
+            }
+            if rss > 0 { out[pid] = (rss, swap) }
+        }
+        return out
+        #endif
+    }
+
+    #if canImport(Darwin)
+    private static func macMemory(pids: [Int]) -> [Int: (rss: Int, swap: Int)] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-o", "pid=,rss=", "-p", pids.map(String.init).joined(separator: ",")]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return [:] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        var out: [Int: (rss: Int, swap: Int)] = [:]
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard f.count >= 2, let pid = Int(f[0]), let kb = Int(f[1]) else { continue }
+            // Своп остаётся нулём: macOS его по процессу не сообщает.
+            if kb > 0 { out[pid] = (kb / 1024, 0) }
+        }
+        return out
+    }
+    #endif
+
     static func read(dir: URL? = nil, now: Date = Date(),
                      machine: String = "") -> [AgentSession] {
         let d = dir ?? localDir
@@ -184,6 +283,14 @@ enum Sessions {
                 continue
             }
             out.append(s)
+        }
+        // Память мерим одним заходом на весь список, уже зная живые pid.
+        let mem = memory(pids: out.map { $0.pid })
+        for i in out.indices {
+            if let m = mem[out[i].pid] {
+                out[i].rssMB = m.rss
+                out[i].swapMB = m.swap
+            }
         }
         return sorted(out)
     }
@@ -209,6 +316,8 @@ enum Sessions {
             case .idle:    s.idle += 1
             case .unknown: s.unknown += 1
             }
+            s.rssMB += x.rssMB
+            s.swapMB += x.swapMB
         }
         return s
     }
@@ -253,9 +362,16 @@ enum Sessions {
     // требуют разного, а текст просьбы всё равно придётся читать в самом
     // окне - строка меню только зовёт туда. Первая версия ставила их
     // наоборот, и длинная просьба вытесняла возраст; поймал тест.
+    // memory показывается ВМЕСТО «чего ждёт», а не рядом.
+    //
+    // Они отвечают на разные вопросы, и никогда на оба сразу: у ждущей
+    // сессии важно, чего она хочет от меня, у остальных - сколько памяти
+    // они держат. Показать оба значит раздвинуть меню под строку, в
+    // которой половина всегда лишняя.
     static func composeLine(mark: String, machine: String, name: String,
                             surface: String, state: String,
-                            waitingFor: String?, age: String) -> String {
+                            waitingFor: String?, age: String,
+                            memory: String = "") -> String {
         var head = mark
         if !machine.isEmpty { head += machine + ": " }
         head += name
@@ -271,13 +387,19 @@ enum Sessions {
         // которых должно стоять, чего сессия хочет. Первая версия
         // считала в обратном порядке - объявленный порядок жертв
         // расходился с тем, что делал код, и поймал это тест.
-        let needsRoom = (waitingFor?.isEmpty == false) ? minWaitingFor + 2 : 0
+        let asks = (waitingFor?.isEmpty == false)
+        let memPart = (asks || memory.isEmpty) ? "" : " \u{00B7} " + memory
+        let needsRoom = asks ? minWaitingFor + 2 : memPart.count
         let withSurface = head + surfacePart + tail
         var line = withSurface.count + needsRoom <= maxLine ? withSurface : head + tail
 
         if let w = waitingFor, !w.isEmpty {
             let room = maxLine - line.count - 2      // 2 - на «: »
             if room >= minWaitingFor { line += ": " + Fmt.clip(w, room) }
+        } else if !memPart.isEmpty, line.count + memPart.count <= maxLine {
+            // Память дописывается только если влезает целиком: обрезанное
+            // «113+26» - это неверное число, а не сокращённое.
+            line += memPart
         }
         return Fmt.clip(line, maxLine)
     }
@@ -302,10 +424,20 @@ enum Sessions {
         // `--doctor`: там прямо сказано, что статус не пишет ни одна
         // сессия и раздел будет пуст. Меню показывает только то, на что
         // может ответить; диагностика говорит, почему оно молчит.
-        if s.total > 0 && s.unknown == s.total { return out }
+        //
+        // НО молчать только когда сказать нечего СОВСЕМ. Раздел отвечает
+        // теперь на два вопроса, и второй - «что грузит память» - от
+        // статуса не зависит вовсе. Поймано живым прогоном: на сервере
+        // все сессии без статуса, и раздел молчал вместе с числами
+        // памяти, ради которых его и расширяли.
+        if s.total > 0 && s.unknown == s.total && s.rssMB == 0 { return out }
 
         let title = L("Сессии", "Sessions")
-        out.header = s.text.isEmpty ? title : title + " \u{00B7} " + s.text
+        var head = s.text.isEmpty ? title : title + " \u{00B7} " + s.text
+        // Общая память - в заголовок: он и так подписью, ширина там есть,
+        // а вопрос «влезет ли ещё одна сессия» именно про сумму.
+        if !s.memoryText.isEmpty { head += " \u{00B7} " + s.memoryText }
+        out.header = head
 
         // Сортируем ЗДЕСЬ, а не надеемся на вызывающего. Обещание раздела -
         // «то, что требует действия, стоит первым», и держать его должно
@@ -328,7 +460,8 @@ enum Sessions {
                 surface: x.surface,
                 state: x.state.word,
                 waitingFor: x.state == .waiting ? x.waitingFor : nil,
-                age: x.since.map { Fmt.ago($0) } ?? ""))
+                age: x.since.map { Fmt.ago($0) } ?? "",
+                memory: x.memoryText))
         }
         if ordered.count > shown.count {
             out.rows.append("  " + L("и ещё \(ordered.count - shown.count)",

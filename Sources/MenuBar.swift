@@ -894,12 +894,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          since: Date().addingTimeInterval(-70), machine: ""),
             AgentSession(pid: 903, name: "sintra", folder: "sintra",
                          surface: "Terminal", state: .idle, waitingFor: nil,
-                         since: Date().addingTimeInterval(-4200), machine: ""),
+                         since: Date().addingTimeInterval(-4200), machine: "",
+                         rssMB: 142, swapMB: 351),
         ]
         remoteSessions = [
             AgentSession(pid: 904, name: "work-71", folder: "harness",
                          surface: "SDK", state: .unknown, waitingFor: nil,
-                         since: nil, machine: "vps7"),
+                         since: nil, machine: "vps7",
+                         rssMB: 270, swapMB: 184),
         ]
         lastScan = Date().addingTimeInterval(-95)
 

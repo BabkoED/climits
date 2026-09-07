@@ -234,7 +234,13 @@ enum RemoteScan {
         var live: [AgentSession] = []
         if let items = root["sessions"] as? [[String: Any]] {
             for item in items {
-                if let s = Sessions.parse(json: item, machine: host) { live.append(s) }
+                if var s = Sessions.parse(json: item, machine: host) {
+                    // Мерил их тот же скрипт на той стороне: pid оттуда
+                    // здесь ничего не значит, и /proc у нас своё.
+                    s.rssMB = Sessions.intValue(item["rss_mb"]) ?? 0
+                    s.swapMB = Sessions.intValue(item["swap_mb"]) ?? 0
+                    live.append(s)
+                }
             }
         }
         return .success(Answer(windows: out, sessions: Sessions.sorted(live)))
@@ -415,6 +421,18 @@ for name in names:
     keep = ("pid", "name", "entrypoint", "status", "tempo",
             "waitingFor", "needs", "statusUpdatedAt", "updatedAt")
     item = {k: rec[k] for k in keep if k in rec}
+    # Память: и в ОЗУ, и в свопе. Своп здесь важнее ОЗУ - у сессии,
+    # которую обработала гибернация, он больше, и это единственный
+    # способ увидеть снаружи, что она работает.
+    try:
+        with open(f"/proc/{pid}/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    item["rss_mb"] = int(line.split()[1]) // 1024
+                elif line.startswith("VmSwap:"):
+                    item["swap_mb"] = int(line.split()[1]) // 1024
+    except Exception:
+        pass
     cwd = rec.get("cwd")
     item["cwd"] = os.path.basename(cwd.rstrip("/")) if isinstance(cwd, str) else ""
     sessions.append(item)

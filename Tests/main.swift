@@ -1212,6 +1212,70 @@ check("и говорит, сколько скрыл",
 check("pid 0 не живой", !Sessions.isAlive(pid: 0))
 check("свой процесс живой", Sessions.isAlive(pid: Int(getpid())))
 
+// ---- память сессий ---------------------------------------------------------
+//
+// Зачем это в трее: гибернация простаивающих сессий работает сама, но
+// увидеть её работу было негде - отсюда и родилось желание кнопки
+// «усыпить». Своп в строке и есть обратная связь: у обработанной сессии
+// он больше, чем ОЗУ.
+print("\nпамять сессий")
+var withMem = AgentSession(pid: 1, name: "work-99", folder: "w", surface: "SDK",
+                           state: .idle, waitingFor: nil, since: nil, machine: "")
+withMem.rssMB = 113
+withMem.swapMB = 262
+check("память с свопом", withMem.memoryText, "113+262 " + L("МБ", "MB"))
+withMem.swapMB = 0
+check("без свопа - только ОЗУ", withMem.memoryText, "113 " + L("МБ", "MB"))
+// Ноль означает «не измерили», а не «нуль байт»: на macOS свопа по
+// процессу нет вовсе, и «0 в свопе» было бы ложью про систему.
+withMem.rssMB = 0
+check("не измерили - молчим, а не пишем ноль", withMem.memoryText, "")
+
+var memSum = SessionSummary()
+memSum.idle = 2
+memSum.rssMB = 749
+memSum.swapMB = 1453
+check("сумма переводит в гигабайты, где это порядок величины",
+      memSum.memoryText.contains(L("1,4 ГБ", "1.4 GB")))
+check("а мегабайты остаются мегабайтами", memSum.memoryText.hasPrefix("749"))
+memSum.rssMB = 0
+check("нечего мерить - сводка про память молчит", memSum.memoryText, "")
+
+// Память и «чего ждёт» - взаимоисключающие: они отвечают на разные
+// вопросы, и никогда на оба сразу.
+let idleLine = Sessions.composeLine(mark: "  ", machine: "", name: "work-99",
+                                    surface: "SDK", state: "простаивает",
+                                    waitingFor: nil, age: "6д 16ч",
+                                    memory: "113+262 МБ")
+check("у неждущей сессии видна память", idleLine.contains("113+262"))
+let waitLine = Sessions.composeLine(mark: "\u{25B8} ", machine: "", name: "bapp",
+                                    surface: "Terminal", state: "ждёт меня",
+                                    waitingFor: "разрешение", age: "4м",
+                                    memory: "113+262 МБ")
+check("у ждущей - чего ждёт, а не память",
+      waitLine.contains("разрешение") && !waitLine.contains("113"))
+check("обе строки в пределе ширины",
+      idleLine.count <= Sessions.maxLine && waitLine.count <= Sessions.maxLine)
+
+// Правило «все без статуса - раздел молчит» больше не должно глотать
+// числа памяти: поймано живым прогоном на сервере, где статуса нет ни
+// у одной сессии, а память есть у всех.
+var noStatus = AgentSession(pid: 2, name: "work-a4", folder: "w", surface: "SDK",
+                            state: .unknown, waitingFor: nil, since: nil, machine: "")
+check("без статуса и без памяти - молчим", Sessions.lines([noStatus]).rows.isEmpty)
+noStatus.rssMB = 319
+check("без статуса, но с памятью - показываем",
+      !Sessions.lines([noStatus]).rows.isEmpty)
+check("и в заголовке есть сумма",
+      Sessions.lines([noStatus]).header.contains("319"))
+
+// Замер на живых данных: свой же процесс обязан иметь ненулевой RSS.
+// На Linux это /proc, на macOS - ps; здесь проверяется тот путь,
+// который есть в этой системе.
+let mine = Sessions.memory(pids: [Int(getpid())])
+check("свой процесс измеряется", (mine[Int(getpid())]?.rss ?? 0) > 0)
+check("чужого мёртвого pid в выдаче нет", Sessions.memory(pids: [999_999]).isEmpty)
+
 // ---- возраст против остатка ------------------------------------------------
 // Две функции, потому что округлять их надо в разные стороны: остаток
 // нельзя завышать, возраст нельзя занижать.
