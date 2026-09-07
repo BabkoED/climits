@@ -236,6 +236,13 @@ enum CLI {
                     "none reports status - the \"who waits\" section will stay empty"))
         }
 
+        // Второй путь обновления. Отвечает на «поднялся ли Sparkle вообще»:
+        // из меню это видно по двум пунктам, но словами - точнее, а из
+        // терминала ещё и копируется в чат.
+        let sp = SparkleBridge.shared
+        print(Fmt.pad(L("Sparkle", "Sparkle"), 18) + sp.state.word
+            + (sp.isBuiltIn ? "" : L(" (сборка без фреймворка)", " (built without framework)")))
+
         print("\n" + L("Пробую запрос к API\u{2026}", "Trying an API request\u{2026}"))
         switch api.fetchSync(ttl: 0, force: true) {
         case .success(let u):
