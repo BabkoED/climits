@@ -377,10 +377,23 @@ enum Sessions {
         head += name
 
         let surfacePart = surface.isEmpty ? "" : " \u{00B7} " + surface
-        var tail = " \u{00B7} " + state
-        // Возраст прижат к состоянию без разделителя: «ждёт меня 4м» -
-        // это один ответ, а «ждёт меня · 4м» читается как два.
-        if !age.isEmpty { tail += " " + age }
+
+        // Пустое состояние - это «статус не сообщён», и слов на него не
+        // тратится вовсе.
+        //
+        // Поймано на снимке из CI: «no status reported» занимало 18 знаков,
+        // и у СЕРВЕРНОЙ сессии память в строку уже не влезала - то есть
+        // именно там, где своп важнее всего. Отсутствие слова само по себе
+        // и есть ответ «мы не знаем», а объясняет его оговорка под списком.
+        var tail = ""
+        if !state.isEmpty {
+            tail = " \u{00B7} " + state
+            // Возраст прижат к состоянию без разделителя: «ждёт меня 4м» -
+            // это один ответ, а «ждёт меня · 4м» читается как два.
+            if !age.isEmpty { tail += " " + age }
+        } else if !age.isEmpty {
+            tail = " \u{00B7} " + age
+        }
 
         // Место под просьбу бронируется ДО того, как решается судьба
         // «через что»: иначе «Terminal» занимает ровно те знаки, на
@@ -458,7 +471,7 @@ enum Sessions {
                 machine: x.machine,
                 name: Fmt.clip(x.name, nameLimit),
                 surface: x.surface,
-                state: x.state.word,
+                state: x.state == .unknown ? "" : x.state.word,
                 waitingFor: x.state == .waiting ? x.waitingFor : nil,
                 age: x.since.map { Fmt.ago($0) } ?? "",
                 memory: x.memoryText))
