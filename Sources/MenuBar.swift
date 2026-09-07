@@ -30,7 +30,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Молча считать одну, когда настроены две, нельзя - цифра занижается
     // в разы, а выглядит так же убедительно.
     private var machines = 1
-    private var remoteError: String?
+    // Ошибки по хостам, а не одна: машин может быть несколько, и молчать
+    // про упавшую нельзя - её расход просто не войдёт в счёт.
+    private var remoteErrors: [String: String] = [:]
     // Новая версия, если фоновая проверка её нашла.
     private var pendingUpdate: String?
 
@@ -45,7 +47,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Память ТОЛЬКО удалённой машины: приезжает раз в обход вместе с
     // деньгами. Своя не мерится вовсе - на маке памяти обычно много,
     // сложности бывают на сервере.
-    private var remoteMemory = MachineMemory()
+    private var remoteMemory: [String: MachineMemory] = [:]
     private var sessions: [AgentSession] {
         return Sessions.sorted(localSessions + remoteSessions)
     }
@@ -174,30 +176,53 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if Prefs.showHistory { cutoffs.append(burnStart) }
 
         scanning = true
-        let host = Prefs.remoteHost
-        let remotePath = Prefs.remotePath
+        let targets = Prefs.remoteTargets()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var w = Transcripts.usage(cutoffs: cutoffs)
-            var err: String? = nil
-            var machines = 1
 
-            // Вторая машина считается тем же способом на своей стороне и
-            // складывается сюда. Ошибку не глотаем: без неё «считаю обе»
-            // и «одна не ответила» выглядят на экране одинаково.
+            // Удалённые машины считаются тем же способом каждая на своей
+            // стороне и складываются сюда. Ошибки не глотаем: без них
+            // «считаю все» и «одна не ответила» выглядят одинаково.
+            //
+            // Хосты опрашиваются ПАРАЛЛЕЛЬНО. Последовательно три хоста при
+            // сторожевом таймере в минуту дают три минуты худшего случая -
+            // дольше, чем порог между обходами, то есть обход не успевал бы
+            // закончиться до следующего. Работа здесь целиком в ожидании
+            // сети, так что параллель ничего не стоит.
+            var answers: [String: Result<RemoteScan.Answer, RemoteScan.Failure>] = [:]
+            if !targets.isEmpty {
+                let lock = NSLock()
+                let group = DispatchGroup()
+                for t in targets {
+                    group.enter()
+                    DispatchQueue.global(qos: .utility).async {
+                        let r = RemoteScan.usage(host: t.host, path: t.path, cutoffs: cutoffs)
+                        lock.lock(); answers[t.host] = r; lock.unlock()
+                        group.leave()
+                    }
+                }
+                group.wait()
+            }
+
+            // Складываем в порядке списка, а не в порядке ответов: иначе
+            // одни и те же числа приходили бы разными между обходами.
+            var machines = 1
+            var errs: [String: String] = [:]
             var remoteSessions: [AgentSession] = []
-            var remoteMemory = MachineMemory()
-            if !host.isEmpty {
-                switch RemoteScan.usage(host: host, path: remotePath,
-                                        cutoffs: cutoffs) {
+            var remoteMemory: [String: MachineMemory] = [:]
+            for t in targets {
+                switch answers[t.host] {
                 case .success(let r) where r.windows.count == w.count:
                     for i in w.indices { w[i] = w[i] + r.windows[i] }
-                    machines = 2
-                    remoteSessions = r.sessions
-                    remoteMemory = r.memory
+                    machines += 1
+                    remoteSessions += r.sessions
+                    if !r.memory.isEmpty { remoteMemory[t.host] = r.memory }
                 case .success:
-                    err = L("ответ не по форме", "malformed answer")
+                    errs[t.host] = L("ответ не по форме", "malformed answer")
                 case .failure(let e):
-                    err = e.text
+                    errs[t.host] = e.text
+                case nil:
+                    break
                 }
             }
 
@@ -206,7 +231,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.scanning = false
                 self.lastScan = Date()
                 self.machines = machines
-                self.remoteError = err
+                self.remoteErrors = errs
                 self.remoteSessions = remoteSessions
                 self.remoteMemory = remoteMemory
                 guard w.count == cutoffs.count, w.count >= 2 else { return }
@@ -338,9 +363,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(extraRow(u.extra, cols: cols))
             if Prefs.showMoney || Prefs.showTokens {
                 menu.addItem(dim(estimateNote()))
-                if let e = remoteError {
-                    menu.addItem(dim(L("\(Prefs.remoteHost) не ответил: \(e)",
-                                       "\(Prefs.remoteHost) did not answer: \(e)")))
+                for (host, e) in remoteErrors.sorted(by: { $0.key < $1.key }) {
+                    menu.addItem(dim(L("\(host) не ответил: \(e)",
+                                       "\(host) did not answer: \(e)")))
                 }
                 // Флаги, которые до этого собирались и никуда не попадали.
                 // Собирать и не показывать - хуже, чем не собирать: в коде
@@ -445,9 +470,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let roots = extra > 0
             ? L(" и ещё \(extra) катал.", " plus \(extra) more folder(s)")
             : ""
-        if machines > 1 {
-            return L("\(what) - по расшифровкам двух машин: этой\(roots) и \(Prefs.remoteHost)\(price)",
-                     "\(what) - from two machines: this one\(roots) and \(Prefs.remoteHost)\(price)")
+        // Машины перечисляются по именам, а не числом.
+        //
+        // Стояло «по расшифровкам двух машин: этой и <host>» - и это врало
+        // сразу при трёх, а хуже того, молчало о том, КАКАЯ не вошла: если
+        // из двух серверов ответил один, подпись всё равно говорила «двух».
+        // Считаем только те, что реально сложились: machines растёт на
+        // успешный ответ, а не на строку в настройке.
+        let answered = Prefs.remoteTargets().map { $0.host }
+            .filter { remoteErrors[$0] == nil }
+        if !answered.isEmpty {
+            let names = answered.joined(separator: ", ")
+            return L("\(what) - по расшифровкам \(machines) машин: этой\(roots) и \(names)\(price)",
+                     "\(what) - from \(machines) machines: this one\(roots) and \(names)\(price)")
         }
         return L("\(what) - по расшифровкам ТОЛЬКО этой машины\(roots)\(price)",
                  "\(what) - from THIS machine only\(roots)\(price)")
@@ -744,9 +779,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard Prefs.showSessions else { return [] }
         // nameLimit здесь СВОЙ, а не колонки лимитов: имя сессии человек
         // задаёт сам через `/rename`, и десяти знаков ему мало.
-        let lines = Sessions.lines(sessions,
-                                   remoteHost: Prefs.remoteHost, remoteScanAt: lastScan,
-                                   there: remoteMemory)
+        let lines = Sessions.lines(sessions, remoteScanAt: lastScan,
+                                   machines: remoteMemory)
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
@@ -916,12 +950,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          rssMB: 270, swapMB: 184),
         ]
         lastScan = Date().addingTimeInterval(-95)
-        remoteMemory = MachineMemory(totalMB: 3915, availableMB: 1224,
-                                     swapTotalMB: 7030, swapUsedMB: 1743)
+        remoteMemory = ["vps7": MachineMemory(totalMB: 3915, availableMB: 1224,
+                                              swapTotalMB: 7030, swapUsedMB: 1743)]
         // Адрес хоста в снимке тоже подставляем: без него строка про
         // память СЕРВЕРА в кадр не попадает, и её вёрстка остаётся
         // непроверенной. Так и вышло на снимке 1.10.0.
-        Prefs.remoteHost = "vps7"
+        Prefs.remoteHosts = "vps7\nvps8"
 
         // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
         //

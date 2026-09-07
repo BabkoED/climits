@@ -467,13 +467,29 @@ case .success(let a):
     check("занятый своп считается как всего минус свободный",
           a.memory.swapUsedMB == 7030 - 5287)
     check("и это видно словами", a.memory.text.contains(L("занято 2,6 из 3,8", "2.6 of 3.8")))
-    // Строка про машину появляется только при заданном адресе: иначе
-    // непонятно, чью память показываем. Поймано на снимке из CI.
-    let withHost = Sessions.lines(a.sessions, remoteHost: "vps7", there: a.memory)
-    check("при заданном адресе строка про сервер есть",
+    // Память подписывается именем машины: их может быть несколько, и
+    // безымянное число не отвечает на «чья это память».
+    let withHost = Sessions.lines(a.sessions, machines: ["vps7": a.memory])
+    check("память машины подписана её именем",
           withHost.notes.contains { $0.hasPrefix("vps7: ") })
-    let noHost = Sessions.lines(a.sessions, remoteHost: "", there: a.memory)
-    check("без адреса её нет", !noHost.notes.contains { $0.contains("3,8") || $0.contains("3.8") })
+    let noHost = Sessions.lines(a.sessions)
+    check("без данных о машине строки нет",
+          !noHost.notes.contains { $0.contains("3,8") || $0.contains("3.8") })
+
+    // Несколько серверов: по строке на каждый, порядок по имени - иначе
+    // строки прыгали бы между открытиями меню.
+    let two = Sessions.lines(a.sessions, machines: [
+        "vps8": MachineMemory(totalMB: 8000, availableMB: 4000,
+                              swapTotalMB: 2000, swapUsedMB: 100),
+        "vps7": a.memory])
+    let hostNotes = two.notes.filter { $0.hasPrefix("vps") && $0.contains(":") }
+    check("на каждую машину своя строка", hostNotes.count == 2)
+    check("и порядок по имени, а не как повезёт",
+          hostNotes.first?.hasPrefix("vps7:") ?? false)
+    // Оговорка про свежесть одна на всех: обход у машин общий, и повторять
+    // её на каждую значит занять строки одним и тем же фактом.
+    let stale = two.notes.filter { $0.contains(L("по последнему обходу", "as of the last scan")) }
+    check("оговорка про обход одна на все машины", stale.count <= 1)
 case .failure(let e):
     check("ответ с памятью разобран: \(e.text)", false)
 }
@@ -1089,6 +1105,41 @@ check("посторонние разделы свёрнуты в счёт",
 // Ради этого всё и затевалось: с телефона выкладка должна читаться целиком.
 check("выкладка короткая, а не двадцать килобайт", shape.count < 500)
 
+// ---- несколько удалённых машин ---------------------------------------------
+//
+// Раньше машина была ровно одна, и это сидело допущением в четырёх местах:
+// в настройке строкой, в счётчике «две машины», в подписи «по расшифровкам
+// двух машин» и в единственной переменной под ошибку.
+print("\nнесколько машин")
+Prefs.d.removeObject(forKey: "remoteHost")
+Prefs.d.removeObject(forKey: "remotePath")
+Prefs.remoteHosts = "vps7, vps8 ~/work/.claude/projects"
+var tg = Prefs.remoteTargets()
+check("разбирается запятая", tg.count == 2)
+check("каталог берётся вторым словом", tg.count == 2 ? tg[1].path : "", "~/work/.claude/projects")
+check("без каталога он пуст", tg.first?.path ?? "нет", "")
+Prefs.remoteHosts = "vps7\nvps8"
+check("и перевод строки тоже", Prefs.remoteTargets().count == 2)
+// Один и тот же сервер дважды удвоил бы его расход в деньгах, и заметить
+// это было бы нечем.
+Prefs.remoteHosts = "vps7, vps7, vps8"
+check("повтор адреса отбрасывается", Prefs.remoteTargets().count == 2)
+Prefs.remoteHosts = "  ,  , vps7 ,, "
+check("пустые куски не превращаются в машины", Prefs.remoteTargets().count == 1)
+
+// Переход со старой настройки: молча потерять настроенный сервер нельзя.
+Prefs.d.removeObject(forKey: "remoteHosts")
+Prefs.d.set("старый-хост", forKey: "remoteHost")
+Prefs.d.set("~/иной/путь", forKey: "remotePath")
+let migrated = Prefs.remoteTargets()
+check("старая настройка продолжает работать", migrated.first?.host ?? "", "старый-хост")
+check("и её каталог тоже", migrated.first?.path ?? "", "~/иной/путь")
+Prefs.remoteHosts = "новый"
+check("но заполненный список её перекрывает", Prefs.remoteTargets().first?.host ?? "", "новый")
+Prefs.d.removeObject(forKey: "remoteHosts")
+Prefs.d.removeObject(forKey: "remoteHost")
+Prefs.d.removeObject(forKey: "remotePath")
+
 // ---- обрезка имени лимита ----------------------------------------------
 // Ширина колонки имени считается по самому длинному имени, а имя приходит
 // снаружи: ключ API или заголовок от Anthropic. Без верхней границы меню
@@ -1184,7 +1235,7 @@ check("одни unknown - раздела нет совсем", allUnknown.rows.i
 check("но при смешанном составе раздел есть",
       !Sessions.lines([mix[1], mix[3]]).rows.isEmpty)
 
-let lines = Sessions.lines(mix, nameLimit: 10, remoteHost: "vps7", remoteScanAt: Date())
+let lines = Sessions.lines(mix, nameLimit: 10, remoteScanAt: Date())
 check("указатель стоит у ждущего", lines.rows.first?.hasPrefix("\u{25B8}") ?? false)
 check("у остальных указателя нет", lines.rows.dropFirst().allSatisfy { !$0.hasPrefix("\u{25B8}") })
 check("про неизвестный статус сказано словами",

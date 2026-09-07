@@ -417,8 +417,8 @@ enum Sessions {
     }
 
     static func lines(_ list: [AgentSession], nameLimit: Int = nameLimit,
-                      remoteHost: String = "", remoteScanAt: Date? = nil,
-                      there: MachineMemory = MachineMemory()) -> SessionLines {
+                      remoteScanAt: Date? = nil,
+                      machines: [String: MachineMemory] = [:]) -> SessionLines {
         var out = SessionLines()
         guard !list.isEmpty else { return out }
 
@@ -495,15 +495,26 @@ enum Sessions {
         // «сколько держат они», а это - «сколько ещё можно». Без второго
         // первое не с чем сравнить.
         //
-        // Только удалённой машины. Своя не показывается намеренно - см.
+        // Только удалённых машин. Своя не показывается намеренно - см.
         // комментарий у отсутствующего замера выше.
-        if !there.isEmpty, !remoteHost.isEmpty {
-            out.notes.append(remoteHost + ": " + there.text)
+        //
+        // Порядок по имени хоста, а не по словарю: иначе строки прыгали бы
+        // между открытиями меню.
+        for host in machines.keys.sorted() {
+            if let m = machines[host], !m.isEmpty {
+                out.notes.append(host + ": " + m.text)
+            }
         }
-        if !remoteHost.isEmpty, list.contains(where: { $0.machine == remoteHost }) {
+
+        // Оговорка про свежесть - ОДНА на все машины, а не на каждую:
+        // обход у них общий, и повторять её N раз значит занять N строк
+        // одним и тем же фактом.
+        let hosts = Set(list.map { $0.machine }).subtracting([""]).sorted()
+        if !hosts.isEmpty {
             let age = remoteScanAt.map { " \u{00B7} " + Fmt.ago($0) + L(" назад", " ago") } ?? ""
-            out.notes.append(L("\(remoteHost) - по последнему обходу\(age)",
-                               "\(remoteHost) - as of the last scan\(age)"))
+            let names = hosts.joined(separator: ", ")
+            out.notes.append(L("\(names) - по последнему обходу\(age)",
+                               "\(names) - as of the last scan\(age)"))
         }
         return out
     }

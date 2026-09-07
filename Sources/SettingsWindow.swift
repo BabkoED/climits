@@ -282,10 +282,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         remoteField.isEditable = true
         remoteField.completes = true
         remoteField.addItems(withObjectValues: SSHConfig.hosts())
-        remoteField.stringValue = Prefs.remoteHost
+        remoteField.stringValue = Prefs.remoteHosts
         remoteField.delegate = self
-        remoteField.identifier = NSUserInterfaceItemIdentifier("remoteHost")
-        remoteField.placeholderString = L("имя из ~/.ssh/config или user@адрес",
+        remoteField.identifier = NSUserInterfaceItemIdentifier("remoteHosts")
+        remoteField.placeholderString = L("vps7, vps8 - имена из ~/.ssh/config или user@адрес",
                                           "a Host from ~/.ssh/config, or user@address")
         remoteField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         remoteField.translatesAutoresizingMaskIntoConstraints = false
@@ -308,6 +308,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                 "No entries in ~/.ssh/config - type the full address, user@host.")
             : L("Из ~/.ssh/config: \(known.prefix(8).joined(separator: ", ")).",
                 "From ~/.ssh/config: \(known.prefix(8).joined(separator: ", ")).")))
+        stack.addArrangedSubview(small(L("Машин можно несколько - через запятую. Каталог расшифровок пишется вторым словом после адреса, если он не «~/.claude/projects»: vps7, vps8 ~/work/.claude/projects. «Проверить» спрашивает все и отвечает по строке на каждую.",
+                                         "Several machines are fine - separate them with commas. A transcripts folder goes as a second word after the address when it is not \"~/.claude/projects\": vps7, vps8 ~/work/.claude/projects. \"Test\" asks all of them and answers a line per machine.")))
         stack.addArrangedSubview(small(L("Пароль спросить негде: нужен ключ без пароля и один заход из терминала, чтобы хост попал в known_hosts.",
                                          "There is nowhere to ask for a password: you need a key and one terminal login so the host lands in known_hosts.")))
 
@@ -627,7 +629,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             let picked = Presets.value(of: raw)
             box.stringValue = picked
             let key = box.identifier?.rawValue ?? ""
-            if key == "remoteHost" { self.remoteResult.stringValue = "" }
+            if key == "remoteHosts" { self.remoteResult.stringValue = "" }
             self.apply(key: key, value: picked)
         }
     }
@@ -646,45 +648,61 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         applied()
     }
 
-    // Проверка второй машины: показать, что оттуда реально приехало. Без
+    // Проверка удалённых машин: показать, что оттуда реально приехало. Без
     // этого настройка проверяется только тем, что цифры в меню «как будто
     // побольше стали».
+    //
+    // Спрашиваются ВСЕ из списка, и о каждой отдельная строка: молчание про
+    // одну из трёх - это молчание про её расход, а он в счёт не войдёт.
     @objc private func testRemote() {
-        let host = remoteField.stringValue.trimmingCharacters(in: .whitespaces)
-        Prefs.remoteHost = host
-        guard !host.isEmpty else {
-            remoteResult.stringValue = L("адрес пуст - считаю только эту машину",
+        Prefs.remoteHosts = remoteField.stringValue
+        let targets = Prefs.remoteTargets()
+        guard !targets.isEmpty else {
+            remoteResult.stringValue = L("список пуст - считаю только эту машину",
                                          "empty - counting this machine only")
             return
         }
-        remoteResult.stringValue = L("спрашиваю \(host)\u{2026}", "asking \(host)\u{2026}")
-        let path = Prefs.remotePath
+        remoteResult.stringValue = L("спрашиваю \(targets.count)\u{2026}",
+                                     "asking \(targets.count)\u{2026}")
         let since = Date().addingTimeInterval(-5 * 3600)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let r = RemoteScan.usage(host: host, path: path, cutoffs: [since])
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                switch r {
-                case .success(let a) where !a.windows.isEmpty:
-                    let w = a.windows[0]
-                    let t = w.totals
-                    let money = MoneyView.make(spent: w.cost, partial: true).spentMarked
-                    // Сессии тем же ответом и приехали - значит и проверка
-                    // должна про них сказать. Иначе «оттуда ничего не
-                    // видно» и «оттуда никто не работает» выглядят
-                    // одинаково, а это разные вещи.
-                    let ss = Sessions.summary(a.sessions)
-                    let tail = ss.total > 0
-                        ? L(", сессий \(ss.total)", ", \(ss.total) sessions")
-                        : L(", сессий не видно", ", no sessions visible")
-                    self.remoteResult.stringValue = L(
-                        "за 5 часов оттуда: \(Fmt.compact(t.total)) токенов, \(t.requests) запросов, \(money)\(tail)",
-                        "last 5 hours there: \(Fmt.compact(t.total)) tokens, \(t.requests) requests, \(money)\(tail)")
-                case .success:
-                    self.remoteResult.stringValue = L("ответ пуст", "empty answer")
-                case .failure(let e):
-                    self.remoteResult.stringValue = L("не вышло: \(e.text)", "failed: \(e.text)")
+            var lines: [String] = []
+            let lock = NSLock()
+            let group = DispatchGroup()
+            for target in targets {
+                group.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let r = RemoteScan.usage(host: target.host, path: target.path,
+                                             cutoffs: [since])
+                    let line: String
+                    switch r {
+                    case .success(let a) where !a.windows.isEmpty:
+                        let w = a.windows[0]
+                        let tt = w.totals
+                        let money = MoneyView.make(spent: w.cost, partial: true).spentMarked
+                        // Сессии тем же ответом и приехали - значит и
+                        // проверка должна про них сказать. Иначе «оттуда
+                        // ничего не видно» и «оттуда никто не работает»
+                        // выглядят одинаково, а это разные вещи.
+                        let ss = Sessions.summary(a.sessions)
+                        let tail = ss.total > 0
+                            ? L(", сессий \(ss.total)", ", \(ss.total) sessions")
+                            : L(", сессий не видно", ", no sessions visible")
+                        line = L("\(target.host): \(Fmt.compact(tt.total)) токенов, \(tt.requests) запросов, \(money)\(tail)",
+                                 "\(target.host): \(Fmt.compact(tt.total)) tokens, \(tt.requests) requests, \(money)\(tail)")
+                    case .success:
+                        line = L("\(target.host): ответ пуст", "\(target.host): empty answer")
+                    case .failure(let e):
+                        line = L("\(target.host): не вышло - \(e.text)",
+                                 "\(target.host): failed - \(e.text)")
+                    }
+                    lock.lock(); lines.append(line); lock.unlock()
+                    group.leave()
                 }
+            }
+            group.wait()
+            DispatchQueue.main.async {
+                self?.remoteResult.stringValue = lines.sorted().joined(separator: "\n")
             }
         }
     }
@@ -714,7 +732,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // Адрес машины и пути к каталогам - только по окончании ввода:
         // на каждой букве приложение обходило бы полпути к несуществующему
         // каталогу и лезло по ssh на несуществующий хост.
-        "remoteHost", "extraRoots",
+        "remoteHosts", "extraRoots",
     ]
 
     func controlTextDidChange(_ obj: Notification) {
@@ -745,7 +763,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             ? Presets.value(of: raw)
             : raw
         switch key {
-        case "remoteHost":   Prefs.remoteHost = v; applied(); return
+        case "remoteHosts":  Prefs.remoteHosts = v; applied(); return
         // Поле одно, а путей может быть несколько: разделяем пробелом при
         // вводе и храним по строке на путь. Пробел в самом пути тогда
         // невозможен - но каталог расшифровок с пробелом в имени против

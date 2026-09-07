@@ -160,10 +160,65 @@ struct Prefs {
     // считает её расшифровки тем же способом и складывает с местными.
     //
     // Пусто - считаем только себя, как раньше.
+    //
+    // МАШИН МОЖЕТ БЫТЬ НЕСКОЛЬКО (слово Антона 07.09.2026). Раньше здесь
+    // была одна строка, и «вторая машина» сидела допущением в четырёх
+    // местах: в настройке, в счётчике машин, в подписи «по расшифровкам
+    // двух машин» и в единственной переменной под ошибку.
+    //
+    // Формат: адреса через запятую ИЛИ по одному в строке, необязательный
+    // каталог вторым словом после адреса.
+    //
+    //     vps7, vps8
+    //     vps8 ~/work/.claude/projects
+    //
+    // Два разделителя, потому что вводов тоже два. В окне настроек стоит
+    // NSComboBox - он однострочный, но зато подсказывает хосты из
+    // ~/.ssh/config, и терять подсказку ради второго разделителя глупо:
+    // там пишут через запятую. А `defaults write` и правка plist руками
+    // естественнее многострочными, как у extraRoots рядом.
+    //
+    // Пробел разделяет адрес и каталог, а не двоеточие: двоеточие
+    // встречается и в адресах, и в путях, а пробел в имени хоста ssh
+    // невозможен.
+    //
+    static var remoteHosts: String {
+        get {
+            let list = str("remoteHosts", "")
+            // Переход со старой настройки. Пока человек не тронул новую,
+            // работает прежняя: молча потерять настроенный сервер нельзя.
+            if list.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let one = str("remoteHost", "").trimmingCharacters(in: .whitespaces)
+                if !one.isEmpty {
+                    let p = str("remotePath", "").trimmingCharacters(in: .whitespaces)
+                    return p.isEmpty ? one : one + " " + p
+                }
+            }
+            return list
+        }
+        set { d.set(newValue, forKey: "remoteHosts") } }
+
+    // Разобранный список: адрес и каталог. Пустые строки и повторы
+    // отбрасываются - один и тот же сервер, вписанный дважды, удвоил бы
+    // его расход в деньгах, и заметить это было бы нечем.
+    static func remoteTargets() -> [(host: String, path: String)] {
+        var out: [(host: String, path: String)] = []
+        var seen = Set<String>()
+        for raw in remoteHosts.split(whereSeparator: { $0 == "\n" || $0 == "," }) {
+            let parts = raw.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard let h = parts.first.map(String.init), !h.isEmpty else { continue }
+            guard seen.insert(h).inserted else { continue }
+            let path = parts.count > 1 ? String(parts[1]) : ""
+            out.append((h, path))
+        }
+        return out
+    }
+
+    // Прежние ключи остались читаемыми: ими пользуется переход выше и
+    // окно настроек, когда список ещё не заполнен.
     static var remoteHost: String {
-        get { str("remoteHost", "").trimmingCharacters(in: .whitespaces) }
+        get { remoteTargets().first?.host ?? "" }
         set { d.set(newValue, forKey: "remoteHost") } }
-    // Каталог расшифровок на той машине. Пусто - «~/.claude/projects».
     static var remotePath: String {
         get { str("remotePath", "").trimmingCharacters(in: .whitespaces) }
         set { d.set(newValue, forKey: "remotePath") } }
