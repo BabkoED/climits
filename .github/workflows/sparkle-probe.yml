@@ -1,0 +1,161 @@
+name: sparkle-probe
+
+# Разведка перед тем, как трогать механизм обновления.
+#
+# ЗАЧЕМ. Sparkle - это чужой фреймворк, его инструменты (generate_keys,
+# sign_update) существуют только под macOS, а собранный бандл подписывается
+# ad-hoc. Ни флаги этих инструментов, ни порядок подписи вложенного
+# фреймворка с Linux не проверить никак. Гадать здесь нельзя: обновлятор
+# выполняет та версия, которая уже стоит, и ошибка запирает самообновление
+# насовсем.
+#
+# ЧТО ВЫЯСНЯЕМ, ровно четыре вещи:
+#   1) какие флаги на самом деле у generate_keys и sign_update;
+#   2) можно ли подписывать релиз НА СЕРВЕРЕ, а не в CI. Если подпись -
+#      это обычный ed25519 над байтами архива, то приватный ключ никогда
+#      не поедет в GitHub, и секрет в репозитории не понадобится вовсе.
+#      Проверяется сверкой: подписываем известный файл здесь, потом тот же
+#      файл тем же ключом на сервере, и подписи должны совпасть побайтово;
+#   3) как разложен Sparkle.framework внутри - что именно копировать;
+#   4) переживает ли ad-hoc подпись вложенный фреймворк.
+#
+# КЛЮЧ ЗДЕСЬ ВЫБРОСНОЙ. Он генерируется в этом же прогоне, печатается
+# открыто и после разведки не используется больше нигде. Настоящий ключ
+# в CI не попадает - в этом и смысл пункта 2.
+#
+# Результат кладётся в ветку probe, а не в логи: логи прогона без токена
+# отдают 403 даже на публичном репозитории (проверено 28.08.2026).
+
+on:
+  push:
+    tags: ['probe-*']
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: скачать Sparkle
+        run: |
+          curl -fsSL -o sparkle.tar.xz \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-2.9.6.tar.xz
+          mkdir -p sparkle && tar -xJf sparkle.tar.xz -C sparkle
+          echo "sha256 архива Sparkle:"
+          shasum -a 256 sparkle.tar.xz
+
+      - name: разведка
+        run: |
+          mkdir -p out
+          R=out/probe.txt
+          say() { echo "" >>"$R"; echo "=== $* ===" >>"$R"; }
+
+          echo "разведка Sparkle, $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$R"
+          echo "runner: $(sw_vers -productVersion), $(uname -m)" >>"$R"
+
+          say "sha256 дистрибутива Sparkle"
+          shasum -a 256 sparkle.tar.xz >>"$R"
+
+          say "что лежит в корне дистрибутива"
+          ls -1 sparkle >>"$R" 2>&1 || true
+
+          say "bin"
+          ls -1 sparkle/bin >>"$R" 2>&1 || true
+
+          say "generate_keys --help"
+          sparkle/bin/generate_keys --help >>"$R" 2>&1 || true
+
+          say "sign_update --help"
+          sparkle/bin/sign_update --help >>"$R" 2>&1 || true
+
+          # --- пункт 2: можно ли подписывать не в CI -----------------------
+          # Файл строится детерминированно, чтобы тот же самый байт в байт
+          # можно было собрать на сервере.
+          say "выбросной ключ и подпись известного файла"
+          python3 -c "open('payload.bin','wb').write(bytes(range(256))*4)"
+          echo "payload: 1024 байта, bytes(range(256))*4" >>"$R"
+          shasum -a 256 payload.bin >>"$R"
+
+          # -x экспортирует приватный ключ в файл (по доке). Ключ выбросной,
+          # печатаем открыто - иначе сверять на сервере будет нечем.
+          sparkle/bin/generate_keys -x throwaway.key >>"$R" 2>&1 || true
+          echo "--- файл приватного ключа, как его записал generate_keys ---" >>"$R"
+          cat throwaway.key >>"$R" 2>&1 || echo "(файла нет)" >>"$R"
+          echo "--- конец файла ключа ---" >>"$R"
+
+          # Публичный ключ печатает сам generate_keys; продублируем явно.
+          say "публичный ключ (-p, если такой флаг есть)"
+          sparkle/bin/generate_keys -p >>"$R" 2>&1 || true
+
+          say "подпись payload.bin"
+          sparkle/bin/sign_update payload.bin >>"$R" 2>&1 || true
+          echo "--- и с явным ключом из файла, если так можно ---" >>"$R"
+          sparkle/bin/sign_update -f throwaway.key payload.bin >>"$R" 2>&1 || true
+          sparkle/bin/sign_update --ed-key-file throwaway.key payload.bin >>"$R" 2>&1 || true
+
+          # --- пункт 3: устройство фреймворка ------------------------------
+          say "Sparkle.framework: верхний уровень"
+          ls -1 sparkle/Sparkle.framework >>"$R" 2>&1 || true
+          say "Sparkle.framework/Versions/B"
+          ls -1 sparkle/Sparkle.framework/Versions/B >>"$R" 2>&1 || true
+          say "размер фреймворка"
+          du -sh sparkle/Sparkle.framework >>"$R" 2>&1 || true
+
+          # --- пункт 4: переживает ли ad-hoc подпись вложенный фреймворк ---
+          # Собираем бандл как build.sh, кладём фреймворк внутрь и подписываем
+          # ИЗНУТРИ НАРУЖУ - как велит дока Sparkle (без --deep).
+          say "ad-hoc подпись бандла с вложенным Sparkle"
+          ./build.sh >>"$R" 2>&1 || echo "build.sh упал" >>"$R"
+          APP=build/climits.app
+          mkdir -p "$APP/Contents/Frameworks"
+          cp -R sparkle/Sparkle.framework "$APP/Contents/Frameworks/"
+          F="$APP/Contents/Frameworks/Sparkle.framework"
+          for inner in \
+            "$F/Versions/B/XPCServices/Installer.xpc" \
+            "$F/Versions/B/XPCServices/Downloader.xpc" \
+            "$F/Versions/B/Autoupdate" \
+            "$F/Versions/B/Updater.app" \
+            "$F"; do
+            if [ -e "$inner" ]; then
+              codesign -f -s - -o runtime "$inner" >>"$R" 2>&1 \
+                && echo "подписано: $inner" >>"$R" \
+                || echo "НЕ подписано: $inner" >>"$R"
+            else
+              echo "нет такого: $inner" >>"$R"
+            fi
+          done
+          codesign -f -s - "$APP" >>"$R" 2>&1 \
+            && echo "подписан бандл целиком" >>"$R" \
+            || echo "бандл подписать НЕ удалось" >>"$R"
+
+          say "codesign --verify --deep"
+          codesign --verify --deep --strict --verbose=2 "$APP" >>"$R" 2>&1 \
+            || echo "проверка подписи НЕ прошла" >>"$R"
+
+          # --- запустится ли вообще ----------------------------------------
+          # Самое важное: если фреймворк вложен неверно, приложение не
+          # стартует вовсе. --version не открывает окон и не требует сети.
+          say "запуск бандла с фреймворком внутри"
+          "$APP/Contents/MacOS/climits" --version >>"$R" 2>&1 \
+            && echo "приложение запускается" >>"$R" \
+            || echo "приложение НЕ запускается (ожидаемо: код ещё без Sparkle)" >>"$R"
+
+          echo "" >>"$R"
+          echo "=== разведка закончена ===" >>"$R"
+          wc -l "$R"
+
+      - name: положить результат в ветку probe
+        run: |
+          git config user.name "ci"
+          git config user.email "ci@localhost"
+          git checkout --orphan probe
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          find . -maxdepth 1 ! -name . ! -name .git ! -name out -exec rm -rf {} + || true
+          mv out/probe.txt ./probe.txt
+          rmdir out || true
+          git add probe.txt
+          git commit -q -m "разведка Sparkle"
+          git push -f origin probe
