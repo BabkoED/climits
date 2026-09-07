@@ -918,6 +918,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                     swapTotalMB: 4096, swapUsedMB: 512)
         remoteMemory = MachineMemory(totalMB: 3915, availableMB: 1224,
                                      swapTotalMB: 7030, swapUsedMB: 1743)
+        // Адрес хоста в снимке тоже подставляем: без него строка про
+        // память СЕРВЕРА в кадр не попадает, и её вёрстка остаётся
+        // непроверенной. Так и вышло на снимке 1.10.0.
+        Prefs.remoteHost = "vps7"
 
         // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
         //
