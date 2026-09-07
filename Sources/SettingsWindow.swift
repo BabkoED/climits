@@ -228,10 +228,18 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             combo(L("шкала", "bar"), "barFilled", Prefs.barFilled, Presets.barFilled, width: 150),
             combo(L("фон", "empty"), "barEmpty", Prefs.barEmpty, Presets.barEmpty, width: 150),
         ]))
+        // Та же логика, что у полоски в меню: галочка стоит ПЕРЕД знаками,
+        // потому что решает, значат ли они что-нибудь в строке трея.
+        // Снятая - возвращает прежние три знака.
+        addCheck(stack, "barRing",
+                 L("Кружок кольцом, а не знаком", "Draw the dot as a ring"),
+                 Prefs.barRing)
         stack.addArrangedSubview(fieldRow([
             combo(L("кружки", "dots"), "iconSet", Prefs.iconSet, Presets.iconSet, width: 190),
             field(L("длина шкалы", "bar width"), "barWidth", "\(Prefs.barWidth)", width: 40),
         ]))
+        stack.addArrangedSubview(small(L("Кольцо показывает тот же самый лимит, что и знак - самый нагруженный, - но процентом, а не одной из трёх ступеней. Места в строке занимает столько же. Пока кольцо включено, знаки из списка ниже работают только в терминальном отчёте.",
+                                         "The ring shows the same limit the glyph did - the busiest one - but as a percentage instead of one of three steps. It takes the same room in the bar. While the ring is on, the glyphs below only apply to the terminal report.")))
         stack.addArrangedSubview(small(L("Кружки - три знака через запятую: спокойно, внимание, тревога. Длина шкалы - от 4 до 40. Из списка можно выбрать, а можно вписать своё, включая эмодзи. Пока шкала рисуется полоской, «шкала» и «фон» работают только в терминальном отчёте; длина считается в тех же клетках.",
                                          "Dots are three glyphs separated by commas: calm, warning, alarm. Bar width is 4 to 40. Pick from the list or type your own, emoji included. While the bar is drawn, \"bar\" and \"empty\" only apply to the terminal report; the width is counted in the same cells.")))
 
@@ -452,6 +460,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             ("showMoney", L("Деньги по прайсу API", "Money at API prices"), Prefs.showMoney),
             ("showTokens", L("Токены за окно", "Tokens this window"), Prefs.showTokens),
             ("showHistory", L("История и темп", "History and pace"), Prefs.showHistory),
+            ("showSessions", L("Кто работает и кто ждёт", "Who is working and who waits"),
+             Prefs.showSessions),
         ]
 
         var rows: [[NSView]] = [[subheader(L("В строке меню", "In the menu bar")),
@@ -536,6 +546,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         let on = sender.state == .on
         switch sender.identifier?.rawValue ?? "" {
         case "showIcon": Prefs.showIcon = on
+        case "barRing": Prefs.barRing = on
+        case "showSessions": Prefs.showSessions = on
         case "showSession": Prefs.showSession = on
         case "showLeft": Prefs.showLeft = on
         case "showWeekly": Prefs.showWeekly = on

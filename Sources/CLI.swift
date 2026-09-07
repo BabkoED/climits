@@ -113,7 +113,7 @@ enum CLI {
             if Prefs.showMoney, let w = windows[b.key == u.session?.key ? "session" : "week"] {
                 let mv = Money.view(for: b, in: w)
                 if mv.spent > 0 {
-                    moneyTail = "  \u{2248}" + mv.spentText
+                    moneyTail = "  " + mv.spentMarked
                 }
             }
             print("  \(bold)\(Fmt.pad(b.long, 20))\(reset)"
@@ -221,6 +221,21 @@ enum CLI {
                 + L("активна - API просил не частить", "active - API asked to slow down"))
         }
 
+        // Сессии. Здесь это отвечает на один конкретный вопрос: пишет ли
+        // ЭТА версия Claude Code статус в файл вообще. Поля status/tempo
+        // условные, и без такой строки «никто не ждёт» и «нам не сказали»
+        // с виду не отличаются никак.
+        let live = Sessions.read()
+        let ss = Sessions.summary(live)
+        print(Fmt.pad(L("Сессии", "Sessions"), 18)
+            + L("\(ss.total) живых: работает \(ss.busy), ждёт \(ss.waiting), простаивает \(ss.idle), без статуса \(ss.unknown)",
+                "\(ss.total) live: working \(ss.busy), waiting \(ss.waiting), idle \(ss.idle), no status \(ss.unknown)"))
+        if ss.total > 0 && ss.unknown == ss.total {
+            print(Fmt.pad("", 18)
+                + L("статус не пишет ни одна - раздел «кто ждёт» будет пуст",
+                    "none reports status - the \"who waits\" section will stay empty"))
+        }
+
         print("\n" + L("Пробую запрос к API\u{2026}", "Trying an API request\u{2026}"))
         switch api.fetchSync(ttl: 0, force: true) {
         case .success(let u):
@@ -234,6 +249,15 @@ enum CLI {
                 ? L("массив limits", "limits array")
                 : L("объекты верхнего уровня", "top-level objects")
             print(Fmt.pad(L("Форма ответа", "Response shape"), 18) + shape)
+            // Опора каждого числа - строкой. Когда цифра выглядит неверной,
+            // отсюда видно, наше это число или их, и спрашивать надо
+            // в разные адреса: процент - к Anthropic, деньги - к нам.
+            print(Fmt.pad(L("Проценты и сброс", "Percent and reset"), 18)
+                + Fidelity.official.word)
+            print(Fmt.pad(L("Деньги и токены", "Money and tokens"), 18)
+                + Fidelity.derived.word
+                + L(" (прайс + расшифровки видимых машин)",
+                    " (price list + transcripts of visible machines)"))
         case .failure(let e):
             print(Fmt.pad("API", 18) + red + (e.errorDescription ?? "?") + reset)
             return 1

@@ -281,6 +281,12 @@ struct MoneyView {
     }
 
     var spentText: String { return MoneyView.money(spent) }
+
+    // Деньги мы считаем сами: свой прайс, свои файлы. Знак ставится здесь,
+    // а не у каждого потребителя - раньше их было три и каждый ставил
+    // литерал руками.
+    var fidelity: Fidelity { return .derived }
+    var spentMarked: String { return fidelity.mark(spentText) }
 }
 
 // Токены за то же окно и тем же способом: сколько прошло через машины,
@@ -291,6 +297,13 @@ struct TokensView {
 
     var isEmpty: Bool { return spent <= 0 }
     var text: String { return Fmt.compact(spent) }
+
+    // Опора та же, что у денег - счёт по нашим файлам, - но знака «≈» тут
+    // нет и не будет: слабость этого числа не в оценке, а в охвате. Токены
+    // мы не прикидываем, мы их пересчитываем; чего не хватает - машин,
+    // и про это сказано подписью под строками, а не тильдой у цифры.
+    // Знак, который означает разное у соседних чисел, хуже отсутствия знака.
+    var fidelity: Fidelity { return .derived }
 }
 
 

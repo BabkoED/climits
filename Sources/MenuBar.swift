@@ -34,6 +34,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Новая версия, если фоновая проверка её нашла.
     private var pendingUpdate: String?
 
+    // Сессии: кто работает, кто ждёт ответа. Два источника лежат отдельно
+    // намеренно. Свои читаются дёшево и прямо перед показом меню - это
+    // несколько маленьких файлов, а не обход расшифровок. Серверные
+    // приезжают раз в обход, вместе с деньгами, и между обходами
+    // устаревают - поэтому их возраст в меню подписан, а свои считаются
+    // текущими.
+    private var localSessions: [AgentSession] = []
+    private var remoteSessions: [AgentSession] = []
+    private var sessions: [AgentSession] {
+        return Sessions.sorted(localSessions + remoteSessions)
+    }
+
     override init() {
         super.init()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -109,8 +121,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 // Это оценка расхода, а не остаток лимита, и подписана так же.
                 if self.usage == nil { self.rescanLocalOnly() }
             }
+            self.refreshLocalSessions()
             self.updateTitle()
         }
+    }
+
+    // Свои сессии - десяток файлов по полкилобайта в ~/.claude/sessions.
+    // Это не обход расшифровок, порога между чтениями здесь не нужно:
+    // на живой машине весь каталог читается быстрее, чем перерисовывается
+    // строка меню. Отдельная функция, а не строка внутри updateTitle,
+    // чтобы чтение файлов не оказалось внутри отрисовки.
+    private func refreshLocalSessions() {
+        localSessions = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
+            ? Sessions.read()
+            : []
     }
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
@@ -153,12 +177,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // Вторая машина считается тем же способом на своей стороне и
             // складывается сюда. Ошибку не глотаем: без неё «считаю обе»
             // и «одна не ответила» выглядят на экране одинаково.
+            var remoteSessions: [AgentSession] = []
             if !host.isEmpty {
                 switch RemoteScan.usage(host: host, path: remotePath,
                                         cutoffs: cutoffs) {
-                case .success(let r) where r.count == w.count:
-                    for i in w.indices { w[i] = w[i] + r[i] }
+                case .success(let r) where r.windows.count == w.count:
+                    for i in w.indices { w[i] = w[i] + r.windows[i] }
                     machines = 2
+                    remoteSessions = r.sessions
                 case .success:
                     err = L("ответ не по форме", "malformed answer")
                 case .failure(let e):
@@ -172,6 +198,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.lastScan = Date()
                 self.machines = machines
                 self.remoteError = err
+                self.remoteSessions = remoteSessions
                 guard w.count == cutoffs.count, w.count >= 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
@@ -226,8 +253,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         let money = (Prefs.showMoney ? u.session.map { Money.view(for: $0, in: sessionWindow) } : nil)
         let tokens = (Prefs.showTokens ? u.session.map { Money.tokens(for: $0, in: sessionWindow) } : nil)
-        let text = BarTitle.render(Prefs.effectiveTemplate, usage: u,
-                                   money: money ?? nil, tokens: tokens ?? nil)
+        let template = Prefs.effectiveTemplate
+
+        // Кольцо занимает место кружка, а не добавляется к нему: макрос
+        // {icon} отдаётся пустым, и он схлопывается вместе со своим
+        // разделителем. Иначе в строке стояли бы оба - и картинка, и знак.
+        let ring = Prefs.barRing && template.contains("{icon}")
+        let text = BarTitle.render(template, usage: u,
+                                   money: money ?? nil, tokens: tokens ?? nil,
+                                   sessions: Sessions.summary(sessions),
+                                   iconGlyph: ring ? "" : nil)
         // Строка меню остаётся нейтральной, пока всё спокойно: цветом
         // в строке меню стоит тревожить только по делу.
         let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
@@ -235,12 +270,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             .foregroundColor: color,
             .font: Palette.barFont,
         ])
+
+        if ring {
+            // С какой стороны строки стоял знак, с той стороны встаёт и
+            // кольцо. Шаблон по умолчанию начинается с {icon}, но свой
+            // формат может кончаться им - и переносить кольцо молча
+            // в начало значит переставить человеку его же строку.
+            let trailing = template.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}")
+            button.image = RingBar.image(percent: u.worst?.pct ?? 0, color: color,
+                                         font: Palette.barFont, trailing: trailing)
+            button.imagePosition = trailing ? .imageTrailing : .imageLeading
+        } else {
+            // Снимать обязательно: галочку можно выключить на живом
+            // приложении, и картинка от прошлой отрисовки осталась бы
+            // висеть рядом со знаком.
+            button.image = nil
+            button.imagePosition = .noImage
+        }
     }
 
     // --- меню ---------------------------------------------------------------
     // Открытие меню - хороший повод освежить данные: человек смотрит именно
     // сейчас. Порог между запросами внутри fetch всё равно не даст частить.
     func menuWillOpen(_ menu: NSMenu) {
+        // Сессии читаются здесь, а не только по ответу сети: ответ может
+        // прийти из кэша и вообще не дойти до чтения файлов, а «ждёт меня»
+        // устаревшее на пять минут - это ровно та цифра, ради которой
+        // меню и открывают.
+        refreshLocalSessions()
         refresh(force: false)
     }
 
@@ -293,6 +350,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
             }
+            for item in sessionRows() { menu.addItem(item) }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
             i.isEnabled = true
@@ -580,7 +638,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var tokens = ""
         if Prefs.showMoney {
             let mv = Money.view(for: b, in: w)
-            if mv.spent > 0 { money = "\u{2248}" + mv.spentText }
+            if mv.spent > 0 { money = mv.spentMarked }
         }
         if Prefs.showTokens {
             let tv = Money.tokens(for: b, in: w)
@@ -642,6 +700,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                            range: NSRange(location: 0, length: title.length))
         item.attributedTitle = title
         return item
+    }
+
+    // Раздел «сессии»: кто работает, а кто ждёт ответа.
+    //
+    // Отвечает на другой вопрос, чем лимиты, и поэтому стоит отдельным
+    // разделом, а не колонкой в их строках: лимит - это «работать дальше
+    // или подождать», а это - «не стоит ли агент». Сессия, упёршаяся в
+    // разрешение, лимита не тратит вовсе.
+    //
+    // Пустой раздел не показываем совсем: заголовок «Сессии» без строк
+    // занимает место и не отвечает ни на что.
+    private func sessionRows() -> [NSMenuItem] {
+        guard Prefs.showSessions else { return [] }
+        let lines = Sessions.lines(sessions, nameLimit: MenuBarController.nameLimit,
+                                   remoteHost: Prefs.remoteHost, remoteScanAt: lastScan)
+        guard !lines.rows.isEmpty else { return [] }
+
+        var out: [NSMenuItem] = [.separator(), dim(lines.header)]
+        for r in lines.rows { out.append(plain(r)) }
+        for n in lines.notes { out.append(dim(n)) }
+        return out
     }
 
     private func plain(_ s: String) -> NSMenuItem {
@@ -760,6 +839,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                           cacheWrite: 400_000, cacheRead: 21_000_000,
                                           requests: 240, cacheWrite1h: 0)
         weeklyWindow = ww
+
+        // Сессии в CI взять тоже неоткуда: ~/.claude/sessions там нет,
+        // и раздел не попал бы в кадр вовсе. Состав подобран так, чтобы
+        // в снимок разом попали все четыре состояния и обе машины: по
+        // одному цвету и одному состоянию проверяется одна четверть.
+        Prefs.showSessions = true
+        localSessions = [
+            AgentSession(pid: 901, name: "budget-app", folder: "budget-app",
+                         surface: "Terminal", state: .waiting,
+                         waitingFor: L("разрешение на запись", "write permission"),
+                         since: Date().addingTimeInterval(-260), machine: ""),
+            AgentSession(pid: 902, name: "climits", folder: "climits",
+                         surface: "VS Code", state: .busy, waitingFor: nil,
+                         since: Date().addingTimeInterval(-70), machine: ""),
+            AgentSession(pid: 903, name: "sintra", folder: "sintra",
+                         surface: "Terminal", state: .idle, waitingFor: nil,
+                         since: Date().addingTimeInterval(-4200), machine: ""),
+        ]
+        remoteSessions = [
+            AgentSession(pid: 904, name: "work-71", folder: "harness",
+                         surface: "SDK", state: .unknown, waitingFor: nil,
+                         since: nil, machine: "vps7"),
+        ]
+        lastScan = Date().addingTimeInterval(-95)
 
         // Тёмная тема задаётся САМОМУ МЕНЮ, а не системе и не приложению.
         // Проверено двумя прогонами: `defaults write -g AppleInterfaceStyle`

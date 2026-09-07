@@ -40,6 +40,23 @@ enum Fmt {
         return "\(mins)\(L("м", "m"))"
     }
 
+    // Сколько прошло: «3м», «1ч 20м», «2д 4ч». Зеркало left, и намеренно
+    // не через него: там дробь отбрасывается в свою пользу, потому что это
+    // ОСТАТОК и завышать его нельзя. Здесь наоборот - это возраст, и
+    // занижать его нельзя: сессия, которая ждёт «59с», должна называться
+    // минутой, а не нулём. Одна функция на оба случая округляла бы одну
+    // из двух сторон неверно.
+    static func ago(_ date: Date) -> String {
+        let secs = max(0, Int(-date.timeIntervalSinceNow))
+        if secs < 60 { return L("<1м", "<1m") }
+        let days = secs / 86400
+        let hours = (secs % 86400) / 3600
+        let mins = (secs % 3600) / 60
+        if days > 0 { return "\(days)\(L("д", "d")) \(hours)\(L("ч", "h"))" }
+        if hours > 0 { return String(format: "%d%@ %02d%@", hours, L("ч", "h"), mins, L("м", "m")) }
+        return "\(mins)\(L("м", "m"))"
+    }
+
     // Голый отсчёт до сброса: «2ч 14м», «~1м». Слова «через» здесь нет
     // намеренно - строка стоит рядом со шкалой лимита, и что это остаток,
     // видно из места. Слово занимало знак, который нужнее цифрам.
@@ -195,6 +212,59 @@ enum Fmt {
     }
 }
 
+// Числа вёрстки кольца - здесь, а не в рисовалке.
+//
+// Приём взят у codenotch (`NSLayout` + `NotchLayoutTests`), и он стоит того
+// по нашей же причине: Мака под рукой нет, собрать и посмотреть нельзя.
+// Пока размеры сидят внутри AppKit-файла, они не проверяются здесь ничем -
+// AppKit на Linux не типизируется вовсе. Вынесенные в чистый файл, они
+// становятся утверждениями, которые ловит run-tests.sh.
+//
+// Рисовалка (RingBar) отсюда только читает и сама ничего не считает.
+enum Layout {
+    // Диаметр кольца - от высоты заглавной буквы, а не в точках: человек,
+    // поднявший шрифт трея, ждёт, что кольцо вырастет вместе с цифрами.
+    // Коэффициент больше единицы намеренно: круг той же высоты, что буква,
+    // выглядит мельче её - у буквы есть вертикальные штрихи во всю высоту,
+    // у круга во всю высоту только одна точка.
+    static let ringDiameterOfCapHeight: Double = 1.22
+
+    // Толщина обода - доля диаметра. Тоньше 1.5 точки на не-Retina
+    // экране кольцо пропадает, поэтому есть и нижняя граница в точках.
+    static let ringStrokeOfDiameter: Double = 0.22
+    static let ringStrokeMin: Double = 1.5
+
+    // Просвет между кольцом и первой цифрой.
+    static let ringGap: Double = 3
+
+    // Наименьшая заметная дуга, в градусах. Без неё 1% - это волосок в
+    // пару пикселей: он читается как грязь на экране, а не как «уже начал».
+    // Тот же приём, что у полоски (Fmt.fillWidth с minVisible).
+    static let ringMinSweep: Double = 14
+
+    // Сколько дуги занимает процент. 0 - пусто, 100 - полный круг.
+    static func ringSweep(pct: Int) -> Double {
+        return Fmt.fillWidth(pct: pct, total: 360, minVisible: ringMinSweep)
+    }
+
+    // Выше строки меню кольцо не растёт. Потолок константой, а не запросом
+    // к NSStatusBar.system.thickness: этот вызов отсюда не проверить ничем,
+    // а строка меню - 22 точки на всех макбуках, включая Retina. Ошибиться
+    // тут можно только в одну сторону, и она безопасная - кольцо чуть
+    // меньше строки вместо кольца, срезанного её краем. Без потолка шрифт
+    // трея, поднятый до 28, давал диаметр 24 - больше строки.
+    static let ringMaxDiameter: Double = 18
+
+    static func ringDiameter(capHeight: Double) -> Double {
+        let want = (capHeight * ringDiameterOfCapHeight).rounded()
+        return max(8, min(ringMaxDiameter, want))
+    }
+
+    static func ringStroke(diameter: Double) -> Double {
+        return max(ringStrokeMin, (diameter * ringStrokeOfDiameter * 2).rounded() / 2)
+    }
+}
+
 // Сборка строки для трея из шаблона.
 //
 // Пустые макросы (модель, которой нет в тарифе; деньги при выключенном
@@ -222,10 +292,18 @@ enum BarTitle {
         ("{extra}",      L("потрачено сверх лимита", "extra usage spent")),
         ("{extra.pct}",  L("сверх лимита, процент", "extra usage percent")),
         ("{money}",      L("во сколько обошлось окно", "what this window cost")),
+        ("{sessions}",   L("кто работает и кто ждёт меня", "who is working and who waits")),
     ]
 
+    // iconGlyph - чем нарисовать {icon}. Пусто означает «не знаком»: в
+    // режиме кольца кружок рисуется картинкой рядом со строкой, а из самой
+    // строки макрос должен исчезнуть вместе со своим разделителем. Отдавать
+    // сюда картинку нельзя - здесь строка, и её же показывает предпросмотр
+    // настроек и `--doctor`.
     static func render(_ template: String, usage: Usage,
-                       money: MoneyView? = nil, tokens: TokensView? = nil) -> String {
+                       money: MoneyView? = nil, tokens: TokensView? = nil,
+                       sessions: SessionSummary? = nil,
+                       iconGlyph: String? = nil) -> String {
         var s = template
 
         func put(_ macro: String, _ value: String) {
@@ -240,7 +318,11 @@ enum BarTitle {
         let session = usage.session
         let weekly = usage.bucket("seven_day")
 
-        put("{icon}", Fmt.icon(for: usage.worst?.pct ?? 0))
+        put("{icon}", iconGlyph ?? Fmt.icon(for: usage.worst?.pct ?? 0))
+        // Сессии в строке трея выключены по умолчанию: место там занято
+        // процентом и отсчётом, они отвечают на «работать или подождать».
+        // Кому нужнее «не стоит ли агент» - галочка в настройках.
+        put("{sessions}", sessions.map { $0.text } ?? "")
         put("{5h}", pctText(session))
         put("{5h.left}", session?.resetsAt != nil ? Fmt.left(session?.resetsAt) : "")
         put("{5h.reset}", Fmt.clock(session?.resetsAt))
@@ -291,7 +373,7 @@ enum BarTitle {
         // Знак «≈» ставится здесь, а не в MoneyView: в строке меню он несёт
         // смысл - счёт идёт по нашему прайсу и только по видимым машинам,
         // а в отчёте рядом уже есть подпись словами.
-        put("{money}", money.map { $0.spent > 0 ? "\u{2248}" + $0.spentText : "" } ?? "")
+        put("{money}", money.map { $0.spent > 0 ? $0.spentMarked : "" } ?? "")
         put("{tokens}", tokens.map { $0.isEmpty ? "" : $0.text } ?? "")
 
         let e = usage.extra

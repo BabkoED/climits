@@ -74,12 +74,21 @@ enum RemoteScan {
         }
     }
 
+    // Что приезжает с той стороны. Раньше это был просто массив окон;
+    // сессии приехали к нему в компанию, потому что везёт их тот же
+    // единственный вызов ssh. Заводить второй заход ради восьми маленьких
+    // файлов - это второе рукопожатие и второй шанс не ответить вовремя.
+    struct Answer {
+        var windows: [WindowUsage] = []
+        var sessions: [AgentSession] = []
+    }
+
     // Сколько ждём. Обход сотни мегабайт на той стороне - это секунды, но
     // на холодном кэше файловой системы бывает и полминуты.
     static let timeout: TimeInterval = 60
 
     // Синхронный вызов: гонять его можно только с фоновой очереди.
-    static func usage(host: String, path: String, cutoffs: [Date]) -> Result<[WindowUsage], Failure> {
+    static func usage(host: String, path: String, cutoffs: [Date]) -> Result<Answer, Failure> {
         // Адрес, начинающийся с дефиса, ssh примет за свой ключ. Пробел
         // внутри - это уже не адрес, а попытка дописать аргументов.
         guard !host.isEmpty, !host.hasPrefix("-"),
@@ -96,7 +105,7 @@ enum RemoteScan {
 
         switch run(args: args, stdin: script) {
         case .failure(let e): return .failure(e)
-        case .success(let data): return parse(data, expected: cutoffs.count)
+        case .success(let data): return parse(data, expected: cutoffs.count, host: host)
         }
     }
 
@@ -184,7 +193,8 @@ enum RemoteScan {
     }
 
     // --- разбор ответа ------------------------------------------------------
-    static func parse(_ data: Data, expected: Int) -> Result<[WindowUsage], Failure> {
+    static func parse(_ data: Data, expected: Int,
+                      host: String = "") -> Result<Answer, Failure> {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let list = root["windows"] as? [[String: Any]], list.count == expected
         else {
@@ -214,7 +224,20 @@ enum RemoteScan {
             w.truncated = (item["truncated"] as? Bool) ?? false
             out.append(w)
         }
-        return .success(out)
+
+        // Сессии - необязательная часть ответа. Скрипт на той стороне
+        // старой версии их не пришлёт, и это не повод отказаться от денег
+        // и токенов, которые пришли: раздел просто будет пуст.
+        //
+        // Живость на той стороне проверил тот же скрипт: pid оттуда на
+        // этой машине не значит ничего, а то и значит чужой процесс.
+        var live: [AgentSession] = []
+        if let items = root["sessions"] as? [[String: Any]] {
+            for item in items {
+                if let s = Sessions.parse(json: item, machine: host) { live.append(s) }
+            }
+        }
+        return .success(Answer(windows: out, sessions: Sessions.sorted(live)))
     }
 
     // --- то, что выполняется на той стороне ----------------------------------
@@ -346,6 +369,56 @@ for w in wins:
         "unknown": sorted(w["unknown"]),
         "truncated": w["truncated"],
     })
-print(json.dumps({"windows": out}))
+
+# Кто на той стороне работает, а кто ждёт ответа.
+#
+# Claude Code сам пишет ~/.claude/sessions/<pid>.json на каждую сессию.
+# Каталог берём рядом с расшифровками, а не по домашнему пути: человек мог
+# указать в настройках свой каталог, и тогда сессии лежат при нём.
+#
+# Живость проверяем ЗДЕСЬ. Отдавать pid на ту сторону и спрашивать там
+# нельзя вовсе: pid с сервера на маке либо не значит ничего, либо значит
+# чужой процесс. os.kill(pid, 0) сигнала не посылает, только спрашивает.
+sessions = []
+sdir = os.path.join(os.path.dirname(root.rstrip("/")), "sessions")
+now = datetime.datetime.now().timestamp()
+try:
+    names = sorted(os.listdir(sdir))
+except OSError:
+    names = []
+for name in names:
+    if not name.endswith(".json"):
+        continue
+    try:
+        with open(os.path.join(sdir, name)) as fh:
+            rec = json.load(fh)
+    except Exception:
+        continue
+    if not isinstance(rec, dict):
+        continue
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        continue
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        continue          # файл остался от упавшего процесса
+    except PermissionError:
+        pass              # процесс есть, но чужой - живой
+    except Exception:
+        continue
+    started = rec.get("startedAt")
+    if isinstance(started, (int, float)) and now - started / 1000 > 24 * 3600:
+        continue          # тот же порог, что и на этой стороне
+    # Отдаём только то, что показываем, и ни знака больше: cwd целиком -
+    # это имена проектов и заказчиков, а в трее видно последний каталог.
+    keep = ("pid", "name", "entrypoint", "status", "tempo",
+            "waitingFor", "needs", "statusUpdatedAt", "updatedAt")
+    item = {k: rec[k] for k in keep if k in rec}
+    cwd = rec.get("cwd")
+    item["cwd"] = os.path.basename(cwd.rstrip("/")) if isinstance(cwd, str) else ""
+    sessions.append(item)
+
+print(json.dumps({"windows": out, "sessions": sessions}))
 """#
 }

@@ -420,12 +420,34 @@ let answer = """
  "cache_read": 4, "requests": 5}}, "unknown": ["<весёлая>"], "truncated": false}]}
 """
 switch RemoteScan.parse(Data(answer.utf8), expected: 1) {
-case .success(let w):
-    check("ответ второй машины разобран", w.count == 1)
-    check("чтение из кэша не потерялось", "\(w[0].byFamily["opus"]?.cacheRead ?? -1)", "4")
-    check("незнакомые модели доехали", w[0].unknownModels.contains("<весёлая>"))
+case .success(let a):
+    check("ответ второй машины разобран", a.windows.count == 1)
+    check("чтение из кэша не потерялось", "\(a.windows[0].byFamily["opus"]?.cacheRead ?? -1)", "4")
+    check("незнакомые модели доехали", a.windows[0].unknownModels.contains("<весёлая>"))
+    // Старая версия скрипта на той стороне сессий не пришлёт. Это не
+    // повод отказаться от денег и токенов, которые пришли.
+    check("ответ без сессий принимается, раздел просто пуст", a.sessions.isEmpty)
 case .failure(let e):
     check("ответ второй машины разобран: \(e.text)", false)
+}
+
+let withSessions = """
+{"windows": [{"families": {}, "unknown": [], "truncated": false}],
+ "sessions": [{"pid": 4242, "name": "work-71", "cwd": "harness",
+               "entrypoint": "sdk-cli", "status": "waiting",
+               "waitingFor": "разрешение на запись"}]}
+"""
+switch RemoteScan.parse(Data(withSessions.utf8), expected: 1, host: "vps7") {
+case .success(let a):
+    check("серверная сессия доехала", a.sessions.count == 1)
+    check("состояние разобрано", a.sessions.first?.state == .waiting)
+    check("машина подписана адресом хоста", a.sessions.first?.machine ?? "", "vps7")
+    // Живость на той стороне проверил тот же скрипт. Проверять pid
+    // с сервера здесь нельзя: он либо не значит ничего, либо значит
+    // чужой процесс на этой машине.
+    check("живость серверной сессии тут не перепроверяется", a.sessions.count == 1)
+case .failure(let e):
+    check("серверная сессия доехала: \(e.text)", false)
 }
 switch RemoteScan.parse(Data("не json".utf8), expected: 1) {
 case .success: check("мусор вместо ответа не принимается за ноль", false)
@@ -1050,6 +1072,166 @@ check("считаем знаки, а не байты", Fmt.clip("Неделя, �
 check("многоточие занимает один знак", Fmt.clip("abcdefghijklm", 10).count == 10)
 check("пустое имя переживает обрезку", Fmt.clip("", 10), "")
 check("граница 1 не роняет", Fmt.clip("abc", 1), "abc")
+
+
+// ---- сессии: кто работает, кто ждёт ----------------------------------------
+//
+// Главное здесь - не потерять разницу между «сказано, что простаивает» и
+// «статуса нет». Свалив их в одно, раздел показывал бы вечное
+// «простаивает» на сессиях, про которые нам ничего не говорили, - и это
+// был бы индикатор, который ничего не измеряет, а выглядит как измеряющий.
+print("\nсессии")
+
+// Ровно та форма, что лежит на этой машине: 7 живых файлов, CLI 2.1.241.
+// Полей status/tempo/waitingFor в ней НЕТ - они пишутся условно.
+let sdkSession: [String: Any] = [
+    "pid": 998885, "cwd": "/home/babko/Work", "name": "work-71",
+    "entrypoint": "sdk-cli", "kind": "interactive", "startedAt": 1788741838489,
+]
+if let s = Sessions.parse(json: sdkSession) {
+    check("без статуса это «неизвестно», а не «простаивает»", s.state == .unknown)
+    check("имя берётся из файла", s.name, "work-71")
+    check("sdk-запуск назван своим словом", s.surface, "SDK")
+    check("время статуса без поля пусто", s.since == nil)
+} else {
+    check("запись без статуса всё равно разобрана", false)
+}
+
+let waiting: [String: Any] = [
+    "pid": 1, "cwd": "/tmp/budget-app", "name": "bapp",
+    "entrypoint": "cli", "status": "waiting", "waitingFor": "разрешение",
+    "statusUpdatedAt": Date().addingTimeInterval(-180).timeIntervalSince1970 * 1000,
+]
+if let s = Sessions.parse(json: waiting) {
+    check("ждёт человека", s.state == .waiting)
+    check("чего именно ждёт - доехало", s.waitingFor ?? "", "разрешение")
+    check("терминал назван терминалом", s.surface, "Terminal")
+} else {
+    check("ждущая сессия разобрана", false)
+}
+
+// tempo - нормализованная форма того же самого; она главнее status.
+check("tempo=blocked это «ждёт»",
+      Sessions.parse(json: ["pid": 2, "cwd": "/x", "tempo": "blocked"])?.state == .waiting)
+check("tempo=active это «работает»",
+      Sessions.parse(json: ["pid": 3, "cwd": "/x", "tempo": "active"])?.state == .busy)
+// Незнакомое значение - это «сказали, но не то, что мы знаем». Не unknown:
+// про эту сессию нам ответили, просто словом, которого мы не понимаем.
+check("незнакомый статус не выдаётся за отсутствие статуса",
+      Sessions.parse(json: ["pid": 4, "cwd": "/x", "status": "мурлычет"])?.state == .idle)
+check("без pid это не запись о сессии", Sessions.parse(json: ["cwd": "/x"]) == nil)
+check("без cwd тоже", Sessions.parse(json: ["pid": 5]) == nil)
+// Чужая программа отдаёт числа то Int, то строкой - оба раза это pid.
+check("pid строкой тоже читается",
+      Sessions.parse(json: ["pid": "77", "cwd": "/x"])?.pid == 77)
+
+let mix = [
+    AgentSession(pid: 1, name: "a", folder: "a", surface: "", state: .idle,
+                 waitingFor: nil, since: nil, machine: ""),
+    AgentSession(pid: 2, name: "b", folder: "b", surface: "", state: .waiting,
+                 waitingFor: "ответ", since: nil, machine: ""),
+    AgentSession(pid: 3, name: "c", folder: "c", surface: "", state: .busy,
+                 waitingFor: nil, since: nil, machine: ""),
+    AgentSession(pid: 4, name: "d", folder: "d", surface: "", state: .unknown,
+                 waitingFor: nil, since: nil, machine: ""),
+]
+let order = Sessions.sorted(mix).map { $0.pid }
+check("первым идёт то, что требует действия", "\(order)", "[2, 3, 1, 4]")
+
+let sum = Sessions.summary(mix)
+check("сводка считает по состояниям", "\(sum.waiting)/\(sum.busy)/\(sum.idle)/\(sum.unknown)",
+      "1/1/1/1")
+check("в сводке сначала ждущие", sum.text.hasPrefix(L("ждёт меня 1", "waiting 1")))
+// Пустая сводка при одних unknown читалась бы как «никто не работает».
+let onlyUnknown = Sessions.summary([mix[3]])
+check("одни unknown не молчат", !onlyUnknown.text.isEmpty)
+check("одни unknown не выдаются за простой", !onlyUnknown.text.contains(L("работает", "working")))
+check("а вот один простаивающий сводке сказать нечего", Sessions.summary([mix[0]]).text, "")
+
+// Раздел, который каждый раз отвечает «не знаю», хуже отсутствующего:
+// объяснение этому месту - в --doctor, а не в пяти одинаковых строках.
+let allUnknown = Sessions.lines([mix[3]])
+check("одни unknown - раздела нет совсем", allUnknown.rows.isEmpty && allUnknown.header.isEmpty)
+check("но при смешанном составе раздел есть",
+      !Sessions.lines([mix[1], mix[3]]).rows.isEmpty)
+
+let lines = Sessions.lines(mix, nameLimit: 10, remoteHost: "vps7", remoteScanAt: Date())
+check("указатель стоит у ждущего", lines.rows.first?.hasPrefix("\u{25B8}") ?? false)
+check("у остальных указателя нет", lines.rows.dropFirst().allSatisfy { !$0.hasPrefix("\u{25B8}") })
+check("про неизвестный статус сказано словами",
+      lines.notes.contains { $0.contains(L("статус пишут не все", "not every launch")) })
+// Оговорка про сервер появляется только если серверные строки в списке есть.
+check("нет серверных сессий - нет и оговорки про обход",
+      !lines.notes.contains { $0.contains("vps7") })
+
+var many: [AgentSession] = []
+for i in 1...20 {
+    many.append(AgentSession(pid: i, name: "s\(i)", folder: "f", surface: "",
+                             state: .busy, waitingFor: nil, since: nil, machine: ""))
+}
+let capped = Sessions.lines(many)
+check("список не растёт без предела", capped.rows.count == Sessions.maxRows + 1)
+check("и говорит, сколько скрыл",
+      capped.rows.last?.contains(L("и ещё 14", "14 more")) ?? false)
+
+// Мёртвый pid: файл остаётся лежать после падения процесса, и без проверки
+// живости трей показывал бы «работает» на сессии, которой нет неделю.
+check("pid 0 не живой", !Sessions.isAlive(pid: 0))
+check("свой процесс живой", Sessions.isAlive(pid: Int(getpid())))
+
+// ---- возраст против остатка ------------------------------------------------
+// Две функции, потому что округлять их надо в разные стороны: остаток
+// нельзя завышать, возраст нельзя занижать.
+print("\nвозраст")
+check("59 секунд ожидания - это уже не ноль", Fmt.ago(Date().addingTimeInterval(-59)),
+      L("<1м", "<1m"))
+check("три минуты", Fmt.ago(Date().addingTimeInterval(-185)), L("3м", "3m"))
+check("часы с минутами", Fmt.ago(Date().addingTimeInterval(-3600 - 120)),
+      L("1ч 02м", "1h 02m"))
+check("сутки с часами", Fmt.ago(Date().addingTimeInterval(-86400 - 7200)),
+      L("1д 2ч", "1d 2h"))
+check("будущее не даёт отрицательного возраста",
+      Fmt.ago(Date().addingTimeInterval(600)), L("<1м", "<1m"))
+
+// ---- вёрстка кольца --------------------------------------------------------
+//
+// Числа кольца проверяются здесь по той же причине, по которой вынесены
+// из рисовалки: Мака нет, посмотреть нельзя, а AppKit на Linux не
+// типизируется вовсе. Это единственная проверка кольца до чужой машины.
+print("\nкольцо в строке меню")
+check("ноль - пустое кольцо, а не волосок", Layout.ringSweep(pct: 0), 0)
+check("сто процентов - полный круг", Layout.ringSweep(pct: 100), 360)
+check("половина - половина круга", Layout.ringSweep(pct: 50), 180)
+// Тот же приём, что у полоски: любой ненулевой процент виден.
+check("один процент виден, а не пропадает", Layout.ringSweep(pct: 1), Layout.ringMinSweep)
+check("процент выше ста не даёт дуги длиннее круга", Layout.ringSweep(pct: 150), 360)
+check("отрицательный процент не даёт отрицательной дуги", Layout.ringSweep(pct: -5), 0)
+// Кольцо растёт вместе со шрифтом трея: иначе поднявший шрифт до 20
+// получает нитку под цифрами.
+check("диаметр растёт от шрифта",
+      Layout.ringDiameter(capHeight: 20) > Layout.ringDiameter(capHeight: 9))
+check("на мелком шрифте кольцо всё равно не исчезает",
+      Layout.ringDiameter(capHeight: 1) >= 8)
+// Строка меню - 22 точки. Без потолка шрифт трея, поднятый до 28, давал
+// кольцо больше строки, и его срезало бы краем.
+check("выше строки меню кольцо не растёт",
+      Layout.ringDiameter(capHeight: 28) <= Layout.ringMaxDiameter)
+check("и потолок ниже самой строки меню", Layout.ringMaxDiameter < 22)
+check("обод не тоньше видимого", Layout.ringStroke(diameter: 8) >= Layout.ringStrokeMin)
+// Обод рисуется по средней линии: радиус меньше на половину толщины,
+// иначе половина обода уходит за край картинки.
+check("обод умещается в диаметр", Layout.ringStroke(diameter: 16) < 16 / 2)
+
+// ---- опора числа -----------------------------------------------------------
+// Знак «≈» у денег стоял тремя литералами в трёх файлах. Теперь правило
+// одно, и проверяется оно здесь.
+print("\nопора числа")
+check("у нашего счёта знак есть", Fidelity.derived.mark, "\u{2248}")
+check("у числа от Anthropic знака нет", Fidelity.official.mark, "")
+check("деньги помечены как наш счёт",
+      MoneyView.make(spent: 12.5, partial: false).spentMarked, "\u{2248}$12.5")
+check("токены знака не получают: их слабость в охвате, а не в оценке",
+      TokensView(spent: 1000).text, "1" + L("к", "K"))
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)
