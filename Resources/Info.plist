@@ -13,11 +13,23 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.7.0</string>
+    <string>1.8.0</string>
     <key>CFBundleVersion</key>
-    <string>24</string>
+    <string>25</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <!-- Sparkle: второй путь обновления. Ключи стоят всегда, но сам
+         апдейтер поднимается только по галочке в настройках - см.
+         SparkleBridge.swift. Автопроверки выключены здесь же, чтобы чужой
+         код не ходил в сеть по своему расписанию: расписание наше. -->
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/BabkoED/climits/appcast/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>CcOzw3ie7OFkF4P2nvBuFOEbYQsbhxhoBnx3li+KYcs=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
     <key>LSUIElement</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

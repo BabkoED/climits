@@ -61,6 +61,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh(force: false)
         rearmTimer()
         checkUpdatesQuietly()
+        // Тихая проверка остаётся на первом пути - он проверен временем.
+        // Sparkle поднимается только по галочке и только для установки.
+        SparkleBridge.shared.startIfEnabled()
         // Прайс тянем при запуске, а не по таймеру: сутки живут дольше
         // любого сеанса, и второй раз за день это всё равно не сработает.
         // Перерисовка нужна - цены поменяли деньги в уже показанной строке.
@@ -391,8 +394,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let v = pendingUpdate {
             menu.addItem(dim(L("вышла версия \(v)", "version \(v) is out")))
         }
-        menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
-                            #selector(checkUpdates), key: ""))
+        // Два пункта, а не один, и только когда второй путь включён.
+        //
+        // Так сделано намеренно: решать за человека, что считать отказом
+        // Sparkle и когда падать на запасной путь, значит угадывать коды
+        // чужих ошибок. Пункт «через GitHub» на месте всегда - это и есть
+        // запасной путь, и нажимает его человек.
+        if case .ready = SparkleBridge.shared.state {
+            menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
+                                #selector(checkUpdatesSparkle), key: ""))
+            menu.addItem(action(L("То же, через GitHub\u{2026}", "Same, via GitHub\u{2026}"),
+                                #selector(checkUpdates), key: ""))
+        } else {
+            menu.addItem(action(L("Проверить обновления\u{2026}", "Check for updates\u{2026}"),
+                                #selector(checkUpdates), key: ""))
+            // Об отказе Sparkle молчать нельзя: иначе включённая галочка
+            // и неработающий путь с виду одинаковы.
+            if case .failed(let e) = SparkleBridge.shared.state {
+                menu.addItem(dim(L("Sparkle не смог: \(Fmt.clip(e, 40))",
+                                   "Sparkle failed: \(Fmt.clip(e, 40))")))
+            }
+        }
         menu.addItem(.separator())
         menu.addItem(action(L("Выйти", "Quit"), #selector(quit), key: "q"))
     }
@@ -751,6 +773,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func doRefresh() { refresh(force: true) }
 
+    // Через Sparkle. Не смог даже начать - честно уходим на первый путь,
+    // а не молчим: человек нажал «проверить» и ждёт ответа.
+    @objc private func checkUpdatesSparkle() {
+        NSApp.activate(ignoringOtherApps: true)
+        if !SparkleBridge.shared.checkForUpdates() { checkUpdates() }
+    }
+
     @objc private func checkUpdates() {
         NSApp.activate(ignoringOtherApps: true)
         Updater.shared.check(silent: false) { [weak self] found in
@@ -863,6 +892,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          since: nil, machine: "vps7"),
         ]
         lastScan = Date().addingTimeInterval(-95)
+
+        // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
+        //
+        // Это единственная возможная проверка того, что чужой фреймворк
+        // вообще поднимается: собрался - видно по сборке, а загрузился ли
+        // dylib по нашему rpath и не ругается ли апдейтер на настройку,
+        // видно только на живом macOS. В меню состояние подписано словами,
+        // значит на снимке будет либо два пункта обновления, либо строка
+        // «Sparkle не смог» с причиной.
+        Prefs.sparkleEnabled = true
+        SparkleBridge.shared.startIfEnabled()
 
         // Тёмная тема задаётся САМОМУ МЕНЮ, а не системе и не приложению.
         // Проверено двумя прогонами: `defaults write -g AppleInterfaceStyle`

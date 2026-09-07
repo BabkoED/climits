@@ -462,6 +462,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             ("showHistory", L("История и темп", "History and pace"), Prefs.showHistory),
             ("showSessions", L("Кто работает и кто ждёт", "Who is working and who waits"),
              Prefs.showSessions),
+            ("sparkleEnabled", L("Обновляться через Sparkle", "Update via Sparkle"),
+             Prefs.sparkleEnabled),
         ]
 
         var rows: [[NSView]] = [[subheader(L("В строке меню", "In the menu bar")),
@@ -548,6 +550,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showIcon": Prefs.showIcon = on
         case "barRing": Prefs.barRing = on
         case "showSessions": Prefs.showSessions = on
+        case "sparkleEnabled":
+            Prefs.sparkleEnabled = on
+            // Поднять сразу, а не после перезапуска: галочка, которая
+            // «сработает потом», выглядит как неработающая.
+            if on { SparkleBridge.shared.startIfEnabled() }
         case "showSession": Prefs.showSession = on
         case "showLeft": Prefs.showLeft = on
         case "showWeekly": Prefs.showWeekly = on
