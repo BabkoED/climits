@@ -285,10 +285,34 @@ enum CLI {
         let link = binDir.appendingPathComponent("climits")
         do {
             try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: link.path) {
-                try FileManager.default.removeItem(at: link)
+
+            // На месте команды может лежать не наша ссылка, а чужой файл -
+            // и удалять его молча нельзя.
+            //
+            // Так и случилось 07.09.2026: в ~/bin/climits лежал скрипт на
+            // 60 КБ от прежней связки bash + SwiftBar, он перехватывал имя,
+            // и `climits --doctor` показывал версию 1.10 - то есть отчёт
+            // совсем другой программы. Первая версия этого кода стёрла бы
+            // его без вопросов и без копии.
+            //
+            // Своя ссылка заменяется молча: она наша, и в ней нет данных.
+            // Всё остальное отодвигается в сторону с датой в имени.
+            let fm = FileManager.default
+            if let attrs = try? fm.attributesOfItem(atPath: link.path),
+               let type = attrs[.type] as? FileAttributeType {
+                if type == .typeSymbolicLink {
+                    try fm.removeItem(at: link)
+                } else {
+                    let f = DateFormatter()
+                    f.dateFormat = "yyyyMMdd-HHmmss"
+                    let kept = binDir.appendingPathComponent(
+                        "climits.bak-" + f.string(from: Date()))
+                    try fm.moveItem(at: link, to: kept)
+                    print(L("то, что лежало на этом месте, отодвинуто: ",
+                            "what was there has been moved aside: ") + kept.path)
+                }
             }
-            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: exe))
+            try fm.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: exe))
         } catch {
             print("\(error.localizedDescription)")
             return 1
