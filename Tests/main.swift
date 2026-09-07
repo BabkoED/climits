@@ -1159,10 +1159,43 @@ let lines = Sessions.lines(mix, nameLimit: 10, remoteHost: "vps7", remoteScanAt:
 check("указатель стоит у ждущего", lines.rows.first?.hasPrefix("\u{25B8}") ?? false)
 check("у остальных указателя нет", lines.rows.dropFirst().allSatisfy { !$0.hasPrefix("\u{25B8}") })
 check("про неизвестный статус сказано словами",
-      lines.notes.contains { $0.contains(L("статус пишут не все", "not every launch")) })
+      lines.notes.contains { $0.contains(L("без статуса", "without status")) })
 // Оговорка про сервер появляется только если серверные строки в списке есть.
 check("нет серверных сессий - нет и оговорки про обход",
       !lines.notes.contains { $0.contains("vps7") })
+
+// Ширина строки не должна зависеть от того, как чужая программа назовёт
+// проект или чего попросит. Рост ширины меню от содержимого закрывался
+// в 1.6.2 - завести его заново с другой стороны нельзя.
+let longest = Sessions.lines([
+    AgentSession(pid: 7, name: "budget-app", folder: "budget-app",
+                 surface: "Terminal", state: .waiting,
+                 waitingFor: "разрешение на запись в каталог проекта",
+                 since: Date().addingTimeInterval(-260), machine: "vps7-длинный-адрес")])
+check("строка сессии не шире предела",
+      longest.rows.allSatisfy { $0.count <= Sessions.maxLine })
+check("оговорка не шире строк сессий",
+      longest.notes.allSatisfy { $0.count <= Sessions.maxLine + 8 })
+// Жертвуем «через что запущено», а не тем, чего сессия хочет.
+let tight = Sessions.composeLine(mark: "\u{25B8} ", machine: "vps7",
+                                 name: "budget-app", surface: "Terminal",
+                                 state: "ждёт меня", waitingFor: "разрешение на запись",
+                                 age: "4м")
+check("длинной строке «через что» не досталось", !tight.contains("Terminal"))
+// Возраст важнее текста просьбы: он один говорит, насколько всё плохо.
+check("сколько ждёт - уцелело", tight.contains("4м"))
+check("а просьба урезана, а не выкинута", tight.contains("разреш"))
+check("строка всё равно в пределе", tight.count <= Sessions.maxLine)
+// Совсем нет места на просьбу - лучше без неё, чем огрызок в три знака.
+let noRoom = Sessions.composeLine(mark: "\u{25B8} ", machine: "очень-длинный-хост",
+                                  name: "имя-проекта", surface: "",
+                                  state: "ждёт меня", waitingFor: "разрешение", age: "12ч 30м")
+check("огрызка просьбы не остаётся", !noRoom.hasSuffix(":") && noRoom.count <= Sessions.maxLine)
+// Короткой строке хватает места на всё.
+let roomy = Sessions.composeLine(mark: "  ", machine: "", name: "cl",
+                                 surface: "VS Code", state: "работает",
+                                 waitingFor: nil, age: "1м")
+check("короткой строке «через что» досталось", roomy.contains("VS Code"))
 
 var many: [AgentSession] = []
 for i in 1...20 {

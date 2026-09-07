@@ -227,6 +227,59 @@ enum Sessions {
     // а ответ на «кто ждёт» уже дан: ждущие стоят первыми.
     static let maxRows = 6
 
+    // Предел ШИРИНЫ строки, в знаках.
+    //
+    // Поймано на снимке из CI: строка «budget-app · Terminal · waiting on
+    // me: write permission · 4m» вышла шире всех строк лимитов, и меню
+    // раздвинулось под неё. Ровно этот рост ширины от содержимого был
+    // закрыт в 1.6.2, и заводить его заново с другой стороны нельзя.
+    // И имя проекта, и текст просьбы приходят снаружи - значит ширина
+    // без предела задаётся чужой программой, а не нами.
+    static let maxLine = 46
+
+    // Меньше этого просьбу не показываем вовсе: огрызок в три знака -
+    // шум, а не сведения.
+    static let minWaitingFor = 6
+
+    // Сборка одной строки под предел ширины.
+    //
+    // Порядок жертв неочевиден, поэтому он здесь и закреплён тестами:
+    // первым уходит «через что запущено» целиком, потом урезается текст
+    // просьбы, и только в самом конце страдает возраст.
+    //
+    // Возраст стоит выше просьбы намеренно. «Ждёт 4м» и «ждёт 2ч»
+    // требуют разного, а текст просьбы всё равно придётся читать в самом
+    // окне - строка меню только зовёт туда. Первая версия ставила их
+    // наоборот, и длинная просьба вытесняла возраст; поймал тест.
+    static func composeLine(mark: String, machine: String, name: String,
+                            surface: String, state: String,
+                            waitingFor: String?, age: String) -> String {
+        var head = mark
+        if !machine.isEmpty { head += machine + ": " }
+        head += name
+
+        let surfacePart = surface.isEmpty ? "" : " \u{00B7} " + surface
+        var tail = " \u{00B7} " + state
+        // Возраст прижат к состоянию без разделителя: «ждёт меня 4м» -
+        // это один ответ, а «ждёт меня · 4м» читается как два.
+        if !age.isEmpty { tail += " " + age }
+
+        // Место под просьбу бронируется ДО того, как решается судьба
+        // «через что»: иначе «Terminal» занимает ровно те знаки, на
+        // которых должно стоять, чего сессия хочет. Первая версия
+        // считала в обратном порядке - объявленный порядок жертв
+        // расходился с тем, что делал код, и поймал это тест.
+        let needsRoom = (waitingFor?.isEmpty == false) ? minWaitingFor + 2 : 0
+        let withSurface = head + surfacePart + tail
+        var line = withSurface.count + needsRoom <= maxLine ? withSurface : head + tail
+
+        if let w = waitingFor, !w.isEmpty {
+            let room = maxLine - line.count - 2      // 2 - на «: »
+            if room >= minWaitingFor { line += ": " + Fmt.clip(w, room) }
+        }
+        return Fmt.clip(line, maxLine)
+    }
+
     static func lines(_ list: [AgentSession], nameLimit: Int = 10,
                       remoteHost: String = "", remoteScanAt: Date? = nil) -> SessionLines {
         var out = SessionLines()
@@ -261,22 +314,19 @@ enum Sessions {
         for x in shown {
             // Указатель - только у того, что требует действия. У остальных
             // пробел той же ширины, иначе строки разъезжаются по левому краю.
-            let mark = x.state == .waiting ? "\u{25B8} " : "  "
-            var line = mark
             // Своя машина - пустая строка, а не слово «эта». Держать
             // здесь ПЕРЕВЕДЁННОЕ слово и сравнивать с ним значит завести
             // ошибку, которая видна только в одном языке: под английской
             // локалью «эта» перестаёт равняться «this», и своя сессия
             // начинает подписываться чужим адресом.
-            if !x.machine.isEmpty { line += x.machine + ": " }
-            line += Fmt.clip(x.name, nameLimit)
-            if !x.surface.isEmpty { line += " \u{00B7} " + x.surface }
-            line += " \u{00B7} " + x.state.word
-            if x.state == .waiting, let w = x.waitingFor, !w.isEmpty {
-                line += ": " + Fmt.clip(w, 24)
-            }
-            if let t = x.since { line += " \u{00B7} " + Fmt.ago(t) }
-            out.rows.append(line)
+            out.rows.append(composeLine(
+                mark: x.state == .waiting ? "\u{25B8} " : "  ",
+                machine: x.machine,
+                name: Fmt.clip(x.name, nameLimit),
+                surface: x.surface,
+                state: x.state.word,
+                waitingFor: x.state == .waiting ? x.waitingFor : nil,
+                age: x.since.map { Fmt.ago($0) } ?? ""))
         }
         if ordered.count > shown.count {
             out.rows.append("  " + L("и ещё \(ordered.count - shown.count)",
@@ -288,9 +338,10 @@ enum Sessions {
         // это индикатор, который ничего не измеряет, а выглядит как
         // измеряющий.
         if s.unknown > 0 {
-            out.notes.append(L(
-                "статус пишут не все запуски: у \(s.unknown) его нет, работает она или стоит - неизвестно",
-                "not every launch reports status: \(s.unknown) without it - working or stalled is unknown"))
+            // Короче некуда без потери смысла: длинная оговорка была самой
+            // широкой строкой в меню - шире, чем сами строки сессий.
+            out.notes.append(L("\(s.unknown) без статуса: работает или стоит - неизвестно",
+                               "\(s.unknown) without status: working or stalled unknown"))
         }
         if !remoteHost.isEmpty, list.contains(where: { $0.machine == remoteHost }) {
             let age = remoteScanAt.map { " \u{00B7} " + Fmt.ago($0) + L(" назад", " ago") } ?? ""
