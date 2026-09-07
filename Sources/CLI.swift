@@ -243,11 +243,33 @@ enum CLI {
         print(Fmt.pad(L("Sparkle", "Sparkle"), 18) + sp.state.word
             + (sp.isBuiltIn ? "" : L(" (сборка без фреймворка)", " (built without framework)")))
 
-        print("\n" + L("Пробую запрос к API\u{2026}", "Trying an API request\u{2026}"))
+        // Во время паузы после 429 запрос НЕ делается: force обходит ttl,
+        // но не паузу - иначе диагностика превращалась бы в способ додолбить
+        // эндпоинт. Значит и обещать запрос нельзя.
+        let willAsk = !api.inCooldown
+        print("\n" + (willAsk
+            ? L("Пробую запрос к API\u{2026}", "Trying an API request\u{2026}")
+            : L("Пауза активна - запрос НЕ делаю, беру сохранённое",
+                "Cooldown active - NOT asking, using cached data")))
         switch api.fetchSync(ttl: 0, force: true) {
         case .success(let u):
-            print(Fmt.pad("API", 18) + green + "OK" + reset
-                + L(", получено \(u.rawBody.count) байт", ", \(u.rawBody.count) bytes"))
+            // Отчёт обязан различать «спросили и ответили» и «взяли из
+            // кэша». Иначе он говорит «API OK» ровно там, где API не
+            // отвечал вовсе, - именно это и случилось на живой машине
+            // 07.09.2026: строки «Пауза активна», «Возраст данных 491 сек»
+            // и «API OK» стояли рядом и противоречили друг другу.
+            // Диагностика, которая не отличает проверенное от
+            // непроверенного, хуже её отсутствия.
+            if u.isStale {
+                let age = Int(Date().timeIntervalSince(u.fetchedAt))
+                print(Fmt.pad("API", 18)
+                    + L("из кэша, запроса не было (данным \(age) сек)",
+                        "from cache, no request made (data is \(age)s old)"))
+            } else {
+                print(Fmt.pad("API", 18) + green + "OK" + reset
+                    + L(", получено \(u.rawBody.count) байт",
+                        ", \(u.rawBody.count) bytes"))
+            }
             // Какие лимиты вообще есть в ответе - это отвечает на вопрос
             // «почему такой-то модели не видно».
             let names = u.buckets.map { $0.key }.joined(separator: "  ")
