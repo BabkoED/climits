@@ -1,0 +1,252 @@
+разведка Sparkle, 2026-09-07T07:44:07Z
+runner: 14.8.9, arm64
+
+=== sha256 дистрибутива Sparkle ===
+52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192  sparkle.tar.xz
+
+=== что лежит в корне дистрибутива ===
+CHANGELOG
+INSTALL
+LICENSE
+SampleAppcast.xml
+Sparkle Test App.app
+Sparkle.framework
+Symbols
+bin
+
+=== bin ===
+BinaryDelta
+generate_appcast
+generate_keys
+old_dsa_scripts
+sign_update
+
+=== generate_keys --help ===
+OVERVIEW: Generate public & private keys for signing Sparkle based app updates.
+
+This tool generates a public & private keys and uses the macOS Keychain to
+store
+the private key for signing app updates which will be distributed via Sparkle.
+This key will be associated with your user account.
+
+Note: You only need one signing key, no matter how many apps you embed Sparkle
+in.
+
+The keychain may ask permission for this tool to access an existing key, if one
+exists, or for permission to save the new key. You must allow access in order
+to
+successfully proceed.
+
+In the default mode ran without any arguments, the public key and how it should
+be used
+in your application's Info.plist will be printed. If a private key was already
+generated in your Keychain,
+that key will be used and not overridden.
+
+You may additionally use options to only look up the existing public key for
+automation (-p),
+export the private key from your Keychain to a file for transferring the key
+(-x), or
+import the private key into your Keychain from a file (-f).
+
+USAGE: generate-keys [--account <account>] [-p] [-x <private-key-file>] [-f <private-key-file>]
+
+OPTIONS:
+  --account <account>     The account name to use when generating or looking up
+                          keys from your keychain. If this is not specified, a
+                          default global account is used instead. We recommend
+                          using different accounts for different organizations.
+                          (default: ed25519)
+  -p                      Looks up and just prints the existing public key
+                          stored in the Keychain. 
+  -x <private-key-file>   Exports your private key from your login keychain and
+                          writes it to private-key-file. Note the contents of
+                          this sensitive exported file are the same as the
+                          password to the "Private key for signing Sparkle
+                          updates" item in your keychain. For advanced usage if
+                          the private key is generated in the new format (i.e.
+                          the key file after base64 decoding is 32 bytes), then
+                          the exported key file is the base64 encoding of the
+                          private seed. The seed can be used to create the
+                          private/public keypair with other tools that support
+                          EdDSA signing. 
+  -f <private-key-file>   Imports the private key from private-key-file into
+                          your keychain instead of generating a new key. This
+                          file has likely been exported via -x option from
+                          another machine. Any existing "Private key for
+                          signing Sparkle updates" items listed in Keychain
+                          Access may need to be removed manually first before
+                          proceeding. 
+  -h, --help              Show help information.
+
+
+=== sign_update --help ===
+OVERVIEW: Sign or verify an update file using your signing keys.
+
+sign_update can be used to sign or verify update archives, delta updates, pkg
+updates, appcast feeds, and release note files.
+
+The signing keys are automatically read from the Keychain if no
+<private-key-file> is specified.
+
+For signing update archives, sign_update will output an EdDSA signature and
+length attributes to use for your update's appcast item enclosure.
+
+For signing release note files, sign_update will output an EdDSA signature and
+length attributes to use for your update's appcast releaseNotesLink.
+Additionally, the release notes file may be modified to include a warning about
+making future modifications to the file (unless --disable-signing-warning is
+specified).
+
+For signing appcast feeds, sign_update will embed the signature inside the XML
+file and include a warning about making future modifications to the file
+(unless --disable-signing-warning is specified).
+
+For signing files, you can use -p to only print the EdDSA signature for
+automation.
+
+USAGE: sign-update [--account <account>] [--verify] [--ed-key-file <private-key-file>] [-p] <file-path> [--disable-signing-warning] [<verify-signature>] [-s <private-key>]
+
+ARGUMENTS:
+  <file-path>             The update archive, delta update, package (pkg),
+                          release notes file, or update feed (xml) to sign or
+                          verify. If the file is a update feed (xml), the file
+                          will be modified to include the generated signature.
+                          If the file is a release notes file, the file may
+                          also be updated to include a warning that it is
+                          signed (unless --disable-signing-warning is
+                          specified). 
+  <verify-signature>      The signature to verify when --verify is passed.
+                          Don't pass this option for verifying appcast XML
+                          feeds, which already have a signature embedded. 
+
+OPTIONS:
+  --account <account>     The account name in your keychain associated with
+                          your private keys to use for signing. (default:
+                          ed25519)
+  --verify                Verify that the file is signed correctly. If this is
+                          set, a second argument <verify-signature> denoting
+                          the signature must be passed after the <update-path>. 
+  -f, --ed-key-file <private-key-file>
+                          Path to the file containing the private EdDSA
+                          (ed25519) key. '-' can be used to echo the EdDSA key
+                          from a 'secret' environment variable to the standard
+                          input stream. For example: echo "$PRIVATE_KEY_SECRET"
+                          | ./sign_update --ed-key-file - 
+  -p                      Only prints the signature when signing a file without
+                          extra metadata. For signing XML files, nothing will
+                          be printed because the signature is embedded inside
+                          the file. 
+  --disable-signing-warning
+                          Disables adding a warning to signed appcast and
+                          release note files explaining that further
+                          modifications will require re-signing them. This flag
+                          has no effect if the files already have a signing
+                          warning embedded. 
+  -s <private-key>        (DEPRECATED): The private EdDSA (ed25519) key. Please
+                          use the Keychain, or pass the key as standard input
+                          when using --ed-key-file - instead. This option is no
+                          longer supported for newly generated keys. 
+  -h, --help              Show help information.
+
+
+=== выбросной ключ и подпись известного файла ===
+payload: 1024 байта, bytes(range(256))*4
+785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9  payload.bin
+ERROR: No existing signing key found!
+--- файл приватного ключа, как его записал generate_keys ---
+cat: throwaway.key: No such file or directory
+(файла нет)
+--- конец файла ключа ---
+
+=== публичный ключ (-p, если такой флаг есть) ===
+ERROR: No existing signing key found!
+
+=== подпись payload.bin ===
+ERROR! Signing key not found for account ed25519. Please run generate_keys tool first or provide key with --ed-key-file <private_key_file>
+--- и с явным ключом из файла, если так можно ---
+Error: The file “throwaway.key” doesn’t exist.
+Error: The file “throwaway.key” doesn’t exist.
+
+=== сверка подписи: Sparkle против своей ===
+зерно (выбросное): CtM1N4JieXTqwRG/8Za1JsBgeTF3XqKKf740qg2y9bA=
+подпись, посчитанная на сервере:
+4BJk/xB2Dnok1uAg6Yji4EMTmXN1hak56nwVTpZ/+xajOToj0HIj4Z+91U/6l8ur596WFDCI7kjtZVYaeK6OAQ==
+подпись, посчитанная sign_update:
+4BJk/xB2Dnok1uAg6Yji4EMTmXN1hak56nwVTpZ/+xajOToj0HIj4Z+91U/6l8ur596WFDCI7kjtZVYaeK6OAQ==
+--- и наоборот: пусть Sparkle проверит МОЮ подпись ---
+ВЕРДИКТ: Sparkle принял подпись, сделанную на сервере
+--- какой публичный ключ Sparkle выводит из этого зерна ---
+ждём: irZjxj2BEJ9WvYxbcemLLsYdhhdEVGQcBIA410s6waI=
+
+=== Sparkle.framework: верхний уровень ===
+Autoupdate
+Headers
+Modules
+PrivateHeaders
+Resources
+Sparkle
+Updater.app
+Versions
+XPCServices
+
+=== Sparkle.framework/Versions/B ===
+Autoupdate
+Headers
+Modules
+PrivateHeaders
+Resources
+Sparkle
+Updater.app
+XPCServices
+_CodeSignature
+
+=== размер фреймворка ===
+3.0M	sparkle/Sparkle.framework
+
+=== ad-hoc подпись бандла с вложенным Sparkle ===
+  собрано: arm64
+  собрано: x86_64
+  универсальный бинарник: x86_64 arm64
+Подписано ad-hoc
+
+Готово: build/climits.app
+
+Дальше:
+  cp -R build/climits.app /Applications/          # или ~/Applications
+  open /Applications/climits.app   # иконка появится в строке меню
+
+Команда в терминале (по желанию):
+  /Applications/climits.app/Contents/MacOS/climits --install-cli
+build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc: replacing existing signature
+подписано: build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc
+build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc: replacing existing signature
+подписано: build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc
+build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate: replacing existing signature
+подписано: build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate
+build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app: replacing existing signature
+подписано: build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app
+build/climits.app/Contents/Frameworks/Sparkle.framework: replacing existing signature
+подписано: build/climits.app/Contents/Frameworks/Sparkle.framework
+build/climits.app: replacing existing signature
+подписан бандл целиком
+
+=== codesign --verify --deep ===
+--prepared:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+--prepared:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--validated:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--prepared:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--validated:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--prepared:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--validated:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--prepared:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--validated:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--validated:/Users/runner/work/climits/climits/build/climits.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+build/climits.app: valid on disk
+build/climits.app: satisfies its Designated Requirement
+
+=== запуск бандла с фреймворком внутри ===
+climits 1.7.0
+приложение запускается
+
+=== разведка закончена ===
