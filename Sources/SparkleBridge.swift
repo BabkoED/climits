@@ -27,10 +27,14 @@ import Sparkle
 //   * [ФАКТ] подпись релиза можно делать на сервере обычным ed25519:
 //     подписи сошлись побайтово, и sign_update принял нашу. Значит
 //     приватный ключ в GitHub не попадает вовсе;
-//   * [ПРЕДПОЛОЖЕНИЕ] что Sparkle доведёт установку до конца на
-//     неподписанном Developer ID приложении. Проверить это можно только
-//     на живом Маке двумя версиями подряд - в CI такого прогона нет.
-//     Ровно поэтому галочка и выключена по умолчанию.
+//   * [ФАКТ] лента читается и версии сравниваются - 07.09.2026 на Маке
+//     Антона Sparkle сходил по нашему appcast.xml, разобрал его и верно
+//     ответил «версия последняя», сравнив CFBundleVersion со сборкой
+//     в лете. То есть публикация, подпись в XML и нумерация - рабочие;
+//   * [ПРЕДПОЛОЖЕНИЕ] что Sparkle доведёт СКАЧИВАНИЕ И УСТАНОВКУ до конца
+//     на неподписанном Developer ID приложении. Это единственное, что
+//     осталось непроверенным, и проверяется только двумя версиями подряд
+//     на живой машине. Ровно поэтому галочка и выключена по умолчанию.
 enum SparkleState {
     case notBuilt          // собрано без фреймворка
     case off               // фреймворк есть, галочка снята
@@ -48,12 +52,32 @@ enum SparkleState {
 }
 
 #if canImport(Sparkle)
-// Делегат нужен ровно за одним: узнать, что Sparkle сказал об отказе, и
-// показать это словами. Решать за человека, переключаться ли на запасной
-// путь, он НЕ будет: отказы бывают разные, а угадывать их коды по памяти -
-// то же самое, что выдумывать ключи codesign.
+// Делегат слушает два вызова и различает их: «версия последняя» - это
+// ответ, «прекратил с ошибкой» - это отказ. Раньше слушался только второй,
+// и нормальный ответ выводился как поломка.
+//
+// Решать за человека, переключаться ли на запасной путь, делегат всё равно
+// НЕ будет: отказы бывают разные, а угадывать их коды по памяти - то же
+// самое, что выдумывать ключи codesign. Он только называет причину.
 private final class BridgeDelegate: NSObject, SPUUpdaterDelegate {
     var onAbort: ((String) -> Void)?
+    var onNoUpdate: (() -> Void)?
+
+    // «У тебя последняя версия» - это НОРМАЛЬНЫЙ ответ, а не отказ.
+    //
+    // Sparkle сообщает об этом отдельным вызовом, а потом всё равно
+    // прекращает проверку через didAbortWithError. Первая версия слушала
+    // только второй вызов - и на живой машине в меню появилось «Sparkle
+    // не смог: You're up to date!». То есть работающий механизм был
+    // подписан как сломанный, ровно наоборот.
+    //
+    // Я тогда отказался разбирать коды чужих ошибок, чтобы не угадывать.
+    // Осторожность была верной, вывод из неё - нет: у Sparkle для этого
+    // случая есть свой вызов, и слушать надо было его, а не мириться
+    // с неверным ярлыком.
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        onNoUpdate?()
+    }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         onAbort?(error.localizedDescription)
@@ -66,6 +90,9 @@ final class SparkleBridge {
     private init() {}
 
     private var lastError: String?
+    // Отметка «нам только что сказали, что версия последняя». Гасит
+    // следующий за этим отказ: он про ту же самую проверку.
+    private var sawNoUpdate = false
 
     #if canImport(Sparkle)
     private var controller: SPUStandardUpdaterController?
@@ -93,7 +120,17 @@ final class SparkleBridge {
     func startIfEnabled() {
         #if canImport(Sparkle)
         guard Prefs.sparkleEnabled, controller == nil else { return }
-        delegate.onAbort = { [weak self] text in self?.lastError = text }
+        delegate.onNoUpdate = { [weak self] in
+            self?.sawNoUpdate = true
+            self?.lastError = nil
+        }
+        delegate.onAbort = { [weak self] text in
+            guard let self = self else { return }
+            // Отказ сразу после «версия последняя» - это конец той же
+            // проверки, а не поломка.
+            if self.sawNoUpdate { self.sawNoUpdate = false; return }
+            self.lastError = text
+        }
         let c = SPUStandardUpdaterController(startingUpdater: false,
                                              updaterDelegate: delegate,
                                              userDriverDelegate: nil)
@@ -108,6 +145,7 @@ final class SparkleBridge {
         #if canImport(Sparkle)
         guard Prefs.sparkleEnabled else { return false }
         lastError = nil
+        sawNoUpdate = false
         startIfEnabled()
         guard let c = controller else { return false }
         c.checkForUpdates(nil)
