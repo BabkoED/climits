@@ -42,6 +42,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // текущими.
     private var localSessions: [AgentSession] = []
     private var remoteSessions: [AgentSession] = []
+    // Память машин: своя мерится перед показом меню, серверная приезжает
+    // раз в обход вместе с деньгами.
+    private var localMemory = MachineMemory()
+    private var remoteMemory = MachineMemory()
     private var sessions: [AgentSession] {
         return Sessions.sorted(localSessions + remoteSessions)
     }
@@ -135,9 +139,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // строка меню. Отдельная функция, а не строка внутри updateTitle,
     // чтобы чтение файлов не оказалось внутри отрисовки.
     private func refreshLocalSessions() {
-        localSessions = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
-            ? Sessions.read()
-            : []
+        let want = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
+        localSessions = want ? Sessions.read() : []
+        localMemory = want ? Sessions.machineMemory() : MachineMemory()
     }
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
@@ -181,6 +185,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // складывается сюда. Ошибку не глотаем: без неё «считаю обе»
             // и «одна не ответила» выглядят на экране одинаково.
             var remoteSessions: [AgentSession] = []
+            var remoteMemory = MachineMemory()
             if !host.isEmpty {
                 switch RemoteScan.usage(host: host, path: remotePath,
                                         cutoffs: cutoffs) {
@@ -188,6 +193,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     for i in w.indices { w[i] = w[i] + r.windows[i] }
                     machines = 2
                     remoteSessions = r.sessions
+                    remoteMemory = r.memory
                 case .success:
                     err = L("ответ не по форме", "malformed answer")
                 case .failure(let e):
@@ -202,6 +208,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.machines = machines
                 self.remoteError = err
                 self.remoteSessions = remoteSessions
+                self.remoteMemory = remoteMemory
                 guard w.count == cutoffs.count, w.count >= 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
@@ -735,8 +742,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // занимает место и не отвечает ни на что.
     private func sessionRows() -> [NSMenuItem] {
         guard Prefs.showSessions else { return [] }
-        let lines = Sessions.lines(sessions, nameLimit: MenuBarController.nameLimit,
-                                   remoteHost: Prefs.remoteHost, remoteScanAt: lastScan)
+        // nameLimit здесь СВОЙ, а не колонки лимитов: имя сессии человек
+        // задаёт сам через `/rename`, и десяти знаков ему мало.
+        let lines = Sessions.lines(sessions,
+                                   remoteHost: Prefs.remoteHost, remoteScanAt: lastScan,
+                                   here: localMemory, there: remoteMemory)
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
@@ -904,6 +914,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          rssMB: 270, swapMB: 184),
         ]
         lastScan = Date().addingTimeInterval(-95)
+        localMemory = MachineMemory(totalMB: 32768, availableMB: 18022,
+                                    swapTotalMB: 4096, swapUsedMB: 512)
+        remoteMemory = MachineMemory(totalMB: 3915, availableMB: 1224,
+                                     swapTotalMB: 7030, swapUsedMB: 1743)
 
         // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
         //

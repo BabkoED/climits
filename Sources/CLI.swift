@@ -245,6 +245,8 @@ enum CLI {
         print(Fmt.pad(L("Сессии", "Sessions"), 18)
             + L("\(ss.total) живых: работает \(ss.busy), ждёт \(ss.waiting), простаивает \(ss.idle), без статуса \(ss.unknown)\(memTail)",
                 "\(ss.total) live: working \(ss.busy), waiting \(ss.waiting), idle \(ss.idle), no status \(ss.unknown)\(memTail)"))
+        let mm = Sessions.machineMemory()
+        if !mm.isEmpty { print(Fmt.pad(L("Память машины", "Machine memory"), 18) + mm.text) }
         if ss.total > 0 && ss.unknown == ss.total {
             print(Fmt.pad("", 18)
                 + L("статус не пишет ни одна - раздел «кто ждёт» будет пуст",

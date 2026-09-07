@@ -81,6 +81,7 @@ enum RemoteScan {
     struct Answer {
         var windows: [WindowUsage] = []
         var sessions: [AgentSession] = []
+        var memory = MachineMemory()
     }
 
     // Сколько ждём. Обход сотни мегабайт на той стороне - это секунды, но
@@ -243,7 +244,15 @@ enum RemoteScan {
                 }
             }
         }
-        return .success(Answer(windows: out, sessions: Sessions.sorted(live)))
+        var mem = MachineMemory()
+        if let m = root["memory"] as? [String: Any] {
+            mem.totalMB = Sessions.intValue(m["total"]) ?? 0
+            mem.availableMB = Sessions.intValue(m["available"]) ?? 0
+            mem.swapTotalMB = Sessions.intValue(m["swap_total"]) ?? 0
+            let free = Sessions.intValue(m["swap_free"]) ?? 0
+            mem.swapUsedMB = max(0, mem.swapTotalMB - free)
+        }
+        return .success(Answer(windows: out, sessions: Sessions.sorted(live), memory: mem))
     }
 
     // --- то, что выполняется на той стороне ----------------------------------
@@ -437,6 +446,19 @@ for name in names:
     item["cwd"] = os.path.basename(cwd.rstrip("/")) if isinstance(cwd, str) else ""
     sessions.append(item)
 
-print(json.dumps({"windows": out, "sessions": sessions}))
+# Память машины на той стороне: сумма по сессиям без неё не с чем сравнить.
+mem = {}
+try:
+    with open("/proc/meminfo") as fh:
+        want = {"MemTotal:": "total", "MemAvailable:": "available",
+                "SwapTotal:": "swap_total", "SwapFree:": "swap_free"}
+        for line in fh:
+            f = line.split()
+            if len(f) >= 2 and f[0] in want:
+                mem[want[f[0]]] = int(f[1]) // 1024
+except Exception:
+    pass
+
+print(json.dumps({"windows": out, "sessions": sessions, "memory": mem}))
 """#
 }

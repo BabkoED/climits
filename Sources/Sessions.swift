@@ -144,6 +144,48 @@ struct SessionSummary: Equatable {
     }
 }
 
+// Память машины целиком: сколько занято и сколько осталось.
+//
+// ЗАЧЕМ РЯДОМ С СЕССИЯМИ. Сумма по сессиям отвечает на «сколько держат
+// они», но не на «сколько ещё можно». Второе - это про машину, и без него
+// первое не с чем сравнить: 1 ГБ на сервере с 4 ГБ и на маке с 32 - разные
+// новости.
+struct MachineMemory: Equatable {
+    var totalMB = 0
+    var availableMB = 0      // 0 - не измеряли (см. ниже про macOS)
+    var swapTotalMB = 0
+    var swapUsedMB = 0
+
+    var isEmpty: Bool { return totalMB == 0 }
+
+    // «ОЗУ 2,6 из 3,8 ГБ · своп 1,3 из 4,0 ГБ».
+    //
+    // Свободного ОЗУ на macOS здесь НЕ будет, и это намеренно: система
+    // занимает почти всю память кэшем и считает это нормой, поэтому
+    // «свободно 300 МБ» там означает не нехватку, а исправную работу.
+    // Показывать это число рядом с линуксовым - значит сравнивать разное
+    // под одной подписью.
+    var text: String {
+        guard totalMB > 0 else { return "" }
+        func gb(_ mb: Int) -> String {
+            let s = String(format: "%.1f", Double(mb) / 1024)
+            return L(s.replacingOccurrences(of: ".", with: ","), s)
+        }
+        var s = L("ОЗУ ", "RAM ")
+        if availableMB > 0 {
+            s += L("занято \(gb(totalMB - availableMB)) из \(gb(totalMB)) ГБ",
+                   "\(gb(totalMB - availableMB)) of \(gb(totalMB)) GB used")
+        } else {
+            s += L("всего \(gb(totalMB)) ГБ", "\(gb(totalMB)) GB total")
+        }
+        if swapTotalMB > 0 {
+            s += L(" \u{00B7} своп \(gb(swapUsedMB)) из \(gb(swapTotalMB)) ГБ",
+                   " \u{00B7} swap \(gb(swapUsedMB)) of \(gb(swapTotalMB)) GB")
+        }
+        return s
+    }
+}
+
 enum Sessions {
 
     static var localDir: URL {
@@ -266,6 +308,72 @@ enum Sessions {
     }
     #endif
 
+    // --- память машины -----------------------------------------------------
+    //
+    // Linux - /proc/meminfo, там всё четыре числа сразу. MemAvailable, а не
+    // MemFree: свободного в линуксе почти никогда нет, ядро отдаёт память
+    // под кэш, и MemFree выглядит как беда при исправной работе. Available -
+    // это то, что можно занять не выдавливая нужное.
+    //
+    // macOS - только всего ОЗУ и своп: `sysctl hw.memsize` и `vm.swapusage`.
+    // Свободного ОЗУ здесь нет намеренно - см. комментарий у MachineMemory.
+    static func machineMemory() -> MachineMemory {
+        #if canImport(Darwin)
+        var m = MachineMemory()
+        if let s = sysctlText(["-n", "hw.memsize"]), let bytes = Int(s) {
+            m.totalMB = bytes / 1024 / 1024
+        }
+        // «total = 4096.00M  used = 1300.25M  free = 2795.75M»
+        if let s = sysctlText(["-n", "vm.swapusage"]) {
+            func mb(_ key: String) -> Int {
+                guard let r = s.range(of: key + " = ") else { return 0 }
+                let rest = s[r.upperBound...]
+                let num = rest.prefix(while: { $0.isNumber || $0 == "." })
+                return Int(Double(num) ?? 0)
+            }
+            m.swapTotalMB = mb("total")
+            m.swapUsedMB = mb("used")
+        }
+        return m
+        #else
+        var m = MachineMemory()
+        guard let text = try? String(contentsOfFile: "/proc/meminfo", encoding: .utf8) else {
+            return m
+        }
+        var swapFree = 0
+        for line in text.split(separator: "\n") {
+            let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard f.count >= 2, let kb = Int(f[1]) else { continue }
+            switch f[0] {
+            case "MemTotal:":     m.totalMB = kb / 1024
+            case "MemAvailable:": m.availableMB = kb / 1024
+            case "SwapTotal:":    m.swapTotalMB = kb / 1024
+            case "SwapFree:":     swapFree = kb / 1024
+            default: break
+            }
+        }
+        m.swapUsedMB = max(0, m.swapTotalMB - swapFree)
+        return m
+        #endif
+    }
+
+    #if canImport(Darwin)
+    private static func sysctlText(_ args: [String]) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/sysctl")
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let s = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
+    }
+    #endif
+
     static func read(dir: URL? = nil, now: Date = Date(),
                      machine: String = "") -> [AgentSession] {
         let d = dir ?? localDir
@@ -348,6 +456,15 @@ enum Sessions {
     // без предела задаётся чужой программой, а не нами.
     static let maxLine = 46
 
+    // Предел длины ИМЕНИ сессии - свой, а не общий с колонкой лимитов.
+    //
+    // Там 10 знаков, потому что имена моделей короткие и стоят в колонке.
+    // Здесь имя человек задаёт сам командой `/rename` в Claude Code, и
+    // десяти знаков на осмысленное название не хватает: «Тариф Альфы»
+    // обрезалось до «Тариф Аль…». Строка сессии не колонка, ширину её
+    // держит maxLine.
+    static let nameLimit = 22
+
     // Меньше этого просьбу не показываем вовсе: огрызок в три знака -
     // шум, а не сведения.
     static let minWaitingFor = 6
@@ -417,8 +534,10 @@ enum Sessions {
         return Fmt.clip(line, maxLine)
     }
 
-    static func lines(_ list: [AgentSession], nameLimit: Int = 10,
-                      remoteHost: String = "", remoteScanAt: Date? = nil) -> SessionLines {
+    static func lines(_ list: [AgentSession], nameLimit: Int = nameLimit,
+                      remoteHost: String = "", remoteScanAt: Date? = nil,
+                      here: MachineMemory = MachineMemory(),
+                      there: MachineMemory = MachineMemory()) -> SessionLines {
         var out = SessionLines()
         guard !list.isEmpty else { return out }
 
@@ -490,6 +609,13 @@ enum Sessions {
             // широкой строкой в меню - шире, чем сами строки сессий.
             out.notes.append(L("\(s.unknown) без статуса: работает или стоит - неизвестно",
                                "\(s.unknown) without status: working or stalled unknown"))
+        }
+        // Память машин - после списка сессий: сумма по сессиям отвечает
+        // «сколько держат они», а это - «сколько ещё можно». Без второго
+        // первое не с чем сравнить.
+        if !here.isEmpty { out.notes.append(here.text) }
+        if !there.isEmpty, !remoteHost.isEmpty {
+            out.notes.append(remoteHost + ": " + there.text)
         }
         if !remoteHost.isEmpty, list.contains(where: { $0.machine == remoteHost }) {
             let age = remoteScanAt.map { " \u{00B7} " + Fmt.ago($0) + L(" назад", " ago") } ?? ""
