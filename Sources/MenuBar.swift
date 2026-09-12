@@ -214,7 +214,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     DispatchQueue.global(qos: .utility).async {
                         let r = RemoteScan.usage(host: t.host, path: t.path, cutoffs: cutoffs,
                                                  wantActivity: Prefs.showActivity,
-                                                 projectsWindow: Prefs.showProjects ? 1 : -1)
+                                                 projectsWindow: Prefs.showSpendByChat ? 1 : -1)
                         lock.lock(); answers[t.host] = r; lock.unlock()
                         group.leave()
                     }
