@@ -318,10 +318,16 @@ enum Activity {
                   (row["type"] as? String) == "last-prompt",
                   let p = row["lastPrompt"] as? String
             else { continue }
-            let one = p.split(whereSeparator: { $0.isNewline })
-                .map { $0.trimmingCharacters(in: .whitespaces) }
+            // Схлопываем ЛЮБЫЕ пробельные подряд, а не только переводы
+            // строк. Поймано сверкой с питоном удалённой стороны: там
+            // `" ".join(p.split())`, то есть схлопывается всё, а здесь
+            // рвались только переводы - и двойной пробел внутри запроса
+            // давал строку на знак длиннее. Одна и та же сессия
+            // подписывалась бы по-разному в зависимости от того, с какой
+            // машины на неё смотрят, а из-за сдвига обрезки расходился
+            // ещё и хвост.
+            let one = p.split(whereSeparator: { $0.isWhitespace })
                 .joined(separator: " ")
-                .trimmingCharacters(in: .whitespaces)
             return one.isEmpty ? nil : String(one.prefix(limit))
         }
         return nil
