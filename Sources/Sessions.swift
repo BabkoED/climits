@@ -411,6 +411,19 @@ enum Sessions {
     // шум, а не сведения.
     static let minWaitingFor = 6
 
+    // А занятию нужно больше, и брони ему выделяется больше.
+    //
+    // Поймано снимком из CI: со «свободной» бронью в 6 знаков «через что
+    // запущено» оставалось в строке, и занятие обрезалось до «count dec…».
+    // Восемь знаков задачи не называют - это шум ровно того рода, ради
+    // которого и заведён нижний предел. Шестнадцать вытесняют «Terminal»
+    // и оставляют осмысленный кусок: «count declines for…».
+    //
+    // Просьбе столько не нужно: она короткая по природе («write
+    // permission»), и у неё жертвовать нечем - там и так всё уходит
+    // под неё. А занятие приходит длинным всегда.
+    static let minActivity = 16
+
     // Сборка одной строки под предел ширины.
     //
     // Порядок жертв неочевиден, поэтому он здесь и закреплён тестами:
@@ -474,12 +487,20 @@ enum Sessions {
         // правильно: у локальных сессий память не меряется вовсе, значит
         // хвост у них свободен, и занятие займёт пустое место, а не
         // чужое. Ничего из того, что было в строке раньше, не подвинулось.
-        struct Note { var text: String; var sep: String; var clippable: Bool }
+        struct Note { var text: String; var sep: String; var clippable: Bool; var minRoom: Int }
         let note: Note? = {
-            if let l = loop { return Note(text: l.text, sep: " \u{00B7} ", clippable: false) }
-            if let w = waitingFor, !w.isEmpty { return Note(text: w, sep: ": ", clippable: true) }
-            if !memory.isEmpty { return Note(text: memory, sep: " \u{00B7} ", clippable: false) }
-            if !activity.isEmpty { return Note(text: activity, sep: " \u{00B7} ", clippable: true) }
+            if let l = loop {
+                return Note(text: l.text, sep: " \u{00B7} ", clippable: false, minRoom: 0)
+            }
+            if let w = waitingFor, !w.isEmpty {
+                return Note(text: w, sep: ": ", clippable: true, minRoom: minWaitingFor)
+            }
+            if !memory.isEmpty {
+                return Note(text: memory, sep: " \u{00B7} ", clippable: false, minRoom: 0)
+            }
+            if !activity.isEmpty {
+                return Note(text: activity, sep: " \u{00B7} ", clippable: true, minRoom: minActivity)
+            }
             return nil
         }()
 
@@ -495,7 +516,7 @@ enum Sessions {
         // и то же верно про «Bash ×4».
         let needsRoom: Int = {
             guard let n = note else { return 0 }
-            return n.clippable ? minWaitingFor + n.sep.count : n.sep.count + n.text.count
+            return n.clippable ? n.minRoom + n.sep.count : n.sep.count + n.text.count
         }()
         let withSurface = head + surfacePart + tail
         var line = withSurface.count + needsRoom <= maxLine ? withSurface : head + tail
@@ -503,7 +524,7 @@ enum Sessions {
         if let n = note {
             let room = maxLine - line.count - n.sep.count
             if n.clippable {
-                if room >= minWaitingFor { line += n.sep + Fmt.clip(n.text, room) }
+                if room >= n.minRoom { line += n.sep + Fmt.clip(n.text, room) }
             } else if room >= n.text.count {
                 line += n.sep + n.text
             }
