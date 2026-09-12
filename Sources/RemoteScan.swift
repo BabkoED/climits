@@ -82,9 +82,10 @@ enum RemoteScan {
         var windows: [WindowUsage] = []
         var sessions: [AgentSession] = []
         var memory = MachineMemory()
-        // Сырые каталоги проектов той машины. Имена сокращает мак - одним
-        // правилом на обе стороны, иначе один проект подписывался бы
-        // по-разному в зависимости от того, где его посчитали.
+        // Разговоры той машины. Ключ - готовое ИМЯ у тех, кого покажут,
+        // и путь у остальных: имя читает та сторона, потому что её файлов
+        // у мака нет вовсе. Мак отличает одно от другого по ведущей косой
+        // черте и второй раз имя искать не идёт.
         var projects: [String: WindowUsage] = [:]
     }
 
@@ -262,7 +263,7 @@ enum RemoteScan {
             let free = Sessions.intValue(m["swap_free"]) ?? 0
             mem.swapUsedMB = max(0, mem.swapTotalMB - free)
         }
-        // Проекты - тоже необязательная часть: их не будет, если разбивку
+        // Разговоры - тоже необязательная часть: их не будет, если разбивку
         // не просили. Пустой словарь и «не просили» тут одно и то же.
         var projects: [String: WindowUsage] = [:]
         if let items = root["projects"] as? [String: [String: Any]] {
@@ -425,16 +426,95 @@ for dirpath, dirnames, filenames in os.walk(root):
                     acc[k] += add[k]
                 if model and not any(f in low for f in FAMILIES):
                     wins[i]["unknown"].add(model)
-                # Разбивка по проектам - только по заказанному окну.
-                # Имя проекта тут сырое, каталогом: сокращать его до
-                # последнего слова будет мак, и правило сокращения должно
-                # быть ОДНО на обе стороны, иначе один и тот же проект
-                # подпишется по-разному в зависимости от машины.
+                # Разбивка по разговорам - только по заказанному окну.
+                # Ключ - путь файла: один файл это ровно один разговор.
+                # Имя ему подберём ниже, и только тем, кого покажут.
                 if i == projects_window:
-                    pacc = projects.setdefault(os.path.basename(dirpath), {})
+                    pacc = projects.setdefault(p, {})
                     fam_acc = pacc.setdefault(fam, [0, 0, 0, 0, 0, 0])
                     for k in range(6):
                         fam_acc[k] += add[k]
+
+# Имена разговоров - тем, кто попадёт в показ.
+#
+# Читает ТА сторона, а не мак: файлов этой машины у мака нет вовсе.
+# Правило то же, что в Transcripts.chatTitle: своё имя из `custom-title`
+# важнее, первый запрос - запасной. Голова и хвост по 64 КБ: своё имя
+# лежит в конце, первый запрос в начале, а целиком файл бывает
+# двадцатимегабайтным.
+#
+# Имён берём с запасом (10 против пяти показываемых): топ здесь считается
+# по расходу ЭТОЙ машины, а показывается общий по всем - разговор, шестой
+# тут, в общем списке может оказаться третьим.
+# Размеры кусков посчитаны, а не взяты круглыми - см. оговорку у
+# Transcripts.chatTitle. Коротко: первый запрос лежит не в начале файла,
+# медиана отступа 63 КБ, и на 64 КБ имя находилось у половины файлов.
+# Живой прогон это и показал: имена нашлись у 2 разговоров из 10.
+TITLE_TAIL = 64 * 1024
+TITLE_HEAD = 256 * 1024
+TITLE_HEAD_RETRY = 1024 * 1024
+TITLE_TOP = 10
+
+
+def chat_title(path):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > TITLE_TAIL:
+                fh.seek(size - TITLE_TAIL)
+            tail = fh.read(TITLE_TAIL).decode("utf-8", "ignore")
+            for line in reversed(tail.split("\n")):
+                if '"custom-title"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("type") == "custom-title":
+                    t = (row.get("customTitle") or "").strip()
+                    if t:
+                        return t
+            # Вторая ступень - только если в первой не нашлось и файл
+            # вообще длиннее первой.
+            for want in (TITLE_HEAD, TITLE_HEAD_RETRY):
+                if want > TITLE_HEAD and size <= TITLE_HEAD:
+                    break
+                fh.seek(0)
+                head = fh.read(want).decode("utf-8", "ignore")
+                for line in head.split("\n"):
+                    if '"last-prompt"' not in line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if row.get("type") == "last-prompt":
+                        t = " ".join((row.get("lastPrompt") or "").split())
+                        if t:
+                            return t
+    except Exception:
+        pass
+    return None
+
+
+def _weight(fams):
+    # Порядок, а не деньги: прайс живёт на маке. Выхлоп - самая дорогая
+    # часть счёта, и для сортировки внутри одной машины его довольно.
+    return sum(v[1] * 5 + v[0] + v[2] for v in fams.values())
+
+
+named_projects = {}
+for path, fams in sorted(projects.items(), key=lambda kv: -_weight(kv[1]))[:TITLE_TOP]:
+    name = chat_title(path)
+    if name:
+        # Ключ-имя мак отличает от ключа-пути по ведущей косой черте
+        # и второй раз имя искать не идёт.
+        named_projects[name] = fams
+        projects[path] = None
+for path, fams in projects.items():
+    if fams is not None:
+        named_projects[path] = fams
+projects = named_projects
 
 out = []
 for w in wins:

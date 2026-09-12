@@ -121,77 +121,143 @@ enum Transcripts {
         return usage(cutoffs: [since], dir: dir)[0]
     }
 
-    // Куда ушли деньги - по проектам.
+    // Куда ушли деньги - по РАЗГОВОРАМ.
     //
-    // ЗАЧЕМ. Сумма за месяц отвечает на «сколько потратил», но не на
+    // ЗАЧЕМ. Сумма за неделю отвечает на «сколько потратил», но не на
     // «на что». Второй вопрос - единственный, по которому можно что-то
-    // решить: увидеть, что половина месяца ушла в один проект, значит
-    // получить повод посмотреть, почему именно там так дорого.
+    // решить: увидеть, что десятая часть недели ушла в один разговор,
+    // значит получить повод посмотреть, почему именно там так дорого.
     //
-    // ПОЧЕМУ ПРОЕКТ, А НЕ КАТАЛОГ ВНУТРИ НЕГО. caprock делит расход по
-    // подкаталогам монорепозитория, относя ход к папке последнего
-    // тронутого файла. Здесь это не нужно и вредно: работа ведётся
-    // по правилу «одна сессия - один проект», разнести ход между
-    // папками нечем, а колонка, которая всегда показывает один и тот же
-    // подкаталог, только занимает место.
+    // ПОЧЕМУ РАЗГОВОР, А НЕ ПРОЕКТ. Сначала было сделано по каталогам
+    // проектов, как у caprock, - и замер 12.09.2026 показал, что на
+    // ЭТИХ данных такая разбивка пуста: 97% недельного расхода лежит
+    // в одном каталоге. Причина не в счёте, а в том, как ведётся работа:
+    // правило «одна сессия - один проект» означает, что все рабочие
+    // сессии идут из одной папки, и по каталогам их не различить вовсе.
+    // Разбивка, у которой в первой строке всегда 97%, отвечает на свой
+    // же вопрос словом «везде».
     //
-    // Имя берётся из каталога расшифровок: Claude Code кодирует туда
-    // рабочий путь, заменяя «/» на «-». Обратно путь не восстановить
-    // (дефис в имени папки неотличим от разделителя), но последнее слово
-    // - и есть имя проекта, а больше в меню всё равно не влезет.
-    struct ProjectUsage {
-        var name: String
+    // По разговорам - отвечает: 135 разговоров за ту же неделю, топ-5
+    // дают 40%, самый дорогой 10%. Это числа, по которым видно, куда
+    // ушло время, а не куда ведёт `cd`.
+    //
+    // ЦЕНА ЭТОГО - ТЕМЫ РАЗГОВОРОВ НА ЭКРАНЕ, и потому раздел выключен
+    // по умолчанию, как и «над чем работает». Первым берётся имя,
+    // заданное человеком через `/rename`: это его собственное слово.
+    // Своего имени нет у большинства (4 из 135), тогда берётся первый
+    // запрос - он и есть тема.
+    struct ChatUsage {
+        var key: String          // файл расшифровки; для сложения машин
+        var title: String        // что показываем человеку
         var usage: WindowUsage
         var cost: Double { return usage.cost }
     }
 
-    // Человеку - последнее слово пути: «-home-babko-Work-SBC» -> «SBC».
+    // Имя разговора: своё, если задано, иначе первый запрос.
     //
-    // Каталог «-home-babko» (домашний) даёт пустое слово - там работа без
-    // проекта, и называется она прямо, а не пустой строкой в списке.
-    static func projectName(from dir: String) -> String {
-        // Работа субагентов - в одну строку, а не 63 отдельных.
-        //
-        // Замер 12.09.2026: из 72 каталогов за неделю 63 оказались
-        // временными каталогами вееров - «-tmp-agent-xxxxxxxx», по паре
-        // запросов в каждом, все вместе 0,2% расхода. Как проекты они не
-        // значат ничего: имя случайное, живут они минуты. А вот СУММА по
-        // ним - осмысленная: это цена вееров за неделю, и её видно только
-        // если сложить.
-        if dir.hasPrefix("-tmp-agent") || dir.hasPrefix("wf_") || dir == "subagents" {
-            return L("субагенты", "subagents")
+    // ЧИТАЕТСЯ ДВУМЯ КУСКАМИ, и это не экономия ради экономии.
+    // `custom-title` переписывается на каждое переименование и лежит
+    // в конце; первый запрос лежит в начале и в хвост длинного файла
+    // не попадает вовсе. Читать файл целиком ради двух строк нельзя -
+    // расшифровки бывают по двадцать мегабайт.
+    //
+    // Вызывается ТОЛЬКО для тех разговоров, что реально покажут: расход
+    // считается по всем, имя берётся у пятерых. Иначе 135 файлов за
+    // неделю превратились бы в 135 лишних чтений на каждое открытие меню.
+    // РАЗМЕРЫ КУСКОВ ПОСЧИТАНЫ, А НЕ ВЗЯТЫ КРУГЛЫМИ.
+    //
+    // Первый запрос лежит НЕ в самом начале файла: до него идут системные
+    // подсказки, вложения и первый ответ. Замер по 40 расшифровкам за
+    // неделю (12.09.2026): медиана отступа 63 КБ, 90-й процентиль 76 КБ,
+    // худший случай 688 КБ.
+    //
+    // Отсюда две ступени. Первые 64 КБ давали имя ровно половине файлов -
+    // медиана стояла на самой границе, и это было видно на живом прогоне:
+    // имена нашлись у 2 разговоров из 10. 256 КБ покрывают 98%, и только
+    // для оставшихся дочитывается мегабайт. Так в обычном случае читается
+    // четверть мегабайта, а не целый, и при этом имя находится всегда.
+    static let titleHeadBytes = 256 * 1024
+    static let titleHeadRetryBytes = 1024 * 1024
+    static let titleTailBytes = 64 * 1024
+
+    static func chatTitle(of url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        guard size > 0 else { return nil }
+
+        // Хвост - за своим именем. Оно важнее: человек назвал разговор сам.
+        let tailWant = Int(min(size, UInt64(titleTailBytes)))
+        try? handle.seek(toOffset: size - UInt64(tailWant))
+        if let data = try? handle.read(upToCount: tailWant) {
+            let text = String(decoding: data, as: UTF8.self)
+            for line in text.split(separator: "\n").reversed() {
+                guard line.contains("\"custom-title\"") else { continue }
+                guard let d = line.data(using: .utf8),
+                      let row = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      (row["type"] as? String) == "custom-title",
+                      let t = (row["customTitle"] as? String)?.trimmingCharacters(in: .whitespaces),
+                      !t.isEmpty
+                else { continue }
+                return t
+            }
         }
-        let parts = dir.split(separator: "-").map(String.init)
-        guard let last = parts.last, !last.isEmpty else { return L("без проекта", "no project") }
-        // Домашний каталог целиком - это не проект.
-        if parts.count <= 2 { return L("без проекта", "no project") }
-        return last
+
+        // Головы - за первым запросом. Вторая ступень читается только
+        // тогда, когда в первой ничего не нашлось, и только если файл
+        // вообще длиннее первой.
+        for want in [titleHeadBytes, titleHeadRetryBytes] {
+            if want > titleHeadBytes && size <= UInt64(titleHeadBytes) { break }
+            try? handle.seek(toOffset: 0)
+            guard let data = try? handle.read(upToCount: Int(min(size, UInt64(want))))
+            else { return nil }
+            let text = String(decoding: data, as: UTF8.self)
+            for line in text.split(separator: "\n") {
+                guard line.contains("\"last-prompt\"") else { continue }
+                guard let d = line.data(using: .utf8),
+                      let row = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                      (row["type"] as? String) == "last-prompt",
+                      let p = row["lastPrompt"] as? String
+                else { continue }
+                let one = p.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+                if !one.isEmpty { return one }
+            }
+        }
+        return nil
     }
 
-    // Разбивка за окно. Сортировка по деньгам, самое дорогое первым.
-    static func byProject(since: Date, dir: URL? = nil) -> [ProjectUsage] {
+    // Разбивка за окно: сначала расход по всем разговорам, потом имена
+    // для тех, кого покажем.
+    static func byChat(since: Date, dir: URL? = nil, top: Int = 5) -> [ChatUsage] {
         var acc: [String: WindowUsage] = [:]
         _ = usage(cutoffs: [since], dir: dir, projects: &acc)
-        return named(acc)
+        return named(acc, top: top)
     }
 
-    // Сырые каталоги -> названные проекты, от дорогого к дешёвому.
-    static func named(_ acc: [String: WindowUsage]) -> [ProjectUsage] {
-        // Разные каталоги могут дать одно имя: «-home-babko-Work» и
-        // «-tmp-work» оба кончаются на «work». Складываем, а не показываем
-        // две строки с одинаковой подписью и разными числами - такая пара
-        // читается как ошибка счёта.
-        var byName: [String: WindowUsage] = [:]
-        for (dir, w) in acc {
-            let n = projectName(from: dir)
-            byName[n] = (byName[n] ?? WindowUsage()) + w
-        }
-        return byName
-            .map { ProjectUsage(name: $0.key, usage: $0.value) }
+    // Сырые пути -> названные разговоры, от дорогого к дешёвому.
+    //
+    // Имена читаются только у первых `top`: остальные уйдут в строку
+    // «и ещё N», где имя не показывается вовсе.
+    static func named(_ acc: [String: WindowUsage], top: Int = 5) -> [ChatUsage] {
+        let sorted = acc
+            .map { ChatUsage(key: $0.key, title: "", usage: $0.value) }
             .sorted { a, b in
                 if a.cost != b.cost { return a.cost > b.cost }
-                return a.name < b.name
+                return a.key < b.key
             }
+        return sorted.enumerated().map { i, c in
+            var out = c
+            // Ключ бывает не путём, а именем разговора: так приходят
+            // разговоры с удалённой машины - её файлы нам недоступны,
+            // и имя та сторона берёт у себя. Отличаем по косой черте.
+            if !c.key.hasPrefix("/") {
+                out.title = c.key
+            } else if i < top {
+                out.title = chatTitle(of: URL(fileURLWithPath: c.key))
+                    ?? L("без имени", "unnamed")
+            }
+            return out
+        }
     }
 
     // Несколько окон за один проход по файлам.
@@ -241,10 +307,12 @@ enum Transcripts {
                 // Файл, не тронутый с начала окна, точно не содержит нужных строк.
                 if let v = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                    let m = v.contentModificationDate, m < since { continue }
-                // Имя каталога проекта - это родитель файла расшифровки.
-                let project = url.deletingLastPathComponent().lastPathComponent
+                // Ключ разбивки - сам файл: один файл это ровно один
+                // разговор (имя файла равно sessionId, проверено на всех
+                // живых сессиях 12.09.2026). Путь, а не sessionId, потому
+                // что по нему потом читается имя разговора.
                 scan(url: url, cutoffs: cutoffs, into: &out, seen: &seen,
-                     project: project, projects: &projects, projectsWindow: projectsWindow)
+                     project: url.path, projects: &projects, projectsWindow: projectsWindow)
             }
         }
         return out

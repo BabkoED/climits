@@ -49,9 +49,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // сложности бывают на сервере.
     private var remoteMemory: [String: MachineMemory] = [:]
 
-    // Куда ушли деньги за недельное окно. Считается тем же проходом,
-    // что и сами деньги, - отдельного чтения расшифровок не стоит.
-    private var projects: [Transcripts.ProjectUsage] = []
+    // Куда ушли деньги за недельное окно - по разговорам. Считается тем
+    // же проходом, что и сами деньги, - отдельного чтения не стоит.
+    private var chats: [Transcripts.ChatUsage] = []
     private var sessions: [AgentSession] {
         return Sessions.sorted(localSessions + remoteSessions)
     }
@@ -193,8 +193,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // Разбивка по проектам - за НЕДЕЛЬНОЕ окно (в списке границ
             // оно второе). Пятичасовое на этот вопрос не отвечает: в нём
             // обычно один проект, и разбивка показывала бы сама себя.
-            var byProject: [String: WindowUsage] = [:]
-            var w = Transcripts.usage(cutoffs: cutoffs, projects: &byProject, projectsWindow: 1)
+            var byChat: [String: WindowUsage] = [:]
+            var w = Transcripts.usage(cutoffs: cutoffs, projects: &byChat, projectsWindow: 1)
 
             // Удалённые машины считаются тем же способом каждая на своей
             // стороне и складываются сюда. Ошибки не глотаем: без них
@@ -238,8 +238,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     // Проекты с той машины кладутся в ту же корзину, что и
                     // свои: один проект, над которым работают с двух машин,
                     // должен дать одну строку с общей суммой, а не две.
-                    for (dir, w) in r.projects {
-                        byProject[dir] = (byProject[dir] ?? WindowUsage()) + w
+                    for (key, w) in r.projects {
+                        byChat[key] = (byChat[key] ?? WindowUsage()) + w
                     }
                 case .success:
                     errs[t.host] = L("ответ не по форме", "malformed answer")
@@ -258,7 +258,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.remoteErrors = errs
                 self.remoteSessions = remoteSessions
                 self.remoteMemory = remoteMemory
-                self.projects = Transcripts.named(byProject)
+                self.chats = Transcripts.named(byChat, top: Prefs.maxChats)
                 guard w.count == cutoffs.count, w.count >= 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
@@ -410,7 +410,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
             }
-            for item in projectRows() { menu.addItem(item) }
+            for item in chatRows() { menu.addItem(item) }
             for item in sessionRows() { menu.addItem(item) }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
@@ -801,7 +801,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     //
     // Пустой раздел не показываем совсем: заголовок «Сессии» без строк
     // занимает место и не отвечает ни на что.
-    // Куда ушли деньги за неделю - по проектам.
+    // Куда ушли деньги за неделю - по разговорам.
     //
     // Отвечает на «на что», когда сумма уже ответила на «сколько». Без
     // этого недельная цифра ни к какому решению не ведёт: она большая
@@ -811,27 +811,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // счёт по прайсу API, а работа идёт по подписке: сама сумма ничему
     // не равна, и человеку про неё известно только то, что это оценка.
     // А вот ДОЛЯ верна независимо от того, сколько стоит токен: если
-    // 60% недели ушло в один проект, это правда и по подписке тоже.
-    private func projectRows() -> [NSMenuItem] {
-        guard Prefs.showProjects, !projects.isEmpty else { return [] }
-        let total = projects.reduce(0.0) { $0 + $1.cost }
+    // десятая часть недели ушла в один разговор, это правда и по
+    // подписке тоже.
+    private func chatRows() -> [NSMenuItem] {
+        guard Prefs.showSpendByChat, !chats.isEmpty else { return [] }
+        let total = chats.reduce(0.0) { $0 + $1.cost }
         guard total > 0 else { return [] }
 
         var out: [NSMenuItem] = [.separator(),
                                  dim(L("Куда ушло за неделю", "Where the week went"))]
-        let shown = projects.prefix(Prefs.maxProjects)
-        for p in shown {
-            let share = Int((p.cost / total * 100).rounded())
-            out.append(plain("\(Fmt.clip(p.name, 18)) \u{00B7} \u{2248}\(MoneyView.money(p.cost)) \u{00B7} \(share)%"))
+        let shown = chats.prefix(Prefs.maxChats)
+        for c in shown {
+            let share = Int((c.cost / total * 100).rounded())
+            // Имя длиннее остальной строки, поэтому режется ОНО, а не
+            // числа: «≈$392 · 10%» без имени бесполезно, имя без хвоста
+            // всё ещё узнаётся.
+            let tail = " \u{00B7} \u{2248}\(MoneyView.money(c.cost)) \u{00B7} \(share)%"
+            out.append(plain(Fmt.clip(c.title, max(8, Sessions.maxLine - tail.count)) + tail))
         }
-        // Хвост не выбрасываем молча: «показано 5 из 12» без остатка
+        // Хвост не выбрасываем молча: «показано 5 из 135» без остатка
         // читается как «всего пять», и доли в строках выше начинают
         // выглядеть так, будто они не сходятся к сотне.
-        if projects.count > shown.count {
-            let rest = projects.dropFirst(shown.count).reduce(0.0) { $0 + $1.cost }
+        if chats.count > shown.count {
+            let rest = chats.dropFirst(shown.count).reduce(0.0) { $0 + $1.cost }
             let share = Int((rest / total * 100).rounded())
-            out.append(dim(L("и ещё \(projects.count - shown.count) \u{00B7} \(share)%",
-                             "\(projects.count - shown.count) more \u{00B7} \(share)%")))
+            out.append(dim(L("и ещё \(chats.count - shown.count) \u{00B7} \(share)%",
+                             "\(chats.count - shown.count) more \u{00B7} \(share)%")))
         }
         return out
     }
@@ -1027,21 +1032,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          since: nil, machine: "vps7",
                          rssMB: 270, swapMB: 184),
         ]
-        // Разбивка по проектам - тоже в кадр, по той же причине: это новый
-        // раздел, и его строки шире строк сессий на долю в процентах.
-        // Состав нарочно с длинным именем и с «субагентами»: обе строки
-        // задают ширину, и обе приходят снаружи.
-        Prefs.showProjects = true
-        func pu(_ name: String, _ out: Int) -> Transcripts.ProjectUsage {
+        // Разбивка по разговорам - тоже в кадр, по той же причине: это
+        // новый раздел, и его строки длиннее строк сессий. Имена взяты
+        // нарочно разной длины и в обоих видах, какие бывают: своё имя
+        // (`/rename`) и первый запрос - второй длиннее и режется.
+        Prefs.showSpendByChat = true
+        func cu(_ title: String, _ out: Int) -> Transcripts.ChatUsage {
             var w = WindowUsage()
             w.byFamily["opus"] = TokenTally(input: out / 3, output: out,
                                             cacheWrite: out * 2, cacheRead: out * 40,
                                             requests: out / 100, cacheWrite1h: 0)
-            return Transcripts.ProjectUsage(name: name, usage: w)
+            return Transcripts.ChatUsage(key: title, title: title, usage: w)
         }
-        projects = [pu("Work", 380_000), pu(L("субагенты", "subagents"), 42_000),
-                    pu("climits", 18_000), pu("budget-app", 9_000),
-                    pu("SBC", 4_000), pu("harness", 900)]
+        chats = [
+            cu(L("Организационный чат", "Org chat"), 380_000),
+            cu(L("проверь мою настройку MCP, насколько она рабочая",
+                 "check my MCP setup, is it actually working"), 120_000),
+            cu(L("Тариф Альфы", "Alpha pricing"), 42_000),
+            cu(L("посчитай отказы за сентябрь", "count declines for September"), 18_000),
+            cu(L("починить сборку climits", "fix the climits build"), 9_000),
+            cu(L("мелочь", "small one"), 900),
+        ]
         lastScan = Date().addingTimeInterval(-95)
         remoteMemory = ["vps7": MachineMemory(totalMB: 3915, availableMB: 1224,
                                               swapTotalMB: 7030, swapUsedMB: 1743)]

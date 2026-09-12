@@ -1599,20 +1599,40 @@ let asking = AgentSession(pid: 2, name: "ждёт", folder: "w", surface: "",
 check("крутящаяся стоит выше ждущей: та стоит бесплатно, эта тратит",
       Sessions.sorted([asking, spinning]).first?.name, "крутится")
 
-// ---- имя проекта из каталога расшифровок -----------------------------------
-print("\nимя проекта")
-check("последнее слово пути", Transcripts.projectName(from: "-home-babko-Work-SBC"), "SBC")
-check("домашний каталог - это не проект",
-      Transcripts.projectName(from: "-home-babko"), L("без проекта", "no project"))
-check("обычный проект", Transcripts.projectName(from: "-home-babko-harness-var-climits"), "climits")
-// 63 строки по 0,003% - это не разбивка, а шум, в котором тонет
-// единственное осмысленное число: сколько всего стоят веера.
-check("временный каталог веера - не проект",
-      Transcripts.projectName(from: "-tmp-agent------------hxzynd9p"), L("субагенты", "subagents"))
-check("каталог рабочего процесса - туда же",
-      Transcripts.projectName(from: "wf_16917e2c-6e9"), L("субагенты", "subagents"))
-check("и общий каталог субагентов",
-      Transcripts.projectName(from: "subagents"), L("субагенты", "subagents"))
+// ---- разбивка денег по разговорам -----------------------------------------
+//
+// По каталогам проектов эта разбивка на живых данных пуста: 97% недели
+// в одном каталоге, потому что все рабочие сессии идут из одной папки.
+// По разговорам - осмысленна. Здесь проверяется то, что можно проверить
+// без файлов: порядок, имена и то, что имена читаются не у всех.
+print("\nкуда ушли деньги")
+
+func w(_ out: Int) -> WindowUsage {
+    var x = WindowUsage()
+    x.byFamily["opus"] = TokenTally(input: 0, output: out, cacheWrite: 0,
+                                    cacheRead: 0, requests: 1, cacheWrite1h: 0)
+    return x
+}
+
+// Ключ без косой черты - это готовое имя с удалённой машины: её файлов
+// здесь нет, и читать их незачем.
+let remoteChats = Transcripts.named(["Тариф Альфы": w(100),
+                                     "почини сборку": w(300),
+                                     "мелочь": w(10)], top: 2)
+check("самый дорогой разговор стоит первым", remoteChats.first?.title, "почини сборку")
+check("дешёвый уходит в хвост", remoteChats.last?.title, "мелочь")
+check("имя с той стороны берётся как есть, даже вне показа",
+      remoteChats.allSatisfy { !$0.title.isEmpty })
+
+// А ключ-путь - это файл ЭТОЙ машины, и имя у него читается из файла.
+// Вне показа не читается вовсе: 135 файлов за неделю превратились бы
+// в 135 лишних чтений на каждое открытие меню.
+let localChats = Transcripts.named(["/нет/такого/a.jsonl": w(300),
+                                    "/нет/такого/b.jsonl": w(200),
+                                    "/нет/такого/c.jsonl": w(100)], top: 1)
+check("у показываемого имя ищется - и без файла честно «без имени»",
+      localChats.first?.title, L("без имени", "unnamed"))
+check("у непоказываемых имя не ищется вовсе", localChats.last?.title, "")
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)
