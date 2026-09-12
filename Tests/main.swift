@@ -1599,6 +1599,48 @@ let asking = AgentSession(pid: 2, name: "ждёт", folder: "w", surface: "",
 check("крутящаяся стоит выше ждущей: та стоит бесплатно, эта тратит",
       Sessions.sorted([asking, spinning]).first?.name, "крутится")
 
+// ---- когда сообщать про кручение -------------------------------------------
+//
+// Правило живёт отдельно от Notifier намеренно: тот тянет AppKit и на этой
+// машине не типизируется вовсе. Ошибка в «сообщать один раз» проявилась бы
+// не сборкой, а сорока одинаковыми уведомлениями у человека.
+print("\nуведомление о кручении")
+
+func sess(_ pid: Int, _ name: String, loop: LoopAlert? = nil,
+          machine: String = "") -> AgentSession {
+    return AgentSession(pid: pid, name: name, folder: name, surface: "",
+                        state: .busy, waitingFor: nil, since: nil,
+                        sessionID: "s\(pid)", activity: "", loop: loop, machine: machine)
+}
+
+let spin1 = LoopAlert(tool: "Bash", count: 3, what: "swift build")
+let spin2 = LoopAlert(tool: "Edit", count: 4, what: "/a.swift")
+
+let first = LoopNotice.plan([sess(1, "climits", loop: spin1)], known: [:])
+check("про новое кручение сообщаем", first.send.count, 1)
+check("в тексте видно и сессию, и чем она крутится",
+      first.send.first.map { $0.body.contains("climits") && $0.body.contains("Bash") } ?? false)
+
+let againKnown = [LoopNotice.key(sess(1, "climits")): LoopNotice.stamp(spin1)]
+check("то же самое кручение второй раз не тревожит",
+      LoopNotice.plan([sess(1, "climits", loop: spin1)], known: againKnown).send.isEmpty)
+// А вот другое место - другое событие: агент выбрался из одного цикла
+// и попал в другой, и это стоит знать.
+check("крутится уже на другом месте - сообщаем снова",
+      LoopNotice.plan([sess(1, "climits", loop: spin2)], known: againKnown).send.count, 1)
+check("перестала крутиться - забываем, чтобы следующий раз прозвучал",
+      LoopNotice.plan([sess(1, "climits")], known: againKnown).forget
+        == ["notified.loop.#1"])
+// pid переиспользуется системой: не забудь мы исчезнувшую сессию, её
+// отпечаток заглушил бы тревогу у чужой новой с тем же номером.
+check("исчезнувшую сессию забываем тоже",
+      LoopNotice.plan([], known: againKnown).forget == ["notified.loop.#1"])
+check("своя и удалённая сессия с одним pid - разные записи",
+      LoopNotice.key(sess(7, "a")) != LoopNotice.key(sess(7, "a", machine: "vps7")))
+check("удалённая подписана машиной",
+      LoopNotice.plan([sess(9, "work-71", loop: spin1, machine: "vps7")], known: [:])
+        .send.first.map { $0.body.contains("vps7: work-71") } ?? false)
+
 // ---- разбивка денег по разговорам -----------------------------------------
 //
 // По каталогам проектов эта разбивка на живых данных пуста: 97% недели

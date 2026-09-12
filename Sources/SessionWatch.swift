@@ -281,6 +281,75 @@ enum Loops {
     }
 }
 
+// Кому сказать про кручение, а кого забыть.
+//
+// ЖИВЁТ ЗДЕСЬ, А НЕ В Notifier, потому что Notifier тянет AppKit и
+// UserNotifications - на этой машине он не типизируется вовсе, и ошибка
+// в правиле «сообщать один раз» вылезла бы только тем, что человек
+// получил бы сорок одинаковых уведомлений подряд. Здесь это чистая
+// функция: на вход список сессий и то, что помним, на выход - что
+// послать и что забыть.
+enum LoopNotice {
+
+    // Ключ - машина и pid. Не sessionId: у удалённых сессий его нет
+    // в ответе вовсе, а машина с pid различают их так же надёжно.
+    static func key(_ s: AgentSession) -> String {
+        return "notified.loop." + s.machine + "#" + String(s.pid)
+    }
+
+    // Отпечаток кручения. Сменился - значит крутится уже на другом месте,
+    // и сказать надо снова.
+    static func stamp(_ l: LoopAlert) -> String {
+        return l.tool + "|" + l.what
+    }
+
+    struct Plan: Equatable {
+        // Что послать: ключ, отпечаток и готовый текст.
+        var send: [(key: String, stamp: String, title: String, body: String)] = []
+        // Что забыть: сессия перестала крутиться или исчезла.
+        var forget: [String] = []
+
+        static func == (a: Plan, b: Plan) -> Bool {
+            return a.forget == b.forget
+                && a.send.map { [$0.key, $0.stamp, $0.title, $0.body] }
+                    == b.send.map { [$0.key, $0.stamp, $0.title, $0.body] }
+        }
+    }
+
+    // `known` - что мы уже сообщали: ключ -> отпечаток.
+    static func plan(_ sessions: [AgentSession], known: [String: String]) -> Plan {
+        var out = Plan()
+        var live = Set<String>()
+
+        for s in sessions {
+            let k = key(s)
+            live.insert(k)
+            guard let loop = s.loop else {
+                // Перестала крутиться - забываем, иначе следующее кручение
+                // на том же месте промолчит.
+                if known[k] != nil { out.forget.append(k) }
+                continue
+            }
+            let st = stamp(loop)
+            // Тот же отпечаток - то же самое кручение. Повтор был бы шумом.
+            guard known[k] != st else { continue }
+            let who = s.machine.isEmpty ? s.name : s.machine + ": " + s.name
+            out.send.append((key: k, stamp: st,
+                             title: L("Сессия крутится на месте", "A session is looping"),
+                             body: who + " \u{00B7} " + loop.text
+                                 + L(" - и тратит лимит", " - and it is burning limit")))
+        }
+
+        // Сессии, которой больше нет, забываем тоже: pid переиспользуется,
+        // и старый отпечаток заглушил бы тревогу у новой сессии.
+        for k in known.keys where !live.contains(k) {
+            out.forget.append(k)
+        }
+        out.forget.sort()
+        return out
+    }
+}
+
 // Над чем сессия работает.
 //
 // ЗАЧЕМ. Имя сессии отвечает на «какая это», но не на «что она делает».

@@ -52,6 +52,51 @@ enum Notifier {
         }
     }
 
+    // Сессия крутится на месте - сказать, не дожидаясь, пока откроют меню.
+    //
+    // ЗАЧЕМ ОТДЕЛЬНО ОТ ЛИМИТОВ. Сторож, о котором узнаёшь только открыв
+    // меню, ловит кручение тогда же, когда его поймал бы и человек, -
+    // то есть не раньше. А цена как раз во времени: сессия тратит лимит
+    // и деньги всё время, пока её не трогают.
+    //
+    // ПОЧЕМУ ЭТО НЕ ЗАВАЛИТ УВЕДОМЛЕНИЯМИ. Реплей по 286 сессиям дал три
+    // тревоги - примерно одну на сотню. Отдельного порога тут не нужно:
+    // правило само по себе редкое, а лишний порог на редком событии
+    // означает, что единственный настоящий случай тоже не дойдёт.
+    //
+    // САМО ПРАВИЛО - в LoopNotice, и это не разделение ради красоты:
+    // здесь AppKit, а значит на машине разработчика этот файл не
+    // типизируется вовсе, и ошибка в «сообщать один раз» вылезла бы
+    // сорока одинаковыми уведомлениями подряд у человека. Там она
+    // закрыта тестами.
+    private static let loopKeys = "notified.loop.keys"
+
+    static func checkLoops(_ sessions: [AgentSession]) {
+        guard Prefs.notifyEnabled, Prefs.watchLoops else { return }
+        let d = UserDefaults.standard
+
+        // Что помним. Список ключей держим отдельно: пройтись по всему
+        // домену настроек ради своих записей нельзя, а забывать исчезнувшие
+        // сессии надо - иначе переиспользованный pid унаследует отпечаток
+        // и заглушит настоящую тревогу.
+        var known: [String: String] = [:]
+        for k in (d.stringArray(forKey: loopKeys) ?? []) {
+            if let v = d.string(forKey: k) { known[k] = v }
+        }
+
+        let plan = LoopNotice.plan(sessions, known: known)
+        for k in plan.forget {
+            d.removeObject(forKey: k)
+            known.removeValue(forKey: k)
+        }
+        for item in plan.send {
+            d.set(item.stamp, forKey: item.key)
+            known[item.key] = item.stamp
+            send(title: item.title, body: item.body)
+        }
+        d.set(Array(known.keys).sorted(), forKey: loopKeys)
+    }
+
     private static func send(title: String, body: String) {
         // Центр уведомлений спрашивается лениво, при первом же поводе:
         // приложение, которое просит разрешение на старте, ничего ещё

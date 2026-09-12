@@ -156,6 +156,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         localSessions = Sessions.enrich(Sessions.read(),
                                         watchLoops: Prefs.watchLoops,
                                         showActivity: Prefs.showActivity)
+        // Про кручение сообщаем здесь, а не при показе меню: смысл сторожа
+        // в том, чтобы сказать РАНЬШЕ, чем человек сам заглянет. Удалённые
+        // сессии сюда входят - их тревогу посчитала та сторона, и она
+        // такая же настоящая.
+        Notifier.checkLoops(localSessions + remoteSessions)
     }
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
