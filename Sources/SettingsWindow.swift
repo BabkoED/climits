@@ -464,6 +464,12 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             ("showHistory", L("История и темп", "History and pace"), Prefs.showHistory),
             ("showSessions", L("Кто работает и кто ждёт", "Who is working and who waits"),
              Prefs.showSessions),
+            ("watchLoops", L("Ловить кручение на месте", "Catch sessions looping"),
+             Prefs.watchLoops),
+            ("showActivity", L("Над чем сессия работает", "What a session works on"),
+             Prefs.showActivity),
+            ("showProjects", L("Куда ушли деньги за неделю", "Where the week's money went"),
+             Prefs.showProjects),
             ("sparkleEnabled", L("Обновляться через Sparkle", "Update via Sparkle"),
              Prefs.sparkleEnabled),
         ]
@@ -552,6 +558,9 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showIcon": Prefs.showIcon = on
         case "barRing": Prefs.barRing = on
         case "showSessions": Prefs.showSessions = on
+        case "watchLoops": Prefs.watchLoops = on
+        case "showActivity": Prefs.showActivity = on
+        case "showProjects": Prefs.showProjects = on
         case "sparkleEnabled":
             Prefs.sparkleEnabled = on
             // Поднять сразу, а не после перезапуска: галочка, которая

@@ -82,6 +82,10 @@ enum RemoteScan {
         var windows: [WindowUsage] = []
         var sessions: [AgentSession] = []
         var memory = MachineMemory()
+        // Сырые каталоги проектов той машины. Имена сокращает мак - одним
+        // правилом на обе стороны, иначе один проект подписывался бы
+        // по-разному в зависимости от того, где его посчитали.
+        var projects: [String: WindowUsage] = [:]
     }
 
     // Сколько ждём. Обход сотни мегабайт на той стороне - это секунды, но
@@ -89,7 +93,9 @@ enum RemoteScan {
     static let timeout: TimeInterval = 60
 
     // Синхронный вызов: гонять его можно только с фоновой очереди.
-    static func usage(host: String, path: String, cutoffs: [Date]) -> Result<Answer, Failure> {
+    static func usage(host: String, path: String, cutoffs: [Date],
+                      wantActivity: Bool = false,
+                      projectsWindow: Int = -1) -> Result<Answer, Failure> {
         // Адрес, начинающийся с дефиса, ssh примет за свой ключ. Пробел
         // внутри - это уже не адрес, а попытка дописать аргументов.
         guard !host.isEmpty, !host.hasPrefix("-"),
@@ -100,6 +106,10 @@ enum RemoteScan {
                     "-o", "ClearAllForwardings=yes", "-T",
                     host, "/usr/bin/env", "python3", "-"]
         args += cutoffs.map { String(Int($0.timeIntervalSince1970)) }
+        // Настройки отдельным доводом, а не новой позицией: разбор границ
+        // окна идёт по всем доводам подряд, и лишнее число среди них
+        // молча стало бы границей несуществующего окна.
+        args.append("flags:activity=\(wantActivity ? 1 : 0);pwin=\(projectsWindow)")
         // Каталог уезжает аргументом скрипта, а не подстановкой в текст:
         // так путь с пробелом или кавычкой остаётся путём.
         args.append(path.isEmpty ? "~/.claude/projects" : path)
@@ -252,7 +262,27 @@ enum RemoteScan {
             let free = Sessions.intValue(m["swap_free"]) ?? 0
             mem.swapUsedMB = max(0, mem.swapTotalMB - free)
         }
-        return .success(Answer(windows: out, sessions: Sessions.sorted(live), memory: mem))
+        // Проекты - тоже необязательная часть: их не будет, если разбивку
+        // не просили. Пустой словарь и «не просили» тут одно и то же.
+        var projects: [String: WindowUsage] = [:]
+        if let items = root["projects"] as? [String: [String: Any]] {
+            for (dir, fams) in items {
+                var w = WindowUsage()
+                for (family, any) in fams {
+                    guard let v = any as? [String: Any] else { continue }
+                    w.byFamily[family] = TokenTally(
+                        input: Int(jsonNumber(v["input"]) ?? 0),
+                        output: Int(jsonNumber(v["output"]) ?? 0),
+                        cacheWrite: Int(jsonNumber(v["cache_write"]) ?? 0),
+                        cacheRead: Int(jsonNumber(v["cache_read"]) ?? 0),
+                        requests: Int(jsonNumber(v["requests"]) ?? 0),
+                        cacheWrite1h: Int(jsonNumber(v["cache_write_1h"]) ?? 0))
+                }
+                if !w.isEmpty { projects[dir] = w }
+            }
+        }
+        return .success(Answer(windows: out, sessions: Sessions.sorted(live),
+                               memory: mem, projects: projects))
     }
 
     // --- то, что выполняется на той стороне ----------------------------------
@@ -268,9 +298,31 @@ MAX_TAIL = 64 * 1024 * 1024
 FAMILIES = ("fable", "opus", "sonnet", "haiku")
 FALLBACK = "sonnet"
 
-cutoffs = [int(a) for a in sys.argv[1:-1]]
+# Разбор доводов.
+#
+# Границы окон идут числами, как и раньше. Настройки приехали позже и
+# добавлены отдельным доводом «flags:...», а не новой позицией: позиция
+# сломала бы старую версию скрипта молча, а незнакомый довод она просто
+# не увидит - числами он не притворяется.
+cutoffs = []
+flags = {}
+for a in sys.argv[1:-1]:
+    if a.startswith("flags:"):
+        for kv in a[6:].split(";"):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                flags[k] = v
+        continue
+    try:
+        cutoffs.append(int(a))
+    except ValueError:
+        pass
+want_activity = flags.get("activity") == "1"
+# Номер окна, которое разносим по проектам. -1 - не разносить вовсе.
+projects_window = int(flags.get("pwin", "-1"))
 root = os.path.expanduser(sys.argv[-1])
 earliest = min(cutoffs) if cutoffs else 0
+projects = {}
 
 wins = [{"families": {}, "unknown": set(), "truncated": False} for _ in cutoffs]
 seen = set()
@@ -373,6 +425,16 @@ for dirpath, dirnames, filenames in os.walk(root):
                     acc[k] += add[k]
                 if model and not any(f in low for f in FAMILIES):
                     wins[i]["unknown"].add(model)
+                # Разбивка по проектам - только по заказанному окну.
+                # Имя проекта тут сырое, каталогом: сокращать его до
+                # последнего слова будет мак, и правило сокращения должно
+                # быть ОДНО на обе стороны, иначе один и тот же проект
+                # подпишется по-разному в зависимости от машины.
+                if i == projects_window:
+                    pacc = projects.setdefault(os.path.basename(dirpath), {})
+                    fam_acc = pacc.setdefault(fam, [0, 0, 0, 0, 0, 0])
+                    for k in range(6):
+                        fam_acc[k] += add[k]
 
 out = []
 for w in wins:
@@ -384,6 +446,142 @@ for w in wins:
         "unknown": sorted(w["unknown"]),
         "truncated": w["truncated"],
     })
+
+# --- сторож кручения и занятие сессии ---------------------------------------
+#
+# Зеркало Loops/Activity из SessionWatch.swift. Числа и правило те же:
+# три одинаковых вызова изменяющего инструмента за пять минут ПРИ
+# СОВПАДАЮЩЕМ выводе. Обоснование и таблица реплея - там же, дублировать
+# их здесь незачем, а расходиться этим двум нельзя.
+LOOP_REPEATS = 3
+LOOP_WINDOW = 300
+LOOP_TAIL = 512 * 1024
+LOOP_TOOLS = ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit")
+ACTIVITY_LIMIT = 60
+
+
+def _sig(tool, inp):
+    if not isinstance(inp, dict):
+        return tool, ""
+    if tool == "Bash":
+        cmd = str(inp.get("command") or "")
+        return tool + "|" + cmd[:400], cmd
+    if tool in ("Edit", "MultiEdit"):
+        p = str(inp.get("file_path") or "")
+        return tool + "|" + p + "|" + str(inp.get("old_string") or "")[:200], p
+    if tool in ("Write", "NotebookEdit"):
+        p = str(inp.get("file_path") or inp.get("notebook_path") or "")
+        return tool + "|" + p + "|" + str(inp.get("content") or "")[:200], p
+    return tool + "|" + json.dumps(inp, sort_keys=True)[:400], ""
+
+
+def _result_sig(res):
+    if not isinstance(res, dict):
+        return str(res)[:2000] if res is not None else None
+    out = res.get("stdout")
+    err = res.get("stderr")
+    if isinstance(out, str) or isinstance(err, str):
+        return (out or "") + "\x00" + (err or "")
+    return json.dumps(res, sort_keys=True, default=str)[:2000]
+
+
+def watch_session(sid, projects_root):
+    """Хвост расшифровки этой сессии: крутится ли и над чем работает."""
+    path = None
+    try:
+        for proj in os.listdir(projects_root):
+            p = os.path.join(projects_root, proj, sid + ".jsonl")
+            if os.path.isfile(p):
+                path = p
+                break
+    except OSError:
+        return {}
+    if path is None:
+        return {}
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > LOOP_TAIL:
+                fh.seek(size - LOOP_TAIL)
+            text = fh.read(LOOP_TAIL).decode("utf-8", "ignore")
+    except OSError:
+        return {}
+
+    edge = datetime.datetime.now().timestamp() - LOOP_WINDOW
+    calls = []
+    results = {}
+    activity = None
+    for line in text.split("\n"):
+        if '"toolUseResult"' in line:
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            content = (row.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                continue
+            sig = _result_sig(row.get("toolUseResult"))
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id")
+                    if tid:
+                        results[tid] = sig
+            continue
+        if '"tool_use"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        t = when(row)
+        if t is None or t < edge:
+            continue
+        content = (row.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict) or b.get("type") != "tool_use":
+                continue
+            tool = b.get("name") or ""
+            if tool not in LOOP_TOOLS:
+                continue
+            key, what = _sig(tool, b.get("input") or {})
+            calls.append([t, tool, key, what, b.get("id")])
+
+    # Ищем С КОНЦА: строка last-prompt переписывается на каждый новый
+    # запрос, и в хвосте их несколько. Нужна последняя, иначе трей покажет
+    # позапрошлую задачу и будет врать тем убедительнее, чем дольше сессия.
+    if want_activity:
+        for line in reversed(text.split("\n")):
+            if '"last-prompt"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict) and row.get("type") == "last-prompt":
+                p = row.get("lastPrompt")
+                if isinstance(p, str) and p.strip():
+                    activity = " ".join(p.split())[:ACTIVITY_LIMIT]
+                    break
+
+    loop = None
+    hist = {}
+    for t, tool, key, what, tid in sorted(calls, key=lambda c: c[0]):
+        seen = [x for x in hist.get(key, []) if t - x[0] <= LOOP_WINDOW]
+        seen.append((t, results.get(tid)))
+        hist[key] = seen
+        if len(seen) < LOOP_REPEATS:
+            continue
+        known = [r for (_, r) in seen if r is not None]
+        # Меньше двух известных выводов - судить не по чему. Тревога без
+        # основания дороже пропущенной.
+        if len(known) < 2 or len(set(known)) != 1:
+            continue
+        if loop is None or len(seen) > loop["count"]:
+            loop = {"tool": tool, "count": len(seen), "what": what[:80]}
+    return {"loop": loop, "activity": activity}
+
 
 # Кто на той стороне работает, а кто ждёт ответа.
 #
@@ -430,6 +628,23 @@ for name in names:
     keep = ("pid", "name", "entrypoint", "status", "tempo",
             "waitingFor", "needs", "statusUpdatedAt", "updatedAt")
     item = {k: rec[k] for k in keep if k in rec}
+
+    # Не крутится ли эта сессия на месте, и над чем она работает.
+    #
+    # Считается ЗДЕСЬ, а не на маке: детектору нужен хвост расшифровки,
+    # полмегабайта на сессию. Тянуть их по ssh ради трёх чисел нельзя -
+    # обход и так идёт по сети. Сюда уезжает готовый итог.
+    #
+    # Правило то же, что на маке, и держать их одинаковыми обязательно:
+    # разойдись они - одна и та же сессия считалась бы крутящейся с одной
+    # машины и здоровой с другой, и понять, которая права, было бы нельзя.
+    sid = rec.get("sessionId")
+    if isinstance(sid, str) and sid:
+        info = watch_session(sid, root)
+        if info.get("loop"):
+            item["loop"] = info["loop"]
+        if want_activity and info.get("activity"):
+            item["activity"] = info["activity"]
     # Память: и в ОЗУ, и в свопе. Своп здесь важнее ОЗУ - у сессии,
     # которую обработала гибернация, он больше, и это единственный
     # способ увидеть снаружи, что она работает.
@@ -459,6 +674,15 @@ try:
 except Exception:
     pass
 
-print(json.dumps({"windows": out, "sessions": sessions, "memory": mem}))
+print(json.dumps({
+    "windows": out,
+    "sessions": sessions,
+    "memory": mem,
+    "projects": {name: {f: {"input": v[0], "output": v[1], "cache_write": v[2],
+                            "cache_read": v[3], "requests": v[4],
+                            "cache_write_1h": v[5]}
+                        for f, v in fams.items()}
+                 for name, fams in projects.items()},
+}))
 """#
 }

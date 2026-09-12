@@ -121,12 +121,102 @@ enum Transcripts {
         return usage(cutoffs: [since], dir: dir)[0]
     }
 
+    // Куда ушли деньги - по проектам.
+    //
+    // ЗАЧЕМ. Сумма за месяц отвечает на «сколько потратил», но не на
+    // «на что». Второй вопрос - единственный, по которому можно что-то
+    // решить: увидеть, что половина месяца ушла в один проект, значит
+    // получить повод посмотреть, почему именно там так дорого.
+    //
+    // ПОЧЕМУ ПРОЕКТ, А НЕ КАТАЛОГ ВНУТРИ НЕГО. caprock делит расход по
+    // подкаталогам монорепозитория, относя ход к папке последнего
+    // тронутого файла. Здесь это не нужно и вредно: работа ведётся
+    // по правилу «одна сессия - один проект», разнести ход между
+    // папками нечем, а колонка, которая всегда показывает один и тот же
+    // подкаталог, только занимает место.
+    //
+    // Имя берётся из каталога расшифровок: Claude Code кодирует туда
+    // рабочий путь, заменяя «/» на «-». Обратно путь не восстановить
+    // (дефис в имени папки неотличим от разделителя), но последнее слово
+    // - и есть имя проекта, а больше в меню всё равно не влезет.
+    struct ProjectUsage {
+        var name: String
+        var usage: WindowUsage
+        var cost: Double { return usage.cost }
+    }
+
+    // Человеку - последнее слово пути: «-home-babko-Work-SBC» -> «SBC».
+    //
+    // Каталог «-home-babko» (домашний) даёт пустое слово - там работа без
+    // проекта, и называется она прямо, а не пустой строкой в списке.
+    static func projectName(from dir: String) -> String {
+        // Работа субагентов - в одну строку, а не 63 отдельных.
+        //
+        // Замер 12.09.2026: из 72 каталогов за неделю 63 оказались
+        // временными каталогами вееров - «-tmp-agent-xxxxxxxx», по паре
+        // запросов в каждом, все вместе 0,2% расхода. Как проекты они не
+        // значат ничего: имя случайное, живут они минуты. А вот СУММА по
+        // ним - осмысленная: это цена вееров за неделю, и её видно только
+        // если сложить.
+        if dir.hasPrefix("-tmp-agent") || dir.hasPrefix("wf_") || dir == "subagents" {
+            return L("субагенты", "subagents")
+        }
+        let parts = dir.split(separator: "-").map(String.init)
+        guard let last = parts.last, !last.isEmpty else { return L("без проекта", "no project") }
+        // Домашний каталог целиком - это не проект.
+        if parts.count <= 2 { return L("без проекта", "no project") }
+        return last
+    }
+
+    // Разбивка за окно. Сортировка по деньгам, самое дорогое первым.
+    static func byProject(since: Date, dir: URL? = nil) -> [ProjectUsage] {
+        var acc: [String: WindowUsage] = [:]
+        _ = usage(cutoffs: [since], dir: dir, projects: &acc)
+        return named(acc)
+    }
+
+    // Сырые каталоги -> названные проекты, от дорогого к дешёвому.
+    static func named(_ acc: [String: WindowUsage]) -> [ProjectUsage] {
+        // Разные каталоги могут дать одно имя: «-home-babko-Work» и
+        // «-tmp-work» оба кончаются на «work». Складываем, а не показываем
+        // две строки с одинаковой подписью и разными числами - такая пара
+        // читается как ошибка счёта.
+        var byName: [String: WindowUsage] = [:]
+        for (dir, w) in acc {
+            let n = projectName(from: dir)
+            byName[n] = (byName[n] ?? WindowUsage()) + w
+        }
+        return byName
+            .map { ProjectUsage(name: $0.key, usage: $0.value) }
+            .sorted { a, b in
+                if a.cost != b.cost { return a.cost > b.cost }
+                return a.name < b.name
+            }
+    }
+
     // Несколько окон за один проход по файлам.
     //
     // Окна вложены друг в друга - пятичасовое внутри недельного, - и читать
     // одни и те же сотни мегабайт дважды незачем. Строка попадает во все
     // окна, чья граница её младше.
     static func usage(cutoffs: [Date], dir: URL? = nil) -> [WindowUsage] {
+        var ignored: [String: WindowUsage] = [:]
+        return usage(cutoffs: cutoffs, dir: dir, projects: &ignored)
+    }
+
+    // То же самое, но попутно собирает разбивку по проектам.
+    //
+    // Попутно - потому что проход по файлам один и тот же. Отдельный обход
+    // ради разбивки стоил бы второго чтения сотен мегабайт при каждом
+    // открытии меню, а данные те же самые: имя проекта - это каталог,
+    // в котором лежит уже прочитанный файл.
+    //
+    // Разбивка считается по ОДНОМУ окну - тому, чей номер передали.
+    // Разносить по проектам все окна сразу значит держать словарь на
+    // каждое ради одного, которое покажут.
+    static func usage(cutoffs: [Date], dir: URL? = nil,
+                      projects: inout [String: WindowUsage],
+                      projectsWindow: Int = 0) -> [WindowUsage] {
         guard let earliest = cutoffs.min() else { return [] }
         var out = [WindowUsage](repeating: WindowUsage(), count: cutoffs.count)
         // Общий на все файлы: один и тот же message.id не должен посчитаться
@@ -151,14 +241,19 @@ enum Transcripts {
                 // Файл, не тронутый с начала окна, точно не содержит нужных строк.
                 if let v = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                    let m = v.contentModificationDate, m < since { continue }
-                scan(url: url, cutoffs: cutoffs, into: &out, seen: &seen)
+                // Имя каталога проекта - это родитель файла расшифровки.
+                let project = url.deletingLastPathComponent().lastPathComponent
+                scan(url: url, cutoffs: cutoffs, into: &out, seen: &seen,
+                     project: project, projects: &projects, projectsWindow: projectsWindow)
             }
         }
         return out
     }
 
     private static func scan(url: URL, cutoffs: [Date], into out: inout [WindowUsage],
-                             seen: inout Set<String>) {
+                             seen: inout Set<String>,
+                             project: String, projects: inout [String: WindowUsage],
+                             projectsWindow: Int) {
         let since = cutoffs.min() ?? Date.distantPast
         let (text, truncated) = tail(of: url)
         if truncated { for i in out.indices { out[i].truncated = true } }
@@ -217,6 +312,12 @@ enum Transcripts {
             for (i, cutoff) in cutoffs.enumerated() where when >= cutoff {
                 out[i].byFamily[family] = (out[i].byFamily[family] ?? TokenTally()) + add
                 if !model.isEmpty && !Pricing.isKnown(model) { out[i].unknownModels.insert(model) }
+                // Разбивка - только по заказанному окну, см. оговорку у usage().
+                if i == projectsWindow {
+                    var w = projects[project] ?? WindowUsage()
+                    w.byFamily[family] = (w.byFamily[family] ?? TokenTally()) + add
+                    projects[project] = w
+                }
             }
         }
     }

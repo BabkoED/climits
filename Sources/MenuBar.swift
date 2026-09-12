@@ -48,6 +48,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // деньгами. Своя не мерится вовсе - на маке памяти обычно много,
     // сложности бывают на сервере.
     private var remoteMemory: [String: MachineMemory] = [:]
+
+    // Куда ушли деньги за недельное окно. Считается тем же проходом,
+    // что и сами деньги, - отдельного чтения расшифровок не стоит.
+    private var projects: [Transcripts.ProjectUsage] = []
     private var sessions: [AgentSession] {
         return Sessions.sorted(localSessions + remoteSessions)
     }
@@ -141,9 +145,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // строка меню. Отдельная функция, а не строка внутри updateTitle,
     // чтобы чтение файлов не оказалось внутри отрисовки.
     private func refreshLocalSessions() {
-        localSessions = Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}")
-            ? Sessions.read()
-            : []
+        guard Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}") else {
+            localSessions = []
+            return
+        }
+        // Дочитывание по расшифровкам стоит дороже самих файлов сессий -
+        // полмегабайта хвоста на живую сессию против полукилобайта, -
+        // но идёт по тому же поводу и в том же потоке: на десятке сессий
+        // это единицы миллисекунд, порога между чтениями оно не требует.
+        localSessions = Sessions.enrich(Sessions.read(),
+                                        watchLoops: Prefs.watchLoops,
+                                        showActivity: Prefs.showActivity)
     }
 
     // Разбор расшифровок - это чтение файлов, иногда сотен мегабайт. В
@@ -178,7 +190,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         scanning = true
         let targets = Prefs.remoteTargets()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var w = Transcripts.usage(cutoffs: cutoffs)
+            // Разбивка по проектам - за НЕДЕЛЬНОЕ окно (в списке границ
+            // оно второе). Пятичасовое на этот вопрос не отвечает: в нём
+            // обычно один проект, и разбивка показывала бы сама себя.
+            var byProject: [String: WindowUsage] = [:]
+            var w = Transcripts.usage(cutoffs: cutoffs, projects: &byProject, projectsWindow: 1)
 
             // Удалённые машины считаются тем же способом каждая на своей
             // стороне и складываются сюда. Ошибки не глотаем: без них
@@ -196,7 +212,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 for t in targets {
                     group.enter()
                     DispatchQueue.global(qos: .utility).async {
-                        let r = RemoteScan.usage(host: t.host, path: t.path, cutoffs: cutoffs)
+                        let r = RemoteScan.usage(host: t.host, path: t.path, cutoffs: cutoffs,
+                                                 wantActivity: Prefs.showActivity,
+                                                 projectsWindow: Prefs.showProjects ? 1 : -1)
                         lock.lock(); answers[t.host] = r; lock.unlock()
                         group.leave()
                     }
@@ -217,6 +235,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     machines += 1
                     remoteSessions += r.sessions
                     if !r.memory.isEmpty { remoteMemory[t.host] = r.memory }
+                    // Проекты с той машины кладутся в ту же корзину, что и
+                    // свои: один проект, над которым работают с двух машин,
+                    // должен дать одну строку с общей суммой, а не две.
+                    for (dir, w) in r.projects {
+                        byProject[dir] = (byProject[dir] ?? WindowUsage()) + w
+                    }
                 case .success:
                     errs[t.host] = L("ответ не по форме", "malformed answer")
                 case .failure(let e):
@@ -234,6 +258,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.remoteErrors = errs
                 self.remoteSessions = remoteSessions
                 self.remoteMemory = remoteMemory
+                self.projects = Transcripts.named(byProject)
                 guard w.count == cutoffs.count, w.count >= 2 else { return }
                 self.sessionWindow = w[0]
                 self.weeklyWindow = w[1]
@@ -385,6 +410,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
             }
+            for item in projectRows() { menu.addItem(item) }
             for item in sessionRows() { menu.addItem(item) }
         } else if let err = lastError {
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
@@ -775,6 +801,41 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     //
     // Пустой раздел не показываем совсем: заголовок «Сессии» без строк
     // занимает место и не отвечает ни на что.
+    // Куда ушли деньги за неделю - по проектам.
+    //
+    // Отвечает на «на что», когда сумма уже ответила на «сколько». Без
+    // этого недельная цифра ни к какому решению не ведёт: она большая
+    // или маленькая, и всё.
+    //
+    // Доля в процентах стоит рядом с деньгами намеренно. Деньги здесь -
+    // счёт по прайсу API, а работа идёт по подписке: сама сумма ничему
+    // не равна, и человеку про неё известно только то, что это оценка.
+    // А вот ДОЛЯ верна независимо от того, сколько стоит токен: если
+    // 60% недели ушло в один проект, это правда и по подписке тоже.
+    private func projectRows() -> [NSMenuItem] {
+        guard Prefs.showProjects, !projects.isEmpty else { return [] }
+        let total = projects.reduce(0.0) { $0 + $1.cost }
+        guard total > 0 else { return [] }
+
+        var out: [NSMenuItem] = [.separator(),
+                                 dim(L("Куда ушло за неделю", "Where the week went"))]
+        let shown = projects.prefix(Prefs.maxProjects)
+        for p in shown {
+            let share = Int((p.cost / total * 100).rounded())
+            out.append(plain("\(Fmt.clip(p.name, 18)) \u{00B7} \u{2248}\(MoneyView.money(p.cost)) \u{00B7} \(share)%"))
+        }
+        // Хвост не выбрасываем молча: «показано 5 из 12» без остатка
+        // читается как «всего пять», и доли в строках выше начинают
+        // выглядеть так, будто они не сходятся к сотне.
+        if projects.count > shown.count {
+            let rest = projects.dropFirst(shown.count).reduce(0.0) { $0 + $1.cost }
+            let share = Int((rest / total * 100).rounded())
+            out.append(dim(L("и ещё \(projects.count - shown.count) \u{00B7} \(share)%",
+                             "\(projects.count - shown.count) more \u{00B7} \(share)%")))
+        }
+        return out
+    }
+
     private func sessionRows() -> [NSMenuItem] {
         guard Prefs.showSessions else { return [] }
         // nameLimit здесь СВОЙ, а не колонки лимитов: имя сессии человек

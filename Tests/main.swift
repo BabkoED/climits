@@ -1424,5 +1424,181 @@ check("деньги помечены как наш счёт",
 check("токены знака не получают: их слабость в охвате, а не в оценке",
       TokensView(spent: 1000).text, "1" + L("к", "K"))
 
+// ---- не крутится ли сессия на месте -----------------------------------------
+//
+// Правило калибровалось реплеем по 286 сессиям (14 329 вызовов, 12.09.2026),
+// и главное в нём - ВТОРОЕ условие: вывод должен совпасть. Без него ловятся
+// не застрявшие агенты, а опрос фоновой работы: `cat /tmp/replay.log` три
+// раза подряд, пока идёт долгий прогон. Тесты держат именно эту границу.
+print("\nкручение на месте")
+
+// Пустое значение здесь - это провал проверки, а не совпадение с нулём:
+// «нет» не равно ни одному числу и ни одной строке.
+func check(_ name: String, _ got: Int?, _ want: Int) {
+    check(name, got.map { String($0) } ?? "нет", String(want))
+}
+
+func check(_ name: String, _ got: String?, _ want: String) {
+    check(name, got ?? "нет", want)
+}
+
+// Строки расшифровки в том виде, в каком их пишет Claude Code.
+func callLine(_ secsAgo: Int, _ tool: String, _ input: String, id: String) -> String {
+    return "{\"type\":\"assistant\",\"timestamp\":\"\(iso(-TimeInterval(secsAgo)))\"," +
+           "\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"\(id)\"," +
+           "\"name\":\"\(tool)\",\"input\":\(input)}]}}"
+}
+
+func resultLine(_ id: String, _ stdout: String) -> String {
+    return "{\"type\":\"user\",\"toolUseResult\":{\"stdout\":\"\(stdout)\",\"stderr\":\"\"}," +
+           "\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"\(id)\"}]}}"
+}
+
+// n одинаковых вызовов подряд. outputs - что вернул каждый.
+func spin(tool: String = "Bash", input: String = "{\"command\":\"cat /tmp/x.log\"}",
+          spacing: Int = 30, outputs: [String]) -> [String] {
+    var lines: [String] = []
+    for (i, out) in outputs.enumerated() {
+        let id = "t\(i)"
+        lines.append(callLine(240 - i * spacing, tool, input, id: id))
+        lines.append(resultLine(id, out))
+    }
+    return lines
+}
+
+func alert(_ lines: [String], window: TimeInterval = Loops.window) -> LoopAlert? {
+    let calls = Loops.parse(lines.joined(separator: "\n"),
+                            since: Date().addingTimeInterval(-window))
+    return Loops.check(calls)
+}
+
+check("три одинаковых вызова с тем же выводом - это кручение",
+      alert(spin(outputs: ["same", "same", "same"]))?.count, 3)
+check("тот же вызов, но вывод меняется - это ожидание прогона, не кручение",
+      alert(spin(outputs: ["1 строка", "2 строки", "3 строки"])) == nil)
+check("двух повторов мало",
+      alert(spin(outputs: ["same", "same"])) == nil)
+check("вывод известен только у одного - судить не по чему, молчим",
+      Loops.check(Loops.parse(
+        [callLine(200, "Bash", "{\"command\":\"cat x\"}", id: "a"),
+         callLine(170, "Bash", "{\"command\":\"cat x\"}", id: "b"),
+         callLine(140, "Bash", "{\"command\":\"cat x\"}", id: "c"),
+         resultLine("a", "same")].joined(separator: "\n"),
+        since: Date().addingTimeInterval(-Loops.window))) == nil)
+check("разные команды - не повтор",
+      Loops.check(Loops.parse(
+        [callLine(200, "Bash", "{\"command\":\"ls a\"}", id: "a"), resultLine("a", "x"),
+         callLine(170, "Bash", "{\"command\":\"ls b\"}", id: "b"), resultLine("b", "x"),
+         callLine(140, "Bash", "{\"command\":\"ls c\"}", id: "c"), resultLine("c", "x")]
+            .joined(separator: "\n"),
+        since: Date().addingTimeInterval(-Loops.window))) == nil)
+// Read сюда не попадает не потому, что чтение безобидно, а потому что
+// у него нет побочного действия: перечитать файл трижды дёшево и часто
+// осмысленно. Дорого - трижды прогнать команду с тем же результатом.
+check("читающий инструмент под правило не подпадает",
+      alert(spin(tool: "Read", input: "{\"file_path\":\"/a\"}",
+                 outputs: ["same", "same", "same"])) == nil)
+check("правка того же места тем же текстом - тоже кручение",
+      alert(spin(tool: "Edit",
+                 input: "{\"file_path\":\"/a.swift\",\"old_string\":\"let x\"}",
+                 outputs: ["ok", "ok", "ok"]))?.tool, "Edit")
+// Окно узкое намеренно: три одинаковых вызова, растянутых на час, - это
+// не застрявший агент, а трижды понадобившаяся команда.
+check("вне окна повтор не считается",
+      alert(spin(spacing: 600, outputs: ["same", "same", "same"])) == nil)
+// Значение посчитано отдельно, питоном, по определению FNV-1a - а не
+// снято с этой же функции. Снятое с себя число проверяет только то, что
+// код не менялся; посчитанное независимо ловит и ошибку в самом алгоритме.
+// Смысл проверки в том, что хеш ДЕТЕРМИНИРОВАН: у Swift hashValue соль
+// своя на каждый запуск, и детектор на нём вёл бы себя по-разному
+// от запуска к запуску.
+check("хеш совпадает со счётом со стороны", Loops.hash("climits") == 0x24f13ee6c9924766)
+check("разный ввод - разный отпечаток", Loops.hash("a") != Loops.hash("b"))
+check("подпись тревоги называет инструмент и счёт",
+      LoopAlert(tool: "Bash", count: 4, what: "x").text, L("крутится: ", "looping: ") + "Bash \u{00D7}4")
+
+// ---- над чем сессия работает ------------------------------------------------
+print("\nзанятие сессии")
+
+func promptLine(_ text: String) -> String {
+    return "{\"type\":\"last-prompt\",\"lastPrompt\":\"\(text)\",\"sessionId\":\"s1\"}"
+}
+
+check("берётся последний запрос, а не первый",
+      Activity.lastPrompt([promptLine("старая задача"), callLine(10, "Bash", "{}", id: "z"),
+                           promptLine("новая задача")].joined(separator: "\n")), "новая задача")
+// Перевод строки в строке меню разорвал бы её пополам: пункт NSMenuItem
+// показывает только первый кусок, и остаток пропадает молча.
+check("многострочный запрос склеивается в одну строку",
+      Activity.lastPrompt(promptLine("первая строка\\nвторая строка")),
+      "первая строка вторая строка")
+check("длинный запрос обрезается по пределу",
+      Activity.lastPrompt(promptLine(String(repeating: "я", count: 200)))?.count, Activity.limit)
+check("запроса нет - нет и занятия", Activity.lastPrompt("{\"type\":\"user\"}") == nil)
+check("пустой запрос не выдаётся за занятие", Activity.lastPrompt(promptLine("   ")) == nil)
+
+// ---- что попадает в хвост строки --------------------------------------------
+//
+// Место одно, а сказать хочется четыре вещи. Порядок закреплён здесь,
+// потому что в коде он выражен цепочкой if и молча переставляется
+// одной правкой.
+print("\nхвост строки сессии")
+
+let loop4 = LoopAlert(tool: "Bash", count: 4, what: "cat x")
+func line(waiting: String? = nil, memory: String = "", activity: String = "",
+          loop: LoopAlert? = nil, state: String = "работает") -> String {
+    return Sessions.composeLine(mark: "  ", machine: "", name: "work-81",
+                                surface: "", state: state, waitingFor: waiting,
+                                age: "4м", memory: memory, activity: activity, loop: loop)
+}
+
+check("кручение вытесняет память",
+      line(memory: "144+317 МБ", loop: loop4).contains(L("крутится", "looping")))
+check("кручение вытесняет и просьбу",
+      line(waiting: "разрешение на запись", loop: loop4).contains(L("крутится", "looping")))
+check("просьба важнее занятия",
+      line(waiting: "запись", activity: "посчитай отказы", state: L("ждёт меня", "waiting on me"))
+        .contains("посчитай") == false)
+check("память важнее занятия",
+      line(memory: "144+317 МБ", activity: "посчитай отказы").contains("посчитай") == false)
+check("занятие показывается, когда больше сказать нечего",
+      line(activity: "посчитай отказы").contains("посчитай отказы"))
+// У локальных сессий память не меряется вовсе - значит хвост свободен,
+// и занятие не отняло место ни у чего. Ровно это здесь и проверяется.
+check("занятие не раздвинуло строку шире предела",
+      line(activity: String(repeating: "я", count: 60)).count <= Sessions.maxLine)
+check("длинное занятие обрезается, а не выбрасывается",
+      line(activity: String(repeating: "я", count: 60)).contains("я"))
+// А число - наоборот: обрезанное «144+31» это ложь, а не сокращение.
+check("память целиком или никак",
+      line(memory: "1444+3177 МБ", state: String(repeating: "с", count: 30))
+        .contains("1444+3177") == false)
+
+// ---- порядок в списке -------------------------------------------------------
+print("\nпорядок сессий")
+let spinning = AgentSession(pid: 1, name: "крутится", folder: "w", surface: "",
+                            state: .busy, waitingFor: nil, since: nil,
+                            sessionID: "s1", activity: "", loop: loop4, machine: "")
+let asking = AgentSession(pid: 2, name: "ждёт", folder: "w", surface: "",
+                          state: .waiting, waitingFor: "запись", since: nil,
+                          sessionID: "s2", activity: "", loop: nil, machine: "")
+check("крутящаяся стоит выше ждущей: та стоит бесплатно, эта тратит",
+      Sessions.sorted([asking, spinning]).first?.name, "крутится")
+
+// ---- имя проекта из каталога расшифровок -----------------------------------
+print("\nимя проекта")
+check("последнее слово пути", Transcripts.projectName(from: "-home-babko-Work-SBC"), "SBC")
+check("домашний каталог - это не проект",
+      Transcripts.projectName(from: "-home-babko"), L("без проекта", "no project"))
+check("обычный проект", Transcripts.projectName(from: "-home-babko-harness-var-climits"), "climits")
+// 63 строки по 0,003% - это не разбивка, а шум, в котором тонет
+// единственное осмысленное число: сколько всего стоят веера.
+check("временный каталог веера - не проект",
+      Transcripts.projectName(from: "-tmp-agent------------hxzynd9p"), L("субагенты", "subagents"))
+check("каталог рабочего процесса - туда же",
+      Transcripts.projectName(from: "wf_16917e2c-6e9"), L("субагенты", "subagents"))
+check("и общий каталог субагентов",
+      Transcripts.projectName(from: "subagents"), L("субагенты", "subagents"))
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

@@ -69,6 +69,18 @@ struct AgentSession: Equatable {
     var state: SessionState
     var waitingFor: String?    // чего именно ждёт, если сказано
     var since: Date?           // когда статус сменился
+
+    // Ключ к расшифровке этой сессии. Пусто у сессий, которые идут на
+    // стороне Anthropic (запуск с --sdk-url): у них локального файла нет
+    // вовсе, и ни занятия, ни кручения по ним не узнать.
+    var sessionID: String = ""
+
+    // Над чем работает - последний запрос человека. Пусто, если
+    // расшифровки нет или показ выключен.
+    var activity: String = ""
+
+    // Крутится на месте. nil - не крутится или судить не по чему.
+    var loop: LoopAlert?
     // Пусто - своя машина, иначе адрес хоста. Именно пусто, а не слово
     // «эта»: слово пришлось бы переводить, а переведённое слово в роли
     // признака ломается ровно в одном языке из двух.
@@ -223,7 +235,24 @@ enum Sessions {
             state: state,
             waitingFor: (json["waitingFor"] as? String) ?? (json["needs"] as? String),
             since: millis.map { Date(timeIntervalSince1970: $0 / 1000) },
+            sessionID: (json["sessionId"] as? String) ?? "",
+            activity: (json["activity"] as? String) ?? "",
+            loop: loopAlert(json),
             machine: machine)
+    }
+
+    // Тревога о кручении, если её посчитала та сторона.
+    //
+    // Своя машина сюда ничего не кладёт - там детектор гоняется по живой
+    // расшифровке в enrich(). Удалённая считает у себя и присылает готовый
+    // итог: гонять детектор здесь значило бы тянуть по ssh хвосты
+    // расшифровок вместо трёх чисел.
+    static func loopAlert(_ json: [String: Any]) -> LoopAlert? {
+        guard let d = json["loop"] as? [String: Any],
+              let tool = d["tool"] as? String,
+              let count = intValue(d["count"]), count > 0
+        else { return nil }
+        return LoopAlert(tool: tool, count: count, what: (d["what"] as? String) ?? "")
     }
 
     // Через что запущено. Отвечает на «где мне искать это окно».
@@ -285,10 +314,41 @@ enum Sessions {
         return sorted(out)
     }
 
+    // Дочитать по расшифровкам то, чего нет в файле сессии: над чем
+    // работает и не крутится ли на месте.
+    //
+    // ОТДЕЛЬНЫМ ШАГОМ, а не внутри read(), по двум причинам. Первая:
+    // read() читает десяток файлов по полкилобайта, а это - по полмегабайта
+    // хвоста на сессию, и включаться оно должно по галочке, а не всегда.
+    // Вторая: так его видно в тестах - на вход список, на выход список,
+    // без файловой системы в середине для тех полей, что уже заполнены.
+    //
+    // Удалённых сессий здесь нет: у них machine непустой, а расшифровки
+    // лежат на той машине. Их считает питон на той стороне и присылает
+    // готовым - см. loopAlert().
+    static func enrich(_ list: [AgentSession], watchLoops: Bool, showActivity: Bool,
+                       now: Date = Date(), roots: [URL]? = nil) -> [AgentSession] {
+        guard watchLoops || showActivity else { return list }
+        return list.map { s in
+            guard s.machine.isEmpty, !s.sessionID.isEmpty else { return s }
+            var out = s
+            if watchLoops { out.loop = Loops.check(sessionID: s.sessionID, now: now, roots: roots) }
+            if showActivity, out.activity.isEmpty {
+                out.activity = Activity.of(sessionID: s.sessionID, roots: roots) ?? ""
+            }
+            return out
+        }
+    }
+
     // Сначала то, что требует действия, потом по свежести. Порядок
     // фиксирован, чтобы строки не прыгали между открытиями меню.
     static func sorted(_ list: [AgentSession]) -> [AgentSession] {
         return list.sorted { a, b in
+            // Крутящаяся идёт выше всех, даже выше ждущей. Ждущая стоит
+            // бесплатно и дождётся; эта тратит лимит и деньги всё время,
+            // пока её не видно.
+            let la = a.loop != nil, lb = b.loop != nil
+            if la != lb { return la }
             if a.state.rank != b.state.rank { return a.state.rank < b.state.rank }
             let ta = a.since?.timeIntervalSince1970 ?? 0
             let tb = b.since?.timeIntervalSince1970 ?? 0
@@ -370,7 +430,9 @@ enum Sessions {
     static func composeLine(mark: String, machine: String, name: String,
                             surface: String, state: String,
                             waitingFor: String?, age: String,
-                            memory: String = "") -> String {
+                            memory: String = "",
+                            activity: String = "",
+                            loop: LoopAlert? = nil) -> String {
         var head = mark
         if !machine.isEmpty { head += machine + ": " }
         head += name
@@ -394,24 +456,57 @@ enum Sessions {
             tail = " \u{00B7} " + age
         }
 
-        // Место под просьбу бронируется ДО того, как решается судьба
+        // ХВОСТ СТРОКИ - РОВНО ОДНА ЗАМЕТКА, И ВОТ ПОЧЕМУ ИМЕННО ЭТА.
+        //
+        // Место в строке одно, а сказать хочется четыре вещи. Порядок здесь
+        // не по важности вообще, а по тому, какая из них отвечает на вопрос
+        // «что мне с этой сессией делать прямо сейчас»:
+        //
+        //   1. крутится    - единственное, что требует вмешаться немедленно:
+        //                    сессия тратит лимит и не двигается;
+        //   2. чего ждёт   - требует меня, но она хотя бы не жжёт лимит;
+        //   3. память      - про машину, а не про задачу; приезжает только
+        //                    с удалённой стороны, где память и бывает узкой;
+        //   4. над чем     - ничего не требует, просто отвечает «какая это
+        //                    из шести одинаковых work-NN».
+        //
+        // Четвёртое стоит последним и вытесняется первыми тремя - и это
+        // правильно: у локальных сессий память не меряется вовсе, значит
+        // хвост у них свободен, и занятие займёт пустое место, а не
+        // чужое. Ничего из того, что было в строке раньше, не подвинулось.
+        struct Note { var text: String; var sep: String; var clippable: Bool }
+        let note: Note? = {
+            if let l = loop { return Note(text: l.text, sep: " \u{00B7} ", clippable: false) }
+            if let w = waitingFor, !w.isEmpty { return Note(text: w, sep: ": ", clippable: true) }
+            if !memory.isEmpty { return Note(text: memory, sep: " \u{00B7} ", clippable: false) }
+            if !activity.isEmpty { return Note(text: activity, sep: " \u{00B7} ", clippable: true) }
+            return nil
+        }()
+
+        // Место под заметку бронируется ДО того, как решается судьба
         // «через что»: иначе «Terminal» занимает ровно те знаки, на
         // которых должно стоять, чего сессия хочет. Первая версия
         // считала в обратном порядке - объявленный порядок жертв
         // расходился с тем, что делал код, и поймал это тест.
-        let asks = (waitingFor?.isEmpty == false)
-        let memPart = (asks || memory.isEmpty) ? "" : " \u{00B7} " + memory
-        let needsRoom = asks ? minWaitingFor + 2 : memPart.count
+        //
+        // Обрезаемой заметке брони хватает минимальной: остаток она
+        // доберёт сама. Необрезаемой нужна вся её длина сразу - «113+26»
+        // вместо «113+262 МБ» это неверное число, а не сокращённое,
+        // и то же верно про «Bash ×4».
+        let needsRoom: Int = {
+            guard let n = note else { return 0 }
+            return n.clippable ? minWaitingFor + n.sep.count : n.sep.count + n.text.count
+        }()
         let withSurface = head + surfacePart + tail
         var line = withSurface.count + needsRoom <= maxLine ? withSurface : head + tail
 
-        if let w = waitingFor, !w.isEmpty {
-            let room = maxLine - line.count - 2      // 2 - на «: »
-            if room >= minWaitingFor { line += ": " + Fmt.clip(w, room) }
-        } else if !memPart.isEmpty, line.count + memPart.count <= maxLine {
-            // Память дописывается только если влезает целиком: обрезанное
-            // «113+26» - это неверное число, а не сокращённое.
-            line += memPart
+        if let n = note {
+            let room = maxLine - line.count - n.sep.count
+            if n.clippable {
+                if room >= minWaitingFor { line += n.sep + Fmt.clip(n.text, room) }
+            } else if room >= n.text.count {
+                line += n.sep + n.text
+            }
         }
         return Fmt.clip(line, maxLine)
     }
@@ -467,14 +562,19 @@ enum Sessions {
             // локалью «эта» перестаёт равняться «this», и своя сессия
             // начинает подписываться чужим адресом.
             out.rows.append(composeLine(
-                mark: x.state == .waiting ? "\u{25B8} " : "  ",
+                // Указатель и у крутящейся: она требует того же, что и
+                // ждущая, - чтобы на неё посмотрели. Разница в том, что
+                // ждущая стоит бесплатно, а эта тратит.
+                mark: (x.state == .waiting || x.loop != nil) ? "\u{25B8} " : "  ",
                 machine: x.machine,
                 name: Fmt.clip(x.name, nameLimit),
                 surface: x.surface,
                 state: x.state == .unknown ? "" : x.state.word,
                 waitingFor: x.state == .waiting ? x.waitingFor : nil,
                 age: x.since.map { Fmt.ago($0) } ?? "",
-                memory: x.memoryText))
+                memory: x.memoryText,
+                activity: x.activity,
+                loop: x.loop))
         }
         if ordered.count > shown.count {
             out.rows.append("  " + L("и ещё \(ordered.count - shown.count)",

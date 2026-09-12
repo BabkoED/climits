@@ -24,6 +24,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/PricingFeed.swift \
   Sources/Transcripts.swift \
   Sources/Sessions.swift \
+  Sources/SessionWatch.swift \
   Sources/History.swift \
   Sources/Version.swift \
   Sources/RemoteScan.swift \

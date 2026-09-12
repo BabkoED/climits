@@ -251,6 +251,31 @@ enum CLI {
                     "none reports status - the \"who waits\" section will stay empty"))
         }
 
+        // Сторож кручения. Без этой строки его молчание неотличимо от
+        // поломки: он и должен молчать 99 раз из 100, а в сотый сказать.
+        // Здесь же видно и то, у скольких сессий он вообще может судить -
+        // у запусков с --sdk-url локальной расшифровки нет, и по ним
+        // сторож слеп не по своей вине.
+        let watched = Sessions.enrich(live, watchLoops: Prefs.watchLoops,
+                                      showActivity: Prefs.showActivity)
+        let readable = watched.filter { !$0.sessionID.isEmpty
+            && Loops.transcript(sessionID: $0.sessionID) != nil }
+        let spinning = watched.filter { $0.loop != nil }
+        if Prefs.watchLoops {
+            var line = L("расшифровка видна у \(readable.count) из \(ss.total)",
+                         "transcript visible for \(readable.count) of \(ss.total)")
+            if let s = spinning.first {
+                line += L(", крутится \(spinning.count): \(s.name) - \(s.loop?.text ?? "")",
+                          ", looping \(spinning.count): \(s.name) - \(s.loop?.text ?? "")")
+            } else {
+                line += L(", ни одна не крутится", ", none looping")
+            }
+            print(Fmt.pad(L("Кручение", "Looping"), 18) + line)
+        } else {
+            print(Fmt.pad(L("Кручение", "Looping"), 18)
+                + L("сторож выключен в настройках", "watch is off in settings"))
+        }
+
         // Второй путь обновления. Отвечает на «поднялся ли Sparkle вообще»:
         // из меню это видно по двум пунктам, но словами - точнее, а из
         // терминала ещё и копируется в чат.
