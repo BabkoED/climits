@@ -989,17 +989,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // в снимок разом попали все четыре состояния и обе машины: по
         // одному цвету и одному состоянию проверяется одна четверть.
         Prefs.showSessions = true
+        // Занятие в снимке ВКЛЮЧАЕМ, хотя по умолчанию оно выключено:
+        // выключенное не попало бы в кадр, а рост ширины меню от него
+        // как раз и есть то, что снимок обязан поймать. Ровно так в
+        // 1.7.0 нашлась строка шире строк лимитов - тесты её не видели,
+        // потому что предел ширины они проверяют, а ФАКТИЧЕСКУЮ ширину
+        // отрисованного текста задаёт шрифт, и она бывает больше.
+        Prefs.showActivity = true
         localSessions = [
             AgentSession(pid: 901, name: "budget-app", folder: "budget-app",
                          surface: "Terminal", state: .waiting,
                          waitingFor: L("разрешение на запись", "write permission"),
                          since: Date().addingTimeInterval(-260), machine: ""),
+            // Крутящаяся - первой по порядку и с указателем. В кадре
+            // проверяется и то, и другое: что она вытеснила ждущую
+            // наверх и что подпись «крутится: Bash ×4» не разъехалась.
             AgentSession(pid: 902, name: "climits", folder: "climits",
                          surface: "VS Code", state: .busy, waitingFor: nil,
-                         since: Date().addingTimeInterval(-70), machine: ""),
+                         since: Date().addingTimeInterval(-70),
+                         loop: LoopAlert(tool: "Bash", count: 4, what: "swift build"),
+                         machine: ""),
+            // А у этой хвост занят занятием - тем самым, которого раньше
+            // в строке не было вовсе.
             AgentSession(pid: 903, name: "sintra", folder: "sintra",
                          surface: "Terminal", state: .idle, waitingFor: nil,
-                         since: Date().addingTimeInterval(-4200), machine: ""),
+                         since: Date().addingTimeInterval(-4200),
+                         activity: L("посчитай отказы за сентябрь",
+                                     "count declines for September"),
+                         machine: ""),
             // Памяти у своих сессий в фикстуре нет намеренно: её больше
             // не мерят и на живой машине. Снимок должен показывать то,
             // что человек увидит, иначе он проверяет не тот экран.
@@ -1010,6 +1027,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          since: nil, machine: "vps7",
                          rssMB: 270, swapMB: 184),
         ]
+        // Разбивка по проектам - тоже в кадр, по той же причине: это новый
+        // раздел, и его строки шире строк сессий на долю в процентах.
+        // Состав нарочно с длинным именем и с «субагентами»: обе строки
+        // задают ширину, и обе приходят снаружи.
+        Prefs.showProjects = true
+        func pu(_ name: String, _ out: Int) -> Transcripts.ProjectUsage {
+            var w = WindowUsage()
+            w.byFamily["opus"] = TokenTally(input: out / 3, output: out,
+                                            cacheWrite: out * 2, cacheRead: out * 40,
+                                            requests: out / 100, cacheWrite1h: 0)
+            return Transcripts.ProjectUsage(name: name, usage: w)
+        }
+        projects = [pu("Work", 380_000), pu(L("субагенты", "subagents"), 42_000),
+                    pu("climits", 18_000), pu("budget-app", 9_000),
+                    pu("SBC", 4_000), pu("harness", 900)]
         lastScan = Date().addingTimeInterval(-95)
         remoteMemory = ["vps7": MachineMemory(totalMB: 3915, availableMB: 1224,
                                               swapTotalMB: 7030, swapUsedMB: 1743)]
