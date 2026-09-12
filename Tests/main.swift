@@ -1599,6 +1599,53 @@ let asking = AgentSession(pid: 2, name: "ждёт", folder: "w", surface: "",
 check("крутящаяся стоит выше ждущей: та стоит бесплатно, эта тратит",
       Sessions.sorted([asking, spinning]).first?.name, "крутится")
 
+// ---- доводы для той стороны -------------------------------------------------
+//
+// ssh НЕ передаёт доводы массивом: он склеивает их пробелами и отдаёт
+// шеллу на той стороне. Значит спецсимвол в доводе - это разрыв команды.
+// Сломано это было живьём в 1.12.0: «flags:activity=0;pwin=-1» рвался
+// по «;», питону доставался обрывок вместо каталога, и сервер честно
+// отвечал пустотой - ни сессий, ни денег.
+print("\nдоводы для удалённой стороны")
+
+check("точка с запятой не рвёт команду",
+      RemoteScan.shellQuote("flags:activity=0;pwin=-1"), "'flags:activity=0;pwin=-1'")
+check("пробел в пути остаётся частью пути",
+      RemoteScan.shellQuote("/Users/anton/My Claude"), "'/Users/anton/My Claude'")
+check("подстановка команды обезврежена",
+      RemoteScan.shellQuote("$(rm -rf ~)"), "'$(rm -rf ~)'")
+// Классический приём: закрыть строку, вставить экранированную кавычку,
+// открыть снова. Без него одинарная кавычка в пути ломает всё следом.
+check("одинарная кавычка внутри не ломает квотирование",
+      RemoteScan.shellQuote("it's"), "'it'\\''s'")
+// А тильда - исключение, и намеренное: в кавычках она перестаёт быть
+// домашним каталогом и становится папкой с именем «~», которой нет.
+check("тильда остаётся шеллу, остальное защищено",
+      RemoteScan.shellQuote("~/.claude/projects"), "~/'.claude/projects'")
+check("голая тильда не трогается", RemoteScan.shellQuote("~"), "~")
+
+let remoteArgs = RemoteScan.scriptArgs(cutoffs: [Date(timeIntervalSince1970: 100)],
+                                       wantActivity: false, projectsWindow: -1, path: "")
+check("доводов ровно столько, сколько ждёт скрипт: окна, флаги, каталог",
+      remoteArgs.count, 3)
+// Главная проверка: в склеенной строке не должно остаться НИ ОДНОГО
+// спецсимвола шелла снаружи кавычек. Считаем их только там, где они
+// опасны - вне закрытых одинарных кавычек.
+func unquotedSpecials(_ line: String) -> Int {
+    var inQuote = false
+    var n = 0
+    for ch in line {
+        if ch == "'" { inQuote.toggle(); continue }
+        if inQuote { continue }
+        if ";&|<>$`(){}".contains(ch) { n += 1 }
+    }
+    return n
+}
+check("в склеенной строке нет живых спецсимволов",
+      unquotedSpecials(remoteArgs.joined(separator: " ")), 0)
+check("а без квотирования - были бы",
+      unquotedSpecials("flags:activity=0;pwin=-1") > 0)
+
 // ---- когда сообщать про кручение -------------------------------------------
 //
 // Правило живёт отдельно от Notifier намеренно: тот тянет AppKit и на этой
