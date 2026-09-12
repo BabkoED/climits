@@ -311,6 +311,10 @@ enum RemoteScan {
             mem.swapTotalMB = Sessions.intValue(m["swap_total"]) ?? 0
             let free = Sessions.intValue(m["swap_free"]) ?? 0
             mem.swapUsedMB = max(0, mem.swapTotalMB - free)
+            // Загрузки может не быть: /proc/loadavg есть не везде, и
+            // отсутствие числа тут - «не измерили», а не «ноль».
+            mem.load1 = jsonNumber(m["load1"]) ?? 0
+            mem.cores = Sessions.intValue(m["cores"]) ?? 0
         }
         // Разговоры - тоже необязательная часть: их не будет, если разбивку
         // не просили. Пустой словарь и «не просили» тут одно и то же.
@@ -800,6 +804,20 @@ try:
             f = line.split()
             if len(f) >= 2 and f[0] in want:
                 mem[want[f[0]]] = int(f[1]) // 1024
+except Exception:
+    pass
+
+# Загрузка процессора той машины. Отвечает на другой вопрос, чем память:
+# памяти может быть вдоволь, а машина стоять колом, потому что все ядра
+# заняты. Число ядер уезжает рядом - без знаменателя загрузка не значит
+# ничего.
+#
+# os.cpu_count() здесь честнее любых разборов /proc/cpuinfo: он и есть
+# число, по которому ядро делит время.
+try:
+    with open("/proc/loadavg") as fh:
+        mem["load1"] = float(fh.read().split()[0])
+    mem["cores"] = os.cpu_count() or 0
 except Exception:
     pass
 

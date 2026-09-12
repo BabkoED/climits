@@ -1365,6 +1365,34 @@ check("без доступного показываем только всего"
 check("пустая память молчит", MachineMemory().text, "")
 check("и считается пустой", MachineMemory().isEmpty)
 
+// Загрузка процессора той машины. Отвечает НЕ на тот же вопрос, что
+// память: памяти может быть вдоволь, а машина стоять колом, потому что
+// все ядра заняты.
+var load = MachineMemory(totalMB: 3915, availableMB: 1224,
+                         swapTotalMB: 7030, swapUsedMB: 1743)
+load.load1 = 2.4
+load.cores = 2
+check("загрузка приписывается к памяти, а не заменяет её",
+      load.text.contains(L("занято 2,6", "2.6 of")) && load.text.contains(L("ЦП 2,4 из 2", "CPU 2.4 of 2")))
+// Знаменатель обязателен: 2,4 на восьми ядрах - треть машины, 2,4 на
+// двух - очередь из ждущих. Само по себе число не значит ничего.
+check("без числа ядер загрузка не показывается вовсе",
+      MachineMemory(totalMB: 0, availableMB: 0, swapTotalMB: 0, swapUsedMB: 0,
+                    load1: 3.0, cores: 0).loadText, "")
+check("а с ядрами - показывается и без памяти",
+      MachineMemory(totalMB: 0, availableMB: 0, swapTotalMB: 0, swapUsedMB: 0,
+                    load1: 0.5, cores: 4).text, L("ЦП 0,5 из 4", "CPU 0.5 of 4"))
+check("машина с одной загрузкой пустой не считается",
+      MachineMemory(totalMB: 0, availableMB: 0, swapTotalMB: 0, swapUsedMB: 0,
+                    load1: 0.5, cores: 4).isEmpty == false)
+// Порог ровно в одно ядро, без запаса: loadavg считает и работающие,
+// и ждущие диск, и «безопасная» прибавка молчала бы там, где очередь
+// уже выстроилась.
+check("загрузка выше числа ядер - это перегрузка", load.isOverloaded)
+load.load1 = 1.9
+check("ниже - ещё нет", load.isOverloaded == false)
+check("без измерения перегрузки не бывает", MachineMemory().isOverloaded == false)
+
 // Имя сессии человек задаёт сам через /rename - предел должен пускать
 // осмысленное название, а не обрезать до «Тариф Аль…».
 check("имя сессии не режется по колонке лимитов", Sessions.nameLimit > 10)

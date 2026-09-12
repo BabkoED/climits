@@ -1059,8 +1059,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             cu(L("мелочь", "small one"), 900),
         ]
         lastScan = Date().addingTimeInterval(-95)
+        // Загрузка в фикстуре ВЫШЕ числа ядер намеренно: так в кадр
+        // попадает и сам показ, и самый длинный его вид. Строка машины
+        // и без него самая широкая в меню - если меню раздвинется,
+        // видно будет здесь, а не у человека.
         remoteMemory = ["vps7": MachineMemory(totalMB: 3915, availableMB: 1224,
-                                              swapTotalMB: 7030, swapUsedMB: 1743)]
+                                              swapTotalMB: 7030, swapUsedMB: 1743,
+                                              load1: 2.4, cores: 2)]
         // Адрес хоста в снимке тоже подставляем: без него строка про
         // память СЕРВЕРА в кадр не попадает, и её вёрстка остаётся
         // непроверенной. Так и вышло на снимке 1.10.0.
