@@ -35,6 +35,49 @@ enum SSHConfig {
         return hosts(inText: text)
     }
 
+    // Короткое имя для адреса.
+    //
+    // ЗАЧЕМ. В настройке может стоять голый IP - и тогда каждая строка
+    // сессии начинается с «51.38.110.54: », то есть тринадцать знаков
+    // из пятидесяти восьми уходят на то, что человек и так знает. Слово
+    // Антона 12.09.2026: «можно не писать весь путь айпи, а вместо этого
+    // название сервера, это же понятно».
+    //
+    // ОТКУДА БЕРЁМ. Из его же ~/.ssh/config: там у адреса почти всегда
+    // есть человеческое имя - «Host vps7 / HostName 51.38.110.54».
+    // Ничего настраивать для этого не нужно, имя уже есть.
+    //
+    // Если записи нет - возвращаем адрес как есть. Придумывать за
+    // человека сокращение («51.38…») нельзя: обрезанный адрес выглядит
+    // как адрес, но им не является.
+    static func label(for address: String, at url: URL? = nil) -> String {
+        guard !address.isEmpty else { return address }
+        guard let text = try? String(contentsOf: url ?? path, encoding: .utf8) else { return address }
+        return label(for: address, inText: text)
+    }
+
+    static func label(for address: String, inText text: String) -> String {
+        var current: [String] = []
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#") else { continue }
+            let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "=" })
+            guard let head = parts.first?.lowercased() else { continue }
+            if head == "host" {
+                current = parts.dropFirst().map(String.init)
+                    .filter { !$0.contains("*") && !$0.contains("?") && !$0.hasPrefix("!") }
+                continue
+            }
+            // HostName внутри блока - тот самый адрес, который человек
+            // написал в настройке. Первое непустое имя блока и есть ярлык.
+            if head == "hostname", parts.count > 1, String(parts[1]) == address,
+               let name = current.first, !name.isEmpty {
+                return name
+            }
+        }
+        return address
+    }
+
     static func hosts(inText text: String) -> [String] {
         var out: [String] = []
         var seen = Set<String>()
@@ -713,7 +756,11 @@ def watch_session(sid, projects_root):
             continue
         if loop is None or len(seen) > loop["count"]:
             loop = {"tool": tool, "count": len(seen), "what": what[:80]}
-    return {"loop": loop, "activity": activity}
+
+    # Настоящее имя чата - тем же правилом, что и на маке: своё
+    # (`/rename`), иначе первый запрос. Читает ТА сторона: расшифровок
+    # этой машины у мака нет вовсе, и взять имя больше неоткуда.
+    return {"loop": loop, "activity": activity, "title": chat_title(path)}
 
 
 # Кто на той стороне работает, а кто ждёт ответа.
@@ -776,6 +823,8 @@ for name in names:
         info = watch_session(sid, root)
         if info.get("loop"):
             item["loop"] = info["loop"]
+        if info.get("title"):
+            item["title"] = info["title"]
         if want_activity and info.get("activity"):
             item["activity"] = info["activity"]
     # Память: и в ОЗУ, и в свопе. Своп здесь важнее ОЗУ - у сессии,

@@ -238,8 +238,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 case .success(let r) where r.windows.count == w.count:
                     for i in w.indices { w[i] = w[i] + r.windows[i] }
                     machines += 1
-                    remoteSessions += r.sessions
-                    if !r.memory.isEmpty { remoteMemory[t.host] = r.memory }
+                    // Подписываем ЯРЛЫКОМ, а не адресом: голый IP занимает
+                    // тринадцать знаков в каждой строке сессии, и человеку
+                    // они ничего не говорят - он и так знает, какой это
+                    // сервер. Ярлык берётся из настройки, иначе из
+                    // ~/.ssh/config, иначе остаётся сам адрес.
+                    let shown = t.label.isEmpty ? SSHConfig.label(for: t.host) : t.label
+                    remoteSessions += r.sessions.map { s -> AgentSession in
+                        var out = s
+                        out.machine = shown
+                        return out
+                    }
+                    if !r.memory.isEmpty { remoteMemory[shown] = r.memory }
                     // Проекты с той машины кладутся в ту же корзину, что и
                     // свои: один проект, над которым работают с двух машин,
                     // должен дать одну строку с общей суммой, а не две.
@@ -508,8 +518,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // из двух серверов ответил один, подпись всё равно говорила «двух».
         // Считаем только те, что реально сложились: machines растёт на
         // успешный ответ, а не на строку в настройке.
-        let answered = Prefs.remoteTargets().map { $0.host }
-            .filter { remoteErrors[$0] == nil }
+        // Здесь тоже ярлык: подпись читается человеком, и «vps7» в ней
+        // на месте ровно так же, как в строках сессий. Ошибки при этом
+        // остаются подписаны АДРЕСОМ - там важно, куда именно не достучались.
+        let answered = Prefs.remoteTargets()
+            .filter { remoteErrors[$0.host] == nil }
+            .map { $0.label.isEmpty ? SSHConfig.label(for: $0.host) : $0.label }
         if !answered.isEmpty {
             let names = answered.joined(separator: ", ")
             return L("\(what) - по расшифровкам \(machines) машин: этой\(roots) и \(names)\(price)",
@@ -1006,11 +1020,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // потому что предел ширины они проверяют, а ФАКТИЧЕСКУЮ ширину
         // отрисованного текста задаёт шрифт, и она бывает больше.
         Prefs.showActivity = true
+        // Имена взяты настоящей длины: с 1.13.0 в строку попадает
+        // название чата, а оно редко короткое - «Определение конверсии
+        // привязки карт» вместо «work-bd». Ровно на этом и проверяется
+        // вёрстка: короткие имена ничего не доказывают.
         localSessions = [
             AgentSession(pid: 901, name: "budget-app", folder: "budget-app",
                          surface: "Terminal", state: .waiting,
                          waitingFor: L("разрешение на запись", "write permission"),
-                         since: Date().addingTimeInterval(-260), machine: ""),
+                         since: Date().addingTimeInterval(-260),
+                         title: L("Определение конверсии привязки карт",
+                                  "Card binding conversion rate"),
+                         machine: ""),
             // Крутящаяся - первой по порядку и с указателем. В кадре
             // проверяется и то, и другое: что она вытеснила ждущую
             // наверх и что подпись «крутится: Bash ×4» не разъехалась.
@@ -1034,7 +1055,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         remoteSessions = [
             AgentSession(pid: 904, name: "work-71", folder: "harness",
                          surface: "SDK", state: .unknown, waitingFor: nil,
-                         since: nil, machine: "vps7",
+                         since: nil,
+                         title: L("Описания ошибок для мерчантов",
+                                  "Merchant-facing error texts"),
+                         machine: "vps7",
                          rssMB: 270, swapMB: 184),
         ]
         // Разбивка по разговорам - тоже в кадр, по той же причине: это

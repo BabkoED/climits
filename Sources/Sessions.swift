@@ -75,6 +75,27 @@ struct AgentSession: Equatable {
     // вовсе, и ни занятия, ни кручения по ним не узнать.
     var sessionID: String = ""
 
+    // Как этот чат называется на самом деле.
+    //
+    // ЗАЧЕМ. В файле сессии лежит `name`, и без переименования Claude Code
+    // выводит его из каталога: все рабочие чаты выглядят как «work-bd»,
+    // «work-81». Различить их нельзя вовсе - а именно это и нужно, чтобы
+    // понять, какую сессию смотреть.
+    //
+    // ОТКУДА. Из расшифровки, тем же правилом, что и разбивка денег:
+    // сначала своё имя (`/rename`), иначе первый запрос человека. Сверено
+    // со списком чатов в самом Claude Code 12.09.2026 - совпадает: там
+    // «Описания ошибок для мерчантов», здесь первый запрос «У нас была
+    // тема про ошибки для мерчантов, что нужно им подготовить».
+    //
+    // Пусто у сессий, которые идут на стороне Anthropic (`--sdk-url`):
+    // локальной расшифровки у них нет, и взять имя неоткуда. У таких
+    // остаётся «work-XX», и это честно.
+    var title: String = ""
+
+    // Что показываем человеку: настоящее имя чата, если добыли.
+    var displayName: String { return title.isEmpty ? name : title }
+
     // Над чем работает - последний запрос человека. Пусто, если
     // расшифровки нет или показ выключен.
     var activity: String = ""
@@ -286,6 +307,9 @@ enum Sessions {
             waitingFor: (json["waitingFor"] as? String) ?? (json["needs"] as? String),
             since: millis.map { Date(timeIntervalSince1970: $0 / 1000) },
             sessionID: (json["sessionId"] as? String) ?? "",
+            // Имя с удалённой машины приезжает готовым: её расшифровок
+            // здесь нет, и добыть его может только та сторона.
+            title: (json["title"] as? String) ?? "",
             activity: (json["activity"] as? String) ?? "",
             loop: loopAlert(json),
             machine: machine)
@@ -378,10 +402,15 @@ enum Sessions {
     // готовым - см. loopAlert().
     static func enrich(_ list: [AgentSession], watchLoops: Bool, showActivity: Bool,
                        now: Date = Date(), roots: [URL]? = nil) -> [AgentSession] {
-        guard watchLoops || showActivity else { return list }
         return list.map { s in
             guard s.machine.isEmpty, !s.sessionID.isEmpty else { return s }
             var out = s
+            // Имя подтягивается ВСЕГДА, а не по галочке. Это не добавка
+            // к строке, а замена бесполезному «work-bd»: без него список
+            // из шести одинаковых имён не отвечает на «какую смотреть».
+            if out.title.isEmpty, let url = Loops.transcript(sessionID: s.sessionID, roots: roots) {
+                out.title = Transcripts.chatTitle(of: url) ?? ""
+            }
             if watchLoops { out.loop = Loops.check(sessionID: s.sessionID, now: now, roots: roots) }
             if showActivity, out.activity.isEmpty {
                 out.activity = Activity.of(sessionID: s.sessionID, roots: roots) ?? ""
@@ -446,7 +475,18 @@ enum Sessions {
     // закрыт в 1.6.2, и заводить его заново с другой стороны нельзя.
     // И имя проекта, и текст просьбы приходят снаружи - значит ширина
     // без предела задаётся чужой программой, а не нами.
-    static let maxLine = 46
+    // Поднято с 46 до 58 вместе с подтягиванием настоящих имён чатов.
+    //
+    // Ширину меню задаёт САМАЯ ДЛИННАЯ строка, а это давно не строка
+    // сессии. Замер по живому меню Антона 12.09.2026: строка про память
+    // машины - «51.38.110.54: ОЗУ занято 2,7 из 3,8 ГБ · своп 1,9 из
+    // 6,9 ГБ» - 58 знаков, заголовок раздела 56, оговорка про статус 46.
+    // То есть до 58 знаков строка сессии не двигает ничего вовсе: она
+    // растёт в уже занятое место.
+    //
+    // Проверять это надо снимком, а не рассуждением: знаки здесь разной
+    // ширины, считает их шрифт, а не арифметика.
+    static let maxLine = 58
 
     // Предел длины ИМЕНИ сессии - свой, а не общий с колонкой лимитов.
     //
@@ -455,7 +495,28 @@ enum Sessions {
     // десяти знаков на осмысленное название не хватает: «Тариф Альфы»
     // обрезалось до «Тариф Аль…». Строка сессии не колонка, ширину её
     // держит maxLine.
-    static let nameLimit = 22
+    //
+    // Выросло с 22 до 34 вместе с подтягиванием настоящих имён. Имя
+    // теперь чаще не своё, а первый запрос - «У нас была тема про ошибки
+    // для мерчантов», - и на двадцати двух знаках от него оставался
+    // огрызок, по которому чат не узнать. Ширину меню это не двигает:
+    // строку задаёт не список сессий, а строка про память машины под
+    // ним, и она давно длиннее (58 знаков против 46).
+    static let nameLimit = 34
+
+    // Ниже этого имя не режем: «Определ…» не опознаёт чат, и тогда
+    // честнее отнять место у заметки, чем оставить огрызок.
+    static let minName = 14
+
+    // Длина хвоста «· состояние возраст» - та же сборка, что ниже.
+    // Отдельной функцией, потому что место под него надо знать ДО того,
+    // как решается судьба имени.
+    static func tailLength(state: String, age: String) -> Int {
+        if !state.isEmpty {
+            return 3 + state.count + (age.isEmpty ? 0 : 1 + age.count)
+        }
+        return age.isEmpty ? 0 : 3 + age.count
+    }
 
     // Меньше этого просьбу не показываем вовсе: огрызок в три знака -
     // шум, а не сведения.
@@ -498,7 +559,28 @@ enum Sessions {
                             loop: LoopAlert? = nil) -> String {
         var head = mark
         if !machine.isEmpty { head += machine + ": " }
-        head += name
+
+        // ИМЯ ОБРЕЗАЕТСЯ ЗДЕСЬ, ПО ОСТАТКУ, А НЕ СНАРУЖИ ПО ПРЕДЕЛУ.
+        //
+        // С подтягиванием настоящих названий чатов имя перестало быть
+        // коротким: вместо «work-bd» приходит «Определение конверсии
+        // привязки карт». На фиксированном пределе оно съедало строку
+        // целиком - поймано прогоном 12.09.2026, строка выходила
+        // «▸ 51.38.110.54: Определение конверсии привязки карт · ждё…»:
+        // ни чего ждёт, ни сколько уже ждёт. То есть имя вытеснило
+        // ровно то, ради чего строку и читают.
+        //
+        // Теперь наоборот: сначала бронируется место под состояние,
+        // возраст и заметку, а имени достаётся остаток. Меньше minName
+        // не режем - огрызок в шесть знаков не опознаёт ничего, и тогда
+        // уж лучше пожертвовать заметкой.
+        let tailBudget = tailLength(state: state, age: age)
+        let noteBudget: Int = {
+            if loop != nil || (waitingFor?.isEmpty == false) { return minWaitingFor + 2 }
+            return 0
+        }()
+        let room = maxLine - head.count - tailBudget - noteBudget
+        head += Fmt.clip(name, max(minName, min(nameLimit, room)))
 
         let surfacePart = surface.isEmpty ? "" : " \u{00B7} " + surface
 
@@ -638,7 +720,9 @@ enum Sessions {
                 // ждущая стоит бесплатно, а эта тратит.
                 mark: (x.state == .waiting || x.loop != nil) ? "\u{25B8} " : "  ",
                 machine: x.machine,
-                name: Fmt.clip(x.name, nameLimit),
+                // Имя уезжает ПОЛНЫМ: резать его по остатку умеет
+                // composeLine, а обрезанное снаружи уже не восстановить.
+                name: x.displayName,
                 surface: x.surface,
                 state: x.state == .unknown ? "" : x.state.word,
                 waitingFor: x.state == .waiting ? x.waitingFor : nil,

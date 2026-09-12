@@ -1257,14 +1257,24 @@ check("строка сессии не шире предела",
 check("оговорка не шире строк сессий",
       longest.notes.allSatisfy { $0.count <= Sessions.maxLine + 8 })
 // Жертвуем «через что запущено», а не тем, чего сессия хочет.
-let tight = Sessions.composeLine(mark: "\u{25B8} ", machine: "vps7",
-                                 name: "budget-app", surface: "Terminal",
+//
+// Имя здесь длинное намеренно: с 1.12.2 в него подставляется настоящее
+// название чата - чаще первый запрос, а не короткое «budget-app», - и
+// проверять порядок жертв надо на том, что бывает в жизни. На коротком
+// имени жертвовать просто нечем: всё влезает.
+let tight = Sessions.composeLine(mark: "\u{25B8} ", machine: "51.38.110.54",
+                                 name: "Определение конверсии привязки карт",
+                                 surface: "Terminal",
                                  state: "ждёт меня", waitingFor: "разрешение на запись",
                                  age: "4м")
 check("длинной строке «через что» не досталось", !tight.contains("Terminal"))
 // Возраст важнее текста просьбы: он один говорит, насколько всё плохо.
 check("сколько ждёт - уцелело", tight.contains("4м"))
-check("а просьба урезана, а не выкинута", tight.contains("разреш"))
+// Проверяем по существу, а не по числу уцелевших букв: сколько их
+// останется, зависит от длины имени и адреса машины, а важно одно -
+// что просьба УРЕЗАНА, а не выброшена целиком.
+check("а просьба урезана, а не выкинута",
+      tight.contains(": разр") && tight.hasSuffix("\u{2026}"))
 check("строка всё равно в пределе", tight.count <= Sessions.maxLine)
 // Совсем нет места на просьбу - лучше без неё, чем огрызок в три знака.
 let noRoom = Sessions.composeLine(mark: "\u{25B8} ", machine: "очень-длинный-хост",
@@ -1599,7 +1609,9 @@ check("занятие показывается, когда больше сказ
 // Поймано снимком из CI: «через что запущено» оставалось в строке, и
 // занятие обрезалось до восьми знаков - шум, а не сведения.
 check("занятие вытесняет «через что запущено», а не режется до огрызка",
-      Sessions.composeLine(mark: "  ", machine: "", name: "sintra",
+      Sessions.composeLine(mark: "  ", machine: "51.38.110.54",
+                           name: L("Определение конверсии привязки",
+                                   "Card binding conversion rate"),
                            surface: "Terminal", state: L("простаивает", "idle"),
                            waitingFor: nil, age: "1ч 10м",
                            activity: L("посчитай отказы за сентябрь",
@@ -1626,6 +1638,46 @@ let asking = AgentSession(pid: 2, name: "ждёт", folder: "w", surface: "",
                           sessionID: "s2", activity: "", loop: nil, machine: "")
 check("крутящаяся стоит выше ждущей: та стоит бесплатно, эта тратит",
       Sessions.sorted([asking, spinning]).first?.name, "крутится")
+
+// ---- короткое имя вместо адреса ---------------------------------------------
+//
+// Голый IP занимает тринадцать знаков в КАЖДОЙ строке сессии, и человеку
+// они ничего не говорят: он и так знает, какой это сервер. Имя берётся
+// из его же ~/.ssh/config - там оно обычно уже есть.
+print("\nкороткое имя машины")
+
+let sshText = """
+# личное
+Host github.com
+  User git
+
+Host vps7 vps7.short
+  HostName 51.38.110.54
+  User babko
+
+Host *
+  ServerAliveInterval 30
+"""
+check("адрес заменяется именем из ssh config",
+      SSHConfig.label(for: "51.38.110.54", inText: sshText), "vps7")
+// Незнакомый адрес остаётся собой: придумывать сокращение («51.38…»)
+// нельзя - обрезанный адрес выглядит как адрес, но им не является.
+check("незнакомый адрес остаётся как есть",
+      SSHConfig.label(for: "10.0.0.1", inText: sshText), "10.0.0.1")
+check("шаблон Host * ярлыком не становится",
+      SSHConfig.label(for: "нет-такого", inText: sshText), "нет-такого")
+check("пустой адрес не ломает разбор", SSHConfig.label(for: "", inText: sshText), "")
+
+// Запасной путь на случай, когда в ssh config записи нет: ярлык прямо
+// в настройке. Знак равенства выбран потому, что в адресах его не бывает.
+Prefs.remoteHosts = "vps7=51.38.110.54 /srv/claude, work.example.com"
+let targets = Prefs.remoteTargets()
+check("ярлык отделён от адреса", targets.first?.label, "vps7")
+check("а подключаться будем всё-таки по адресу", targets.first?.host, "51.38.110.54")
+check("каталог после ярлыка не потерялся", targets.first?.path, "/srv/claude")
+check("адрес без ярлыка остаётся без него", targets.last?.label, "")
+check("и сам адрес цел", targets.last?.host, "work.example.com")
+Prefs.remoteHosts = ""
 
 // ---- доводы для той стороны -------------------------------------------------
 //

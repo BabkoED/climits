@@ -201,15 +201,30 @@ struct Prefs {
     // Разобранный список: адрес и каталог. Пустые строки и повторы
     // отбрасываются - один и тот же сервер, вписанный дважды, удвоил бы
     // его расход в деньгах, и заметить это было бы нечем.
-    static func remoteTargets() -> [(host: String, path: String)] {
-        var out: [(host: String, path: String)] = []
+    static func remoteTargets() -> [(host: String, path: String, label: String)] {
+        var out: [(host: String, path: String, label: String)] = []
         var seen = Set<String>()
         for raw in remoteHosts.split(whereSeparator: { $0 == "\n" || $0 == "," }) {
             let parts = raw.split(whereSeparator: { $0 == " " || $0 == "\t" })
-            guard let h = parts.first.map(String.init), !h.isEmpty else { continue }
-            guard seen.insert(h).inserted else { continue }
+            guard var h = parts.first.map(String.init), !h.isEmpty else { continue }
+
+            // ЯРЛЫК ЧЕРЕЗ РАВНО: «vps7=51.38.110.54».
+            //
+            // Нужен на случай, когда в ~/.ssh/config записи нет, а голый
+            // IP в каждой строке занимает тринадцать знаков. Автоматика
+            // из ssh config закрывает обычный случай, это - остальные,
+            // и человеку не приходится править конфиг ssh ради трея.
+            //
+            // Знак равенства выбран потому, что в адресах его не бывает
+            // вовсе: ни в имени хоста, ни в IP, ни в «user@host».
+            var label = ""
+            if let eq = h.firstIndex(of: "=") {
+                label = String(h[h.startIndex..<eq])
+                h = String(h[h.index(after: eq)...])
+            }
+            guard !h.isEmpty, seen.insert(h).inserted else { continue }
             let path = parts.count > 1 ? String(parts[1]) : ""
-            out.append((h, path))
+            out.append((h, path, label))
         }
         return out
     }
