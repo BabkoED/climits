@@ -251,6 +251,26 @@ enum CLI {
                     "none reports status - the \"who waits\" section will stay empty"))
         }
 
+        // Нагрузка ЭТОЙ машины - единственное место, где её настоящие числа
+        // видны без Мака под рукой.
+        //
+        // Замер тут системный: на macOS это `vm_stat`, `sysctl` и разбор их
+        // вывода, а такой код на Linux не проверяется ничем - ни типами,
+        // ни тестами, ни снимком (в снимке числа выдуманные). Печать сюда
+        // делает его проверяемым в CI на macos-14: строка в логе прогона
+        // и есть доказательство, что замер не вернул нули.
+        let here = Sessions.machineMemory()
+        let hereText = here.isEmpty
+            ? L("не измерена", "not measured")
+            : here.text
+        print(Fmt.pad(L("Эта машина", "This machine"), 18)
+            + Sessions.localName() + " \u{00B7} " + hereText)
+        if let other = Sessions.otherLoadMB(load: here, sessions: live) {
+            print(Fmt.pad("", 18)
+                + L("из них не сессиями Claude: \(Fmt.gb(other))",
+                    "of that, not Claude sessions: \(Fmt.gb(other))"))
+        }
+
         // Сторож кручения. Без этой строки его молчание неотличимо от
         // поломки: он и должен молчать 99 раз из 100, а в сотый сказать.
         // Здесь же видно и то, у скольких сессий он вообще может судить -

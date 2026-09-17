@@ -44,10 +44,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // текущими.
     private var localSessions: [AgentSession] = []
     private var remoteSessions: [AgentSession] = []
-    // Память ТОЛЬКО удалённой машины: приезжает раз в обход вместе с
-    // деньгами. Своя не мерится вовсе - на маке памяти обычно много,
-    // сложности бывают на сервере.
+    // Нагрузка машин: удалённая приезжает раз в обход вместе с деньгами,
+    // своя мерится прямо перед показом меню - она дёшева и обязана быть
+    // текущей, раз человек смотрит на неё сейчас.
+    //
+    // Своя вернулась 17.09.2026 вместе с группировкой по машинам: в 1.10.1
+    // её убрали, потому что строка памяти была одна и отвечала про сервер.
+    // Теперь у каждой машины свой заголовок, и пустой он бесполезен.
     private var remoteMemory: [String: MachineMemory] = [:]
+    private var localMemory = MachineMemory()
 
     // Куда ушли деньги за недельное окно - по разговорам. Считается тем
     // же проходом, что и сами деньги, - отдельного чтения не стоит.
@@ -147,8 +152,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func refreshLocalSessions() {
         guard Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}") else {
             localSessions = []
+            localMemory = MachineMemory()
             return
         }
+        localMemory = Sessions.machineMemory()
         // Дочитывание по расшифровкам стоит дороже самих файлов сессий -
         // полмегабайта хвоста на живую сессию против полукилобайта, -
         // но идёт по тому же поводу и в том же потоке: на десятке сессий
@@ -864,8 +871,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard Prefs.showSessions else { return [] }
         // nameLimit здесь СВОЙ, а не колонки лимитов: имя сессии человек
         // задаёт сам через `/rename`, и десяти знаков ему мало.
+        // Своя машина приезжает в тот же словарь под пустым ключом - тем
+        // самым, которым помечена своя сессия. Один признак «это здесь»
+        // на оба места: разойдись они, группа своей машины осталась бы
+        // без нагрузки, а нагрузка - без группы.
+        var load = remoteMemory
+        if !localMemory.isEmpty { load[""] = localMemory }
         let lines = Sessions.lines(sessions, remoteScanAt: lastScan,
-                                   machines: remoteMemory)
+                                   machines: load, localName: Sessions.localName())
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
@@ -1048,10 +1061,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                          activity: L("посчитай отказы за сентябрь",
                                      "count declines for September"),
                          machine: ""),
-            // Памяти у своих сессий в фикстуре нет намеренно: её больше
-            // не мерят и на живой машине. Снимок должен показывать то,
-            // что человек увидит, иначе он проверяет не тот экран.
+            // Память у своих сессий ВЕРНУЛАСЬ (1.15.0): её снова мерят,
+            // и в группе своей машины строки без чисел не сравнить ни
+            // между собой, ни с «прочим».
+            //
+            // Заодно в кадре видно цену этого решения: заметка в строке
+            // одна, и память вытесняет занятие - у sintra вместо «посчитай
+            // отказы за сентябрь» теперь число. Так и будет у человека.
         ]
+        localSessions[0].rssMB = 512
+        localSessions[1].rssMB = 340
+        localSessions[2].rssMB = 186
         // Удалённых машин в кадре ДВЕ, и обе с меткой «Remote».
         //
         // Так теперь и живёт: на сервере и на моноблоке каждый разговор
@@ -1121,6 +1141,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // память СЕРВЕРА в кадр не попадает, и её вёрстка остаётся
         // непроверенной. Так и вышло на снимке 1.10.0.
         Prefs.remoteHosts = "vps7\nmono"
+        // Своя машина в кадре - с натуры мака: 16 ГБ, занято 9,8.
+        // Ярлык «мак» вместо имени хоста: в списке из трёх машин человеку
+        // нужно слово, которым он их зовёт сам.
+        Prefs.localLabel = L("мак", "mac")
+        localMemory = MachineMemory(totalMB: 16384, availableMB: 6349,
+                                    swapTotalMB: 6144, swapUsedMB: 1126,
+                                    load1: 1.2, cores: 8)
 
         // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
         //

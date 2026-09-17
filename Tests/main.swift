@@ -467,25 +467,44 @@ case .success(let a):
     check("занятый своп считается как всего минус свободный",
           a.memory.swapUsedMB == 7030 - 5287)
     check("и это видно словами", a.memory.text.contains(L("занято 2,6 из 3,8", "2.6 of 3.8")))
-    // Память подписывается именем машины: их может быть несколько, и
-    // безымянное число не отвечает на «чья это память».
+    // Нагрузка стоит в ЗАГОЛОВКЕ ГРУППЫ этой машины, а не строкой внизу:
+    // с 1.15.0 сессии сгруппированы по машинам, и число живёт рядом с теми
+    // сессиями, к которым относится.
     let withHost = Sessions.lines(a.sessions, machines: ["vps7": a.memory])
-    check("память машины подписана её именем",
-          withHost.notes.contains { $0.hasPrefix("vps7: ") })
+    check("нагрузка машины стоит в её заголовке",
+          withHost.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
+    check("и внизу её больше нет",
+          !withHost.notes.contains { $0.contains("3,8") || $0.contains("3.8") })
     let noHost = Sessions.lines(a.sessions)
-    check("без данных о машине строки нет",
-          !noHost.notes.contains { $0.contains("3,8") || $0.contains("3.8") })
+    check("без данных о машине заголовок без чисел",
+          !noHost.rows.contains { $0.contains("3,8") || $0.contains("3.8") })
 
-    // Несколько серверов: по строке на каждый, порядок по имени - иначе
-    // строки прыгали бы между открытиями меню.
+    // Несколько серверов: по группе на каждый, порядок по имени - иначе
+    // группы прыгали бы между открытиями меню.
     let two = Sessions.lines(a.sessions, machines: [
         "vps8": MachineMemory(totalMB: 8000, availableMB: 4000,
                               swapTotalMB: 2000, swapUsedMB: 100),
         "vps7": a.memory])
-    let hostNotes = two.notes.filter { $0.hasPrefix("vps") && $0.contains(":") }
-    check("на каждую машину своя строка", hostNotes.count == 2)
+    let heads = two.rows.filter { $0.hasPrefix("  vps") }
+    check("на каждую машину своя группа", heads.count == 2)
     check("и порядок по имени, а не как повезёт",
-          hostNotes.first?.hasPrefix("vps7:") ?? false)
+          heads.first?.hasPrefix("  vps7 ") ?? false)
+    // Машина, с которой сессий не пришло, всё равно показывается: её
+    // нагрузка отвечает на «там пусто или я просто не вижу».
+    check("машина без сессий не пропадает",
+          heads.last?.hasPrefix("  vps8 ") ?? false)
+
+    // «Прочее» - занятое машиной минус её же сессии. Здесь: занято
+    // 3915-1224=2691, сессия держит 113, прочего 2578.
+    check("прочее считается как занятое минус сессии",
+          Sessions.otherLoadMB(load: a.memory, sessions: a.sessions) ?? -1, 2691 - 113)
+    check("без availableMB прочее не выдумывается",
+          Sessions.otherLoadMB(load: MachineMemory(totalMB: 4000), sessions: []) == nil)
+    // Сумма сессий может обогнать занятое: общие страницы считаются в
+    // каждом процессе, а занятое - один раз. Ноль, а не минус.
+    check("прочее не уходит в минус",
+          Sessions.otherLoadMB(load: MachineMemory(totalMB: 1000, availableMB: 900),
+                               sessions: a.sessions) ?? -1, 0)
     // Оговорка про свежесть одна на всех: обход у машин общий, и повторять
     // её на каждую значит занять строки одним и тем же фактом.
     let stale = two.notes.filter { $0.contains(L("по последнему обходу", "as of the last scan")) }
@@ -1269,8 +1288,15 @@ check("но при смешанном составе раздел есть",
       !Sessions.lines([mix[1], mix[3]]).rows.isEmpty)
 
 let lines = Sessions.lines(mix, nameLimit: 10, remoteScanAt: Date())
-check("указатель стоит у ждущего", lines.rows.first?.hasPrefix("\u{25B8}") ?? false)
-check("у остальных указателя нет", lines.rows.dropFirst().allSatisfy { !$0.hasPrefix("\u{25B8}") })
+// Первая строка теперь - заголовок группы машины, сессии идут под ним
+// с отступом. Указатель ищем в строках сессий, а не в самой первой.
+let sessionRows = lines.rows.filter { $0.contains("\u{00B7}") || $0.hasPrefix("  \u{25B8} ") }
+check("указатель стоит у ждущего",
+      lines.rows.contains { $0.hasPrefix("  \u{25B8} ") })
+check("указатель ровно один - у того, кто требует действия",
+      lines.rows.filter { $0.hasPrefix("  \u{25B8} ") }.count, 1)
+check("сессии идут с отступом под заголовком машины",
+      sessionRows.allSatisfy { $0.hasPrefix("    ") || $0.hasPrefix("  \u{25B8} ") })
 check("про неизвестный статус сказано словами",
       lines.notes.contains { $0.contains(L("без статуса", "without status")) })
 // Оговорка про сервер появляется только если серверные строки в списке есть.
@@ -1326,14 +1352,66 @@ for i in 1...20 {
                              state: .busy, waitingFor: nil, since: nil, machine: ""))
 }
 let capped = Sessions.lines(many)
-check("список не растёт без предела", capped.rows.count == Sessions.maxRows + 1)
+// Считаем именно строки СЕССИЙ: в rows теперь входит ещё заголовок
+// группы, а предел стоит на сессиях - заголовков столько же, сколько
+// машин, и резать их нечестно (машина пропала бы из списка целиком).
+let capRows = capped.rows.filter { $0.hasPrefix("    ") || $0.hasPrefix("  \u{25B8} ") }
+check("список не растёт без предела", capRows.count, Sessions.maxRows)
 check("и говорит, сколько скрыл",
       capped.rows.last?.contains(L("и ещё 14", "14 more")) ?? false)
+
+// Предел общий на все машины, а не на каждую: иначе три машины по шесть
+// строк дали бы восемнадцать, и раздел съел бы меню целиком.
+var manyHosts: [AgentSession] = []
+for i in 1...9 {
+    manyHosts.append(AgentSession(pid: 100 + i, name: "h\(i)", folder: "f", surface: "",
+                                  state: .busy, waitingFor: nil, since: nil,
+                                  machine: ["", "vps7", "mono"][i % 3]))
+}
+let spread = Sessions.lines(manyHosts)
+let spreadRows = spread.rows.filter { $0.hasPrefix("    ") || $0.hasPrefix("  \u{25B8} ") }
+check("предел общий на все машины", spreadRows.count <= Sessions.maxRows)
+check("а заголовки машин в него не входят",
+      spread.rows.filter { $0.hasPrefix("  vps7") || $0.hasPrefix("  mono") }.count, 2)
 
 // Мёртвый pid: файл остаётся лежать после падения процесса, и без проверки
 // живости трей показывал бы «работает» на сессии, которой нет неделю.
 check("pid 0 не живой", !Sessions.isAlive(pid: 0))
 check("свой процесс живой", Sessions.isAlive(pid: Int(getpid())))
+
+// ---- занятая память macOS --------------------------------------------------
+//
+// Разбор вынесен из Darwin-ветки намеренно: сам вызов `vm_stat` на Linux
+// не сделать, а вот его вывод - обычный текст, и ошибка в разборе иначе
+// вылезла бы числом на экране у человека, а не здесь.
+//
+// Занятым считается active + wired + compressed - то же, что показывает
+// «Загрузка памяти» в мониторе системы. Inactive и speculative не входят:
+// система отдаёт их по первому требованию, и звать их занятыми значит
+// пугать человека исправной работой.
+let vmStat = """
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               45678.
+Pages active:                            234567.
+Pages inactive:                          123456.
+Pages speculative:                         2345.
+Pages throttled:                              0.
+Pages wired down:                        112233.
+Pages purgeable:                           4567.
+"Translation faults":                 123456789.
+Pages occupied by compressor:             34567.
+Swapins:                                      0.
+"""
+check("занятое считается по active + wired + compressed",
+      Sessions.parseVMStat(vmStat) ?? -1, 5958)
+// Размер страницы берётся из шапки, а не из константы: на Intel он 4 КБ,
+// на Apple Silicon 16 КБ, и зашитое число ошиблось бы вчетверо.
+check("размер страницы берётся из вывода, а не зашит",
+      Sessions.parseVMStat(vmStat.replacingOccurrences(of: "16384", with: "4096")) ?? -1, 1489)
+check("без шапки со страницей числа не выдумываются",
+      Sessions.parseVMStat("Pages active: 100.\nPages wired down: 50.") == nil)
+check("пустой вывод - это nil, а не ноль",
+      Sessions.parseVMStat("") == nil)
 
 // ---- память сессий ---------------------------------------------------------
 //

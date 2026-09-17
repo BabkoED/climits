@@ -374,6 +374,204 @@ enum Sessions {
         }
     }
 
+    // --- сколько памяти держат живые сессии --------------------------------
+    //
+    // ВОЗВРАЩЕНО 17.09.2026 по слову Антона: раздел теперь сгруппирован по
+    // машинам, и у каждой в заголовке своя нагрузка. Без локального замера
+    // группа «эта машина» стояла бы с пустыми числами - ровно там, где
+    // человек сидит и где вопрос «что грузит» задаётся чаще всего.
+    //
+    // В 1.10.1 замер был убран сознательно («на маке памяти обычно много»),
+    // и то решение было верным для прежней вёрстки: строка памяти была
+    // одна и отвечала про сервер. Изменилась вёрстка - изменился и ответ.
+    //
+    // Два пути, потому что системы дают разное:
+    //   * Linux - /proc/<pid>/status, там и VmRSS, и VmSwap. Читается без
+    //     запуска процессов и проверяется здесь же, на живых данных;
+    //   * macOS - `ps -o rss=`, одним вызовом на все pid сразу. Свопа по
+    //     процессу macOS не отдаёт вовсе, поэтому там останется ноль -
+    //     и это честнее, чем нарисовать «0 в свопе».
+    //
+    // Одним вызовом на все pid, а не по одному на каждый: меню открывается
+    // часто, а запуск процесса стоит куда дороже чтения файла.
+    static func memory(pids: [Int]) -> [Int: (rss: Int, swap: Int)] {
+        guard !pids.isEmpty else { return [:] }
+        #if canImport(Darwin)
+        return macMemory(pids: pids)
+        #else
+        var out: [Int: (rss: Int, swap: Int)] = [:]
+        for pid in pids {
+            guard let text = try? String(contentsOfFile: "/proc/\(pid)/status",
+                                         encoding: .utf8) else { continue }
+            var rss = 0, swap = 0
+            for line in text.split(separator: "\n") {
+                let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                guard f.count >= 2, let kb = Int(f[1]) else { continue }
+                if line.hasPrefix("VmRSS:") { rss = kb / 1024 }
+                if line.hasPrefix("VmSwap:") { swap = kb / 1024 }
+            }
+            if rss > 0 { out[pid] = (rss, swap) }
+        }
+        return out
+        #endif
+    }
+
+    #if canImport(Darwin)
+    private static func macMemory(pids: [Int]) -> [Int: (rss: Int, swap: Int)] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-o", "pid=,rss=", "-p", pids.map(String.init).joined(separator: ",")]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return [:] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        var out: [Int: (rss: Int, swap: Int)] = [:]
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard f.count >= 2, let pid = Int(f[0]), let kb = Int(f[1]) else { continue }
+            // Своп остаётся нулём: macOS его по процессу не сообщает.
+            if kb > 0 { out[pid] = (kb / 1024, 0) }
+        }
+        return out
+    }
+    #endif
+
+    // --- нагрузка этой машины ----------------------------------------------
+    //
+    // Linux - /proc/meminfo и /proc/loadavg, всё четыре числа сразу.
+    // MemAvailable, а не MemFree: свободного в линуксе почти никогда нет,
+    // ядро отдаёт память под кэш, и MemFree выглядит как беда при исправной
+    // работе. Available - это то, что можно занять, не выдавливая нужное.
+    //
+    // macOS СЧИТАЕТСЯ ИНАЧЕ, И ЭТО ГЛАВНАЯ ЛОВУШКА ЗДЕСЬ. «Свободной»
+    // памяти там нет вовсе: система держит почти всю под кэш и считает это
+    // нормой. Поэтому занятым берётся то же, что показывает «Загрузка
+    // памяти» в мониторе системы: active + wired + сжатая. Кэш и
+    // неактивное сюда НЕ входят - их система отдаст по первому требованию,
+    // и звать их занятыми значит пугать человека исправной работой.
+    //
+    // Отсюда же и «прочее» в меню: занятое машиной минус сумма сессий.
+    // Считать его от MemFree на линуксе или от «свободной» на маке нельзя -
+    // получится две несравнимые величины под одной подписью.
+    static func machineMemory() -> MachineMemory {
+        #if canImport(Darwin)
+        var m = MachineMemory()
+        if let s = sysctlText(["-n", "hw.memsize"]), let bytes = Int(s) {
+            m.totalMB = bytes / 1024 / 1024
+        }
+        if let s = sysctlText(["-n", "hw.ncpu"]), let n = Int(s) { m.cores = n }
+        // «{ 1.83 2.01 1.94 }» - три средних, нам нужно первое.
+        if let s = sysctlText(["-n", "vm.loadavg"]) {
+            let nums = s.split(whereSeparator: { $0 == " " || $0 == "{" || $0 == "}" })
+            if let first = nums.first, let v = Double(first) { m.load1 = v }
+        }
+        // «total = 4096.00M  used = 1300.25M  free = 2795.75M»
+        if let s = sysctlText(["-n", "vm.swapusage"]) {
+            func mb(_ key: String) -> Int {
+                guard let r = s.range(of: key + " = ") else { return 0 }
+                let rest = s[r.upperBound...]
+                let num = rest.prefix(while: { $0.isNumber || $0 == "." })
+                return Int(Double(num) ?? 0)
+            }
+            m.swapTotalMB = mb("total")
+            m.swapUsedMB = mb("used")
+        }
+        if m.totalMB > 0, let used = macUsedMB() {
+            m.availableMB = max(0, m.totalMB - used)
+        }
+        return m
+        #else
+        var m = MachineMemory()
+        if let text = try? String(contentsOfFile: "/proc/loadavg", encoding: .utf8) {
+            if let first = text.split(separator: " ").first, let v = Double(first) {
+                m.load1 = v
+            }
+        }
+        m.cores = ProcessInfo.processInfo.activeProcessorCount
+        guard let text = try? String(contentsOfFile: "/proc/meminfo", encoding: .utf8) else {
+            return m
+        }
+        var swapFree = 0
+        for line in text.split(separator: "\n") {
+            let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard f.count >= 2, let kb = Int(f[1]) else { continue }
+            switch f[0] {
+            case "MemTotal:":     m.totalMB = kb / 1024
+            case "MemAvailable:": m.availableMB = kb / 1024
+            case "SwapTotal:":    m.swapTotalMB = kb / 1024
+            case "SwapFree:":     swapFree = kb / 1024
+            default: break
+            }
+        }
+        m.swapUsedMB = max(0, m.swapTotalMB - swapFree)
+        return m
+        #endif
+    }
+
+    #if canImport(Darwin)
+    // Занятая память macOS: (active + wired + compressed) x размер страницы.
+    //
+    // Размер страницы берётся из шапки самого вывода, а не из константы:
+    // на Apple Silicon он 16 КБ, на Intel 4 КБ, и зашитая четвёрка
+    // ошиблась бы вчетверо ровно на той машине, где приложение и живёт.
+    private static func macUsedMB() -> Int? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/vm_stat")
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return parseVMStat(String(decoding: data, as: UTF8.self))
+    }
+    #endif
+
+    // Разбор вынесен отдельно и БЕЗ Darwin: так он проверяется тестом на
+    // любой машине, а без теста первая же ошибка в нём вылезла бы уже
+    // числом на экране у человека.
+    static func parseVMStat(_ text: String) -> Int? {
+        var pageSize = 0
+        var pages: [String: Int] = [:]
+        for line in text.split(separator: "\n") {
+            if pageSize == 0, let r = line.range(of: "page size of ") {
+                let num = line[r.upperBound...].prefix(while: { $0.isNumber })
+                pageSize = Int(num) ?? 0
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = String(line[line.startIndex..<colon])
+            let digits = line[colon...].filter { $0.isNumber }
+            guard let n = Int(digits) else { continue }
+            pages[key] = n
+        }
+        guard pageSize > 0 else { return nil }
+        let active = pages["Pages active"] ?? 0
+        let wired = pages["Pages wired down"] ?? 0
+        let compressed = pages["Pages occupied by compressor"] ?? 0
+        guard active + wired > 0 else { return nil }
+        return (active + wired + compressed) * pageSize / 1024 / 1024
+    }
+
+    #if canImport(Darwin)
+    private static func sysctlText(_ args: [String]) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/sysctl")
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let s = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
+    }
+    #endif
+
     // --- обход каталога -----------------------------------------------------
     //
     // Мёртвые записи отбрасываются здесь, а не в меню: файл остаётся лежать
@@ -418,6 +616,16 @@ enum Sessions {
                 continue
             }
             out.append(s)
+        }
+        // Память мерим одним заходом на весь список, уже зная живые pid.
+        // Вернулось 17.09.2026 вместе с группировкой: в группе своей машины
+        // строки без чисел не сравнить ни между собой, ни с «прочим».
+        let mem = memory(pids: out.map { $0.pid })
+        for i in out.indices {
+            if let m = mem[out[i].pid] {
+                out[i].rssMB = m.rss
+                out[i].swapMB = m.swap
+            }
         }
         return sorted(out)
     }
@@ -698,9 +906,43 @@ enum Sessions {
         return Fmt.clip(line, maxLine)
     }
 
+    // Как зовётся машина, на которой мы работаем.
+    //
+    // Раньше своя машина не подписывалась вовсе - строки без префикса и
+    // были «здешними». В группах так нельзя: заголовок обязан называться,
+    // иначе две безымянные группы в списке из трёх.
+    //
+    // Имя системное и укороченное до первой точки: `Babko-Pro.local` в
+    // строке шириной 58 знаков - это шесть знаков домена, не несущих
+    // ничего. Своё слово ставится настройкой `localLabel`: в списке из
+    // трёх машин человеку удобнее «мак», а системе про это знать неоткуда.
+    static func localName() -> String {
+        let own = Prefs.localLabel.trimmingCharacters(in: .whitespaces)
+        if !own.isEmpty { return own }
+        let host = ProcessInfo.processInfo.hostName
+        return String(host.split(separator: ".").first ?? "")
+    }
+
+    // Сколько на машине занято НЕ сессиями Claude.
+    //
+    // nil - когда судить не по чему: без availableMB занятого мы не знаем
+    // вовсе, а «прочее = всё» было бы враньём в пользу тревоги.
+    //
+    // Отрицательное зажимается в ноль сознательно. Сумма RSS сессий может
+    // обогнать занятое машиной: общие страницы считаются в каждом процессе
+    // отдельно, а занятое - один раз. Показать «-300 МБ прочего» значит
+    // выдать особенность учёта за поломку.
+    static func otherLoadMB(load: MachineMemory, sessions: [AgentSession]) -> Int? {
+        guard load.totalMB > 0, load.availableMB > 0 else { return nil }
+        let used = load.totalMB - load.availableMB
+        let mine = sessions.reduce(0) { $0 + $1.rssMB }
+        return max(0, used - mine)
+    }
+
     static func lines(_ list: [AgentSession], nameLimit: Int = nameLimit,
                       remoteScanAt: Date? = nil,
-                      machines: [String: MachineMemory] = [:]) -> SessionLines {
+                      machines: [String: MachineMemory] = [:],
+                      localName: String = "") -> SessionLines {
         var out = SessionLines()
         guard !list.isEmpty else { return out }
 
@@ -734,40 +976,84 @@ enum Sessions {
         if !s.memoryText.isEmpty { head += " \u{00B7} " + s.memoryText }
         out.header = head
 
-        // Сортируем ЗДЕСЬ, а не надеемся на вызывающего. Обещание раздела -
-        // «то, что требует действия, стоит первым», и держать его должно
-        // то же место, которое его даёт. Тест это и поймал: список пришёл
-        // в порядке чтения каталога, и ждущая сессия стояла второй.
-        let ordered = sorted(list)
-        let shown = Array(ordered.prefix(maxRows))
-        for x in shown {
-            // Указатель - только у того, что требует действия. У остальных
-            // пробел той же ширины, иначе строки разъезжаются по левому краю.
-            // Своя машина - пустая строка, а не слово «эта». Держать
-            // здесь ПЕРЕВЕДЁННОЕ слово и сравнивать с ним значит завести
-            // ошибку, которая видна только в одном языке: под английской
-            // локалью «эта» перестаёт равняться «this», и своя сессия
-            // начинает подписываться чужим адресом.
-            out.rows.append(composeLine(
-                // Указатель и у крутящейся: она требует того же, что и
-                // ждущая, - чтобы на неё посмотрели. Разница в том, что
-                // ждущая стоит бесплатно, а эта тратит.
-                mark: (x.state == .waiting || x.loop != nil) ? "\u{25B8} " : "  ",
-                machine: x.machine,
-                // Имя уезжает ПОЛНЫМ: резать его по остатку умеет
-                // composeLine, а обрезанное снаружи уже не восстановить.
-                name: x.displayName,
-                surface: x.surface,
-                state: x.state == .unknown ? "" : x.state.word,
-                waitingFor: x.state == .waiting ? x.waitingFor : nil,
-                age: x.since.map { Fmt.ago($0) } ?? "",
-                memory: x.memoryText,
-                activity: x.activity,
-                loop: x.loop))
+        // СПИСОК СГРУППИРОВАН ПО МАШИНАМ (слово Антона 17.09.2026).
+        //
+        // Прежде строки шли одним списком, а машина стояла префиксом:
+        // «vps7: Описания ошибок...». Вопрос, который задают этому разделу,
+        // звучит иначе - «где что нагружает сильнее», - и плоский список
+        // на него не отвечал: нагрузка машины лежала строкой внизу, её
+        // сессии вперемешку с чужими выше, и складывать их приходилось
+        // глазами.
+        //
+        // Теперь у каждой машины свой заголовок с её нагрузкой, под ним -
+        // её сессии, последней строкой - сколько на ней занято НЕ сессиями
+        // Claude. Три числа в одном месте и отвечают: столько машина,
+        // столько эти чаты, столько всё остальное.
+        //
+        // Побочная выгода: префикс машины из строк ушёл, и освободившиеся
+        // знаки достались имени чата - самому длинному, что в строке есть.
+        var groups: [String: [AgentSession]] = [:]
+        for x in list { groups[x.machine, default: []].append(x) }
+
+        // Машина без единой сессии всё равно показывается: её нагрузка -
+        // ответ на «а там сейчас пусто или я просто не вижу».
+        let names = Set(groups.keys).union(machines.keys)
+        // Своя машина первой - на ней человек сидит. Остальные по имени,
+        // иначе группы прыгали бы между открытиями меню.
+        let orderedNames = names.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return a.isEmpty }
+            return a < b
         }
-        if ordered.count > shown.count {
-            out.rows.append("  " + L("и ещё \(ordered.count - shown.count)",
-                                     "\(ordered.count - shown.count) more"))
+
+        var budget = maxRows
+        var skipped = 0
+        for host in orderedNames {
+            let mine = sorted(groups[host] ?? [])
+            let load = machines[host] ?? MachineMemory()
+
+            // Заголовок группы. Имя своей машины берётся у системы: слова
+            // «эта» тут мало - в списке из трёх машин человеку нужно имя,
+            // а не указание, что одна из них особенная.
+            let label = host.isEmpty ? (localName.isEmpty
+                                        ? L("эта машина", "this machine")
+                                        : localName)
+                                     : host
+            out.rows.append(load.isEmpty ? "  " + label
+                                         : Fmt.clip("  " + label + " \u{00B7} " + load.text, maxLine))
+
+            let shown = Array(mine.prefix(max(0, budget)))
+            budget -= shown.count
+            skipped += mine.count - shown.count
+            for x in shown {
+                // Указатель - только у того, что требует действия. У
+                // остальных пробел той же ширины, иначе строки
+                // разъезжаются по левому краю. Машина в строке больше не
+                // пишется вовсе: она в заголовке группы, а повторять её
+                // в каждой строке значит тратить шесть знаков имени чата.
+                out.rows.append(composeLine(
+                    // Указатель и у крутящейся: она требует того же, что и
+                    // ждущая, - чтобы на неё посмотрели. Разница в том, что
+                    // ждущая стоит бесплатно, а эта тратит.
+                    mark: (x.state == .waiting || x.loop != nil) ? "  \u{25B8} " : "    ",
+                    machine: "",
+                    // Имя уезжает ПОЛНЫМ: резать его по остатку умеет
+                    // composeLine, а обрезанное снаружи уже не восстановить.
+                    name: x.displayName,
+                    surface: x.surface,
+                    state: x.state == .unknown ? "" : x.state.word,
+                    waitingFor: x.state == .waiting ? x.waitingFor : nil,
+                    age: x.since.map { Fmt.ago($0) } ?? "",
+                    memory: x.memoryText,
+                    activity: x.activity,
+                    loop: x.loop))
+            }
+
+            if let other = otherLoadMB(load: load, sessions: mine) {
+                out.rows.append("    " + L("прочее", "other") + " \u{00B7} " + Fmt.gb(other))
+            }
+        }
+        if skipped > 0 {
+            out.rows.append("  " + L("и ещё \(skipped)", "\(skipped) more"))
         }
 
         // Оговорки. Молчать про них нельзя: раздел, который показывает
@@ -780,20 +1066,11 @@ enum Sessions {
             out.notes.append(L("\(s.unknown) без статуса: работает или стоит - неизвестно",
                                "\(s.unknown) without status: working or stalled unknown"))
         }
-        // Память машины - после списка сессий: сумма по сессиям отвечает
-        // «сколько держат они», а это - «сколько ещё можно». Без второго
-        // первое не с чем сравнить.
-        //
-        // Только удалённых машин. Своя не показывается намеренно - см.
-        // комментарий у отсутствующего замера выше.
-        //
-        // Порядок по имени хоста, а не по словарю: иначе строки прыгали бы
-        // между открытиями меню.
-        for host in machines.keys.sorted() {
-            if let m = machines[host], !m.isEmpty {
-                out.notes.append(host + ": " + m.text)
-            }
-        }
+        // Строк про память машин здесь больше НЕТ: с 1.15.0 нагрузка стоит
+        // в заголовке своей группы, рядом со своими же сессиями. Оставить
+        // их внизу значило бы показывать одно и то же число дважды и в
+        // двух разных местах - а это не избыточность, а повод не поверить
+        // ни одному из них.
 
         // Оговорка про свежесть - ОДНА на все машины, а не на каждую:
         // обход у них общий, и повторять её N раз значит занять N строк
