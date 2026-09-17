@@ -254,6 +254,47 @@ struct MachineMemory: Equatable {
         return s
     }
 
+    // То же самое дробью: «ОЗУ 9,8/16 ГБ · своп 1,1/6,0 · ЦП 1,2/8».
+    //
+    // ЗАЧЕМ ВТОРАЯ ФОРМА. Полная («ОЗУ занято 9,8 из 16,0 ГБ · своп 1,1 из
+    // 6,0 ГБ · ЦП 1,2 из 8») не влезает в строку меню - поймано снимком
+    // 1.15.0: у всех трёх машин загрузка процессора оказалась срезана
+    // многоточием. Резать её нельзя: ЦП отвечает на другой вопрос, чем
+    // память, и машина, стоящая колом при свободной памяти, - это ровно
+    // тот случай, ради которого строку и читают.
+    //
+    // Слова «занято» и «из» выброшены, а не сокращены: дробь читается
+    // тем же смыслом и без них, а единица пишется один раз на пару -
+    // «1,1/6,0 ГБ» не бывает в разных единицах слева и справа.
+    //
+    // Полная форма осталась для `--doctor`: там ширины сколько угодно,
+    // и слова помогают.
+    var shortText: String {
+        func gb(_ mb: Int) -> String {
+            let s = String(format: "%.1f", Double(mb) / 1024)
+            return L(s.replacingOccurrences(of: ".", with: ","), s)
+        }
+        var parts: [String] = []
+        if totalMB > 0 {
+            if availableMB > 0 {
+                parts.append(L("ОЗУ \(gb(totalMB - availableMB))/\(gb(totalMB)) ГБ",
+                               "RAM \(gb(totalMB - availableMB))/\(gb(totalMB)) GB"))
+            } else {
+                parts.append(L("ОЗУ \(gb(totalMB)) ГБ", "RAM \(gb(totalMB)) GB"))
+            }
+            if swapTotalMB > 0 {
+                parts.append(L("своп \(gb(swapUsedMB))/\(gb(swapTotalMB))",
+                               "swap \(gb(swapUsedMB))/\(gb(swapTotalMB))"))
+            }
+        }
+        if cores > 0 {
+            let n = String(format: "%.1f", load1)
+            parts.append(L("ЦП \(n.replacingOccurrences(of: ".", with: ","))/\(cores)",
+                           "CPU \(n)/\(cores)"))
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
     // «ЦП 2,4 из 2». Пусто, если мерить не удалось.
     //
     // Ноль ядер - это «не измерили», а не «нет ядер»: без знаменателя
@@ -1018,8 +1059,11 @@ enum Sessions {
                                         ? L("эта машина", "this machine")
                                         : localName)
                                      : host
+            // Заголовок берёт КОРОТКУЮ форму нагрузки и всё равно
+            // страхуется обрезкой: имя машины задаёт человек, и длинный
+            // ярлык не должен раздвигать меню.
             out.rows.append(load.isEmpty ? "  " + label
-                                         : Fmt.clip("  " + label + " \u{00B7} " + load.text, maxLine))
+                                         : Fmt.clip("  " + label + " \u{00B7} " + load.shortText, maxLine))
 
             let shown = Array(mine.prefix(max(0, budget)))
             budget -= shown.count
