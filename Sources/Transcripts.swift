@@ -180,7 +180,34 @@ enum Transcripts {
     static let titleHeadRetryBytes = 1024 * 1024
     static let titleTailBytes = 64 * 1024
 
+    // Своё имя чата лежит ОТДЕЛЬНЫМ ФАЙЛОМ рядом с расшифровкой:
+    // <проект>/<sessionId>/custom-title.json, внутри {"customTitle": "..."}.
+    //
+    // Claude Code переехал туда, а строку `custom-title` внутри расшифровки
+    // писать перестал. Поймано 17.09.2026 сверкой со списком чатов в самой
+    // программе: «Мандарин» и «Орг встреча с Кириллом» совпадали, а
+    // «Организационный чат» - нет, и разница была ровно в том, что первые
+    // два переименованы давно, по старому формату. То есть каждое НОВОЕ
+    // переименование climits пропускал молча.
+    //
+    // Старый путь остался следом ниже: файлы, переименованные до переезда,
+    // держат имя только внутри себя.
+    static func customTitleFile(for url: URL) -> String? {
+        let sessionID = url.deletingPathExtension().lastPathComponent
+        let side = url.deletingLastPathComponent()
+            .appendingPathComponent(sessionID)
+            .appendingPathComponent("custom-title.json")
+        guard let data = try? Data(contentsOf: side),
+              let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let t = (row["customTitle"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !t.isEmpty
+        else { return nil }
+        return t
+    }
+
     static func chatTitle(of url: URL) -> String? {
+        // Сначала отдельный файл - он и есть нынешнее место имени.
+        if let own = customTitleFile(for: url) { return own }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0

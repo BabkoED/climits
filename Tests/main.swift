@@ -1379,6 +1379,32 @@ check("а заголовки машин в него не входят",
 check("pid 0 не живой", !Sessions.isAlive(pid: 0))
 check("свой процесс живой", Sessions.isAlive(pid: Int(getpid())))
 
+// ---- «прочие программы»: только про сервер ---------------------------------
+//
+// Слово Антона 17.09.2026: на маке чужие траты показывать не надо - там
+// и так много рабочего, а контролировать он хочет сторонние службы на
+// серверах. На своей машине строки быть не должно вовсе.
+let loadHere = MachineMemory(totalMB: 16384, availableMB: 6349,
+                             swapTotalMB: 6144, swapUsedMB: 1126,
+                             load1: 1.2, cores: 8)
+let mySession = AgentSession(pid: 1, name: "s", folder: "f", surface: "",
+                             state: .busy, waitingFor: nil, since: nil,
+                             machine: "", rssMB: 300)
+let hisSession = AgentSession(pid: 2, name: "s", folder: "f", surface: "",
+                              state: .busy, waitingFor: nil, since: nil,
+                              machine: "vps7", rssMB: 300)
+let twoGroups = Sessions.lines([mySession, hisSession],
+                          machines: ["": loadHere, "vps7": loadHere],
+                          localName: "мак")
+let otherRows = twoGroups.rows.filter { $0.contains(L("прочие программы", "other apps")) }
+check("строка про чужие программы одна - серверная", otherRows.count, 1)
+check("и стоит она в группе сервера",
+      twoGroups.rows.firstIndex(where: { $0.hasPrefix("  vps7") })
+        .map { i in twoGroups.rows[i...].contains { $0.contains(L("прочие программы", "other apps")) } } ?? false)
+check("в группе своей машины её нет",
+      twoGroups.rows.prefix(while: { !$0.hasPrefix("  vps7") })
+        .allSatisfy { !$0.contains(L("прочие программы", "other apps")) })
+
 // ---- тот ли это процесс ----------------------------------------------------
 //
 // Прежде здесь стоял порог в сутки: «запись старше суток при живом pid

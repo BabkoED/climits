@@ -534,6 +534,11 @@ for dirpath, dirnames, filenames in os.walk(root):
 # Имена разговоров - тем, кто попадёт в показ.
 #
 # Читает ТА сторона, а не мак: файлов этой машины у мака нет вовсе.
+# Своё имя чата лежит отдельным файлом рядом: <sessionId>/custom-title.json.
+# Claude Code переехал туда и в расшифровку его писать перестал - поймано
+# 17.09.2026 сверкой со списком чатов в самой программе. Старый путь
+# оставлен следом: файлы, переименованные до переезда, держат имя внутри.
+#
 # Правило то же, что в Transcripts.chatTitle: своё имя из `custom-title`
 # важнее, первый запрос - запасной. Голова и хвост по 64 КБ: своё имя
 # лежит в конце, первый запрос в начале, а целиком файл бывает
@@ -553,6 +558,15 @@ TITLE_TOP = 10
 
 
 def chat_title(path):
+    # Отдельный файл рядом - нынешнее место имени.
+    side = os.path.join(os.path.splitext(path)[0], "custom-title.json")
+    try:
+        with open(side) as fh:
+            own = (json.load(fh).get("customTitle") or "").strip()
+        if own:
+            return own
+    except Exception:
+        pass
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as fh:
