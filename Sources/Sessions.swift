@@ -620,12 +620,84 @@ enum Sessions {
     // «работает» на сессии, которой нет неделю. Проверка - kill(pid, 0):
     // сигнала не посылает, только спрашивает, есть ли такой процесс.
     //
-    // Чужой процесс с тем же pid отличить нельзя: startedAt в файле есть,
-    // а времени старта процесса без него нам никто не даёт (procStart на
-    // Linux - тики, на macOS - строка ctime; одно и то же поле, разные типы).
-    // Поэтому берём поправку на возраст: запись старше суток при живом pid
-    // подозрительна, и мы её не показываем.
+    // ЧУЖОЙ PROCESS С ТЕМ ЖЕ PID ОТЛИЧАЕТСЯ - и прежняя запись здесь
+    // («отличить нельзя») была неверной. Стоила она дорого: вместо сверки
+    // стоял порог в сутки, и 17.09.2026 climits показывал 4 живые сессии
+    // из 9. Четыре серверных работали 25-120 часов, две на моноблоке -
+    // 11 и 37; всё, что старше суток, объявлялось подозрительным и молча
+    // выбрасывалось. Сессии Remote Control живут неделями, так что порог
+    // резал не призраков, а самое рабочее.
+    //
+    // Сверяется токен старта процесса - `procStart` в файле сессии:
+    //   * Linux - поле starttime (22-е) из /proc/<pid>/stat, тики от
+    //     загрузки. Сверено на пяти живых сессиях: совпадает точно;
+    //   * macOS - `LC_ALL=C TZ=UTC ps -o lstart= -p <pid>`, строка.
+    // Обе дороги взяты из самого Claude Code - он пишет это поле так же
+    // и так же сверяет (`provenSameProcess`), значит форматы совпадут
+    // по построению, а не по нашей догадке.
+    //
+    // Токена в файле нет - считаем процесс своим, как и Claude Code.
+    // Тогда и только тогда остаётся возрастная поправка: запись без
+    // токена, старше суток, при живом pid - подозрительна.
     static let maxAge: TimeInterval = 24 * 3600
+
+    // Токен старта процесса. nil - узнать не удалось: тогда не судим.
+    static func startToken(pid: Int) -> String? {
+        #if canImport(Darwin)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-o", "lstart=", "-p", String(pid)]
+        var env = ProcessInfo.processInfo.environment
+        env["LC_ALL"] = "C"
+        env["TZ"] = "UTC"
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let s = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
+        #else
+        guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8)
+        else { return nil }
+        return parseProcStat(stat)
+        #endif
+    }
+
+    // starttime из /proc/<pid>/stat - 22-е поле.
+    //
+    // Отсчёт полей начинается ПОСЛЕ последней закрывающей скобки, а не от
+    // начала строки: второе поле - имя процесса в скобках, и в нём бывают
+    // и пробелы, и сами скобки. Разбор с начала строки ломается на
+    // процессе с именем вроде «(sd-pam)» - тихо, сдвигом на одно поле.
+    static func parseProcStat(_ stat: String) -> String? {
+        guard let close = stat.lastIndex(of: ")") else { return nil }
+        let rest = stat[stat.index(after: close)...]
+        let fields = rest.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        // После скобки идёт поле 3 (state), значит starttime - 20-е здесь.
+        guard fields.count >= 20 else { return nil }
+        let token = String(fields[19])
+        return token.allSatisfy { $0.isNumber } ? token : nil
+    }
+
+    // Тот ли это процесс, что записал файл.
+    //
+    // Сомнение решается В ПОЛЬЗУ ПОКАЗА: не узнали токен - показываем.
+    // Цена ошибок разная. Лишняя строка о сессии, которой нет, - это
+    // недоумение на секунду; спрятанная живая сессия - это работа,
+    // о которой человек не знает вовсе, и именно она и случилась.
+    static func sameProcess(pid: Int, token: String?) -> Bool {
+        guard let want = token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !want.isEmpty else { return true }
+        guard let have = startToken(pid: pid) else { return true }
+        func norm(_ s: String) -> String {
+            return s.split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
+        }
+        return norm(have) == norm(want)
+    }
 
     // ЗАМЕРА ПАМЯТИ НА СТОРОНЕ ПРИЛОЖЕНИЯ ЗДЕСЬ НЕТ - и это решение,
     // а не пробел.
@@ -652,8 +724,14 @@ enum Sessions {
                   let s = parse(json: json, machine: machine),
                   isAlive(pid: s.pid)
             else { continue }
-            if let started = doubleValue(json["startedAt"]),
-               now.timeIntervalSince(Date(timeIntervalSince1970: started / 1000)) > maxAge {
+            // Тот ли это процесс. Токен есть - он и решает, и возраст
+            // записи тогда не значит ничего: рабочая сессия живёт неделями.
+            let token = json["procStart"].map { "\($0)" }
+            if token != nil {
+                if !sameProcess(pid: s.pid, token: token) { continue }
+            } else if let started = doubleValue(json["startedAt"]),
+                      now.timeIntervalSince(Date(timeIntervalSince1970: started / 1000)) > maxAge {
+                // Токена нет - остаётся прежняя поправка на возраст.
                 continue
             }
             out.append(s)
@@ -748,7 +826,10 @@ enum Sessions {
 
     // Сколько сессий показываем. Выше этого меню растёт вниз без предела,
     // а ответ на «кто ждёт» уже дан: ждущие стоят первыми.
-    static let maxRows = 6
+    // Сколько строк сессий показываем. Шесть хватало плоскому списку на
+    // одной машине; на трёх и с группами шесть означало «половина работы
+    // не видна». Замер 17.09.2026: девять живых сессий на трёх машинах.
+    static let maxRows = 12
 
     // Предел ШИРИНЫ строки, в знаках.
     //

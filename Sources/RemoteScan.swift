@@ -661,6 +661,30 @@ def _result_sig(res):
     return json.dumps(res, sort_keys=True, default=str)[:2000]
 
 
+def same_process(pid, token):
+    """Тот ли это процесс, что записал файл сессии.
+
+    Сомнение решается В ПОЛЬЗУ ПОКАЗА: не прочитали stat - показываем.
+    Спрятанная живая сессия хуже лишней строки.
+    """
+    if token is None or str(token).strip() == "":
+        return True
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            stat = fh.read()
+    except OSError:
+        return True
+    # Поля считаются ПОСЛЕ последней закрывающей скобки: второе поле -
+    # имя процесса, а в нём бывают и пробелы, и скобки.
+    cut = stat.rfind(")")
+    if cut < 0:
+        return True
+    fields = stat[cut + 1:].split()
+    if len(fields) < 20:
+        return True
+    return fields[19] == str(token).strip()
+
+
 def watch_session(sid, projects_root):
     """Хвост расшифровки этой сессии: крутится ли и над чем работает."""
     path = None
@@ -800,9 +824,23 @@ for name in names:
         pass              # процесс есть, но чужой - живой
     except Exception:
         continue
-    started = rec.get("startedAt")
-    if isinstance(started, (int, float)) and now - started / 1000 > 24 * 3600:
-        continue          # тот же порог, что и на этой стороне
+    # Тот ли это процесс - по токену старта, как и на маке.
+    #
+    # Раньше здесь стоял порог в сутки, и удалённая машина показывала одну
+    # сессию из пяти: серверные работают неделями, а порог считал их
+    # подозрительными. Токен - поле starttime из /proc/<pid>/stat, то же
+    # самое, что Claude Code кладёт в procStart.
+    #
+    # Правило обязано совпадать с маковским: разойдись они - одна и та же
+    # сессия числилась бы живой с одной машины и мёртвой с другой.
+    token = rec.get("procStart")
+    if token is not None:
+        if not same_process(pid, token):
+            continue
+    else:
+        started = rec.get("startedAt")
+        if isinstance(started, (int, float)) and now - started / 1000 > 24 * 3600:
+            continue      # токена нет - остаётся прежняя поправка
     # Отдаём только то, что показываем, и ни знака больше: cwd целиком -
     # это имена проектов и заказчиков, а в трее видно последний каталог.
     keep = ("pid", "name", "entrypoint", "status", "tempo",
