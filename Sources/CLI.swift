@@ -8,6 +8,7 @@ import Foundation
 //   climits --full     подробный отчёт
 //   climits --json     сырой ответ API
 //   climits --doctor   диагностика: связка ключей, токен, срок, запрос
+//   climits --machine  нагрузка этой машины: память, своп, процессор
 enum CLI {
     // Версия - из бандла, той же дорогой, что и User-Agent. Строкой она
     // здесь уже стояла и разошлась: отчёт --doctor печатал «climits 1.1.2»
@@ -45,6 +46,8 @@ enum CLI {
             return 0
         case "--doctor":
             return doctor()
+        case "--machine":
+            return machine()
         case "--install-cli":
             return installCLI()
         default:
@@ -148,6 +151,35 @@ enum CLI {
             print("  \(dim)" + L("обновлено ", "updated ") + Fmt.hhmm(u.fetchedAt) + "\(reset)")
         }
         print("")
+    }
+
+    // Нагрузка этой машины и ничего больше.
+    //
+    // ОТДЕЛЬНО ОТ --doctor, и это не дубль. Диагностика выходит на первой
+    // же строке, если в связке ключей нет записи, - а в CI её нет и быть
+    // не может. То есть проверить замер прогоном на настоящем macOS через
+    // --doctor нельзя вовсе: до нужной строки дело не дойдёт.
+    //
+    // Этот ключ не трогает ни связку, ни сеть, ни настройки. Он и стоит
+    // шагом в ui-shot.yml: замер на macOS не проверяется ни типами, ни
+    // тестами (vm_stat и sysctl на Linux не существуют), и прогон на
+    // macos-14 - единственное место, где видно, что он не вернул нули.
+    private static func machine() -> Int32 {
+        let m = Sessions.machineMemory()
+        let live = Sessions.read()
+        print(Sessions.localName() + " \u{00B7} " + (m.isEmpty
+            ? L("нагрузка не измерена", "load not measured")
+            : m.text))
+        print(L("сессий: \(live.count), держат: \(Fmt.gb(live.reduce(0) { $0 + $1.rssMB }))",
+                "sessions: \(live.count), holding: \(Fmt.gb(live.reduce(0) { $0 + $1.rssMB }))"))
+        if let other = Sessions.otherLoadMB(load: m, sessions: live) {
+            print(L("не сессиями Claude: \(Fmt.gb(other))",
+                    "not Claude sessions: \(Fmt.gb(other))"))
+        }
+        // Ненулевой код - чтобы шаг в CI падал сам, без разбора текста.
+        // Нули здесь означают, что замер сломан, а не что машина пуста:
+        // машины без памяти и без ядер не бывает.
+        return (m.totalMB > 0 && m.cores > 0) ? 0 : 1
     }
 
     // Диагностика. Сам токен не печатается никогда - только его длина и то,
@@ -430,6 +462,8 @@ enum CLI {
         let hFull = L("подробный отчёт (по умолчанию в терминале)", "detailed report (terminal default)")
         let hJson = L("сырой ответ API", "raw API response")
         let hDoc = L("диагностика: связка ключей, токен, запрос", "diagnostics: keychain, token, request")
+        let hMac = L("нагрузка этой машины: память, своп, процессор",
+                     "this machine's load: memory, swap, CPU")
         let hCli = L("положить ссылку в ~/bin/climits", "symlink into ~/bin/climits")
         let hVer = L("версия", "version")
         let macroTitle = L("Макросы строки меню (Настройки -> Свой формат):",
@@ -448,6 +482,7 @@ climits \(version) \u{2014} \(tagline)
   --full         \(hFull)
   --json         \(hJson)
   --doctor       \(hDoc)
+  --machine      \(hMac)
   --install-cli  \(hCli)
   --version      \(hVer)
 
