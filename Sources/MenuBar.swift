@@ -1052,14 +1052,29 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // не мерят и на живой машине. Снимок должен показывать то,
             // что человек увидит, иначе он проверяет не тот экран.
         ]
+        // Удалённых машин в кадре ДВЕ, и обе с меткой «Remote».
+        //
+        // Так теперь и живёт: на сервере и на моноблоке каждый разговор
+        // идёт через Remote Control, метки «SDK» не осталось ни на одной
+        // живой сессии (замер 17.09.2026). Снимок должен показывать это,
+        // а не прежнюю картину с одной машиной.
         remoteSessions = [
             AgentSession(pid: 904, name: "work-71", folder: "harness",
-                         surface: "SDK", state: .unknown, waitingFor: nil,
+                         surface: "Remote", state: .unknown, waitingFor: nil,
                          since: nil,
                          title: L("Описания ошибок для мерчантов",
                                   "Merchant-facing error texts"),
+                         bridged: true,
                          machine: "vps7",
                          rssMB: 270, swapMB: 184),
+            AgentSession(pid: 905, name: "mono-1c", folder: "mono",
+                         surface: "Remote", state: .unknown, waitingFor: nil,
+                         since: nil,
+                         title: L("Настройки Home Assistant",
+                                  "Home Assistant settings"),
+                         bridged: true,
+                         machine: "mono",
+                         rssMB: 251, swapMB: 26),
         ]
         // Разбивка по разговорам - тоже в кадр, по той же причине: это
         // новый раздел, и его строки длиннее строк сессий. Имена взяты
@@ -1089,11 +1104,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // видно будет здесь, а не у человека.
         remoteMemory = ["vps7": MachineMemory(totalMB: 3915, availableMB: 1224,
                                               swapTotalMB: 7030, swapUsedMB: 1743,
-                                              load1: 2.4, cores: 2)]
+                                              load1: 2.4, cores: 2),
+                        // Моноблок взят с натуры: 3,4 ГБ памяти и своп
+                        // вдвое больше неё - именно та машина, ради
+                        // которой строку про память и заводили.
+                        "mono": MachineMemory(totalMB: 3457, availableMB: 1994,
+                                              swapTotalMB: 8191, swapUsedMB: 686,
+                                              load1: 0.02, cores: 4)]
         // Адрес хоста в снимке тоже подставляем: без него строка про
         // память СЕРВЕРА в кадр не попадает, и её вёрстка остаётся
         // непроверенной. Так и вышло на снимке 1.10.0.
-        Prefs.remoteHosts = "vps7\nvps8"
+        Prefs.remoteHosts = "vps7\nmono"
 
         // Sparkle в снимке ВКЛЮЧАЕМ, хотя по умолчанию он выключен.
         //

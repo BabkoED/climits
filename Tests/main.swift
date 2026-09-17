@@ -1177,6 +1177,39 @@ if let s = Sessions.parse(json: sdkSession) {
     check("запись без статуса всё равно разобрана", false)
 }
 
+// Мост: та же запись, но разговор ведут через Remote Control.
+//
+// Это не редкий случай, а теперь основной: на vps7 и моноблоке 17.09.2026
+// через мост шли ВСЕ живые сессии, и все они звались `sdk-cli`. Ярлык
+// «SDK» стоял у человеческих чатов и не отличал их от ботов.
+var bridgedSession = sdkSession
+bridgedSession["bridgeSessionId"] = "session_01CpUuNMjjEazuTnSEPw6Aix"
+if let s = Sessions.parse(json: bridgedSession) {
+    check("мост главнее entrypoint", s.surface, "Remote")
+    check("признак моста разобран", s.bridged)
+} else {
+    check("сессия через мост разобрана", false)
+}
+
+// С удалённой машины едет только «да/нет»: сам идентификатор моста по
+// сети не гоняется, и разбор обязан понимать обе формы.
+let remoteBridged: [String: Any] = [
+    "pid": 905, "cwd": "/home/babkoed/mono", "name": "mono-1c",
+    "entrypoint": "sdk-cli", "bridged": true,
+]
+if let s = Sessions.parse(json: remoteBridged, machine: "mono") {
+    check("«да/нет» с той стороны читается так же", s.surface, "Remote")
+    check("признак моста доехал по сети", s.bridged)
+} else {
+    check("удалённая сессия через мост разобрана", false)
+}
+
+// А бот харнеса моста не имеет - ему прежний ярлык, иначе слово «Remote»
+// перестанет что-либо значить.
+check("без моста sdk остаётся SDK", Sessions.surface("sdk-cli"), "SDK")
+check("мост без entrypoint - всё равно Remote",
+      Sessions.surface(nil, bridged: true), "Remote")
+
 let waiting: [String: Any] = [
     "pid": 1, "cwd": "/tmp/budget-app", "name": "bapp",
     "entrypoint": "cli", "status": "waiting", "waitingFor": "разрешение",

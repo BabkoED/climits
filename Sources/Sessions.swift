@@ -65,14 +65,17 @@ struct AgentSession: Equatable {
     var pid: Int
     var name: String
     var folder: String
-    var surface: String        // Terminal, VS Code, Desktop, SDK
+    var surface: String        // Terminal, VS Code, Desktop, Remote, SDK
     var state: SessionState
     var waitingFor: String?    // чего именно ждёт, если сказано
     var since: Date?           // когда статус сменился
 
-    // Ключ к расшифровке этой сессии. Пусто у сессий, которые идут на
-    // стороне Anthropic (запуск с --sdk-url): у них локального файла нет
-    // вовсе, и ни занятия, ни кручения по ним не узнать.
+    // Ключ к расшифровке этой сессии. Пусто, когда поля в файле нет вовсе.
+    //
+    // ИСПРАВЛЕНО 17.09.2026: раньше здесь стояло «у запусков с --sdk-url
+    // локального файла нет вовсе». Это больше не так - проверено на пяти
+    // живых сессиях vps7 и двух моноблока, CLI 2.1.241: расшифровка лежит
+    // на месте у каждой, и имя чата с занятием по ним берутся как у всех.
     var sessionID: String = ""
 
     // Как этот чат называется на самом деле.
@@ -88,10 +91,22 @@ struct AgentSession: Equatable {
     // «Описания ошибок для мерчантов», здесь первый запрос «У нас была
     // тема про ошибки для мерчантов, что нужно им подготовить».
     //
-    // Пусто у сессий, которые идут на стороне Anthropic (`--sdk-url`):
-    // локальной расшифровки у них нет, и взять имя неоткуда. У таких
-    // остаётся «work-XX», и это честно.
+    // Пусто, когда расшифровки нет: тогда остаётся «work-XX», и это
+    // честно. С CLI 2.1.241 такие случаи редки - запуск через Remote
+    // Control расшифровку пишет, хотя сам разговор идёт на стороне
+    // Anthropic (проверено 17.09.2026 на семи живых сессиях двух машин).
     var title: String = ""
+
+    // Разговор идёт через Remote Control - то есть его ведут с телефона
+    // или из браузера, а не в терминале этой машины.
+    //
+    // Признак - поле `bridgeSessionId` в файле сессии. Нужен он потому,
+    // что `entrypoint` перестал отвечать на «через что запущено»: у
+    // Remote Control там `sdk-cli`, ровно как у ботов харнеса, хотя это
+    // человеческий чат. Замер 17.09.2026: на vps7 пять живых сессий из
+    // пяти и на моноблоке две из двух - все `sdk-cli`, `interactive`,
+    // все с мостом. Ярлык «SDK» у них не различал уже ничего.
+    var bridged: Bool = false
 
     // Что показываем человеку: настоящее имя чата, если добыли.
     var displayName: String { return title.isEmpty ? name : title }
@@ -284,6 +299,12 @@ enum Sessions {
         guard let pid = intValue(json["pid"]), let cwd = json["cwd"] as? String else { return nil }
 
         let status = json["status"] as? String
+        // Мост: своя машина кладёт в файл сам идентификатор, удалённая
+        // присылает только «да/нет». Идентификатор по сети не гоняем -
+        // на экран он всё равно не попадает, а это ключ к чужому
+        // разговору на стороне Anthropic.
+        let bridged = !(((json["bridgeSessionId"] as? String) ?? "").isEmpty)
+            || (json["bridged"] as? Bool == true)
         let tempo = json["tempo"] as? String     // нормализованная форма, когда есть
         let state: SessionState
         switch (tempo, status) {
@@ -302,7 +323,7 @@ enum Sessions {
             pid: pid,
             name: (json["name"] as? String) ?? folder,
             folder: folder,
-            surface: surface(json["entrypoint"] as? String),
+            surface: surface(json["entrypoint"] as? String, bridged: bridged),
             state: state,
             waitingFor: (json["waitingFor"] as? String) ?? (json["needs"] as? String),
             since: millis.map { Date(timeIntervalSince1970: $0 / 1000) },
@@ -310,6 +331,7 @@ enum Sessions {
             // Имя с удалённой машины приезжает готовым: её расшифровок
             // здесь нет, и добыть его может только та сторона.
             title: (json["title"] as? String) ?? "",
+            bridged: bridged,
             activity: (json["activity"] as? String) ?? "",
             loop: loopAlert(json),
             machine: machine)
@@ -330,7 +352,19 @@ enum Sessions {
     }
 
     // Через что запущено. Отвечает на «где мне искать это окно».
-    static func surface(_ entrypoint: String?) -> String {
+    //
+    // МОСТ ГЛАВНЕЕ ENTRYPOINT, и порядок здесь не вкусовой. С CLI 2.1.241
+    // разговор, начатый с телефона, приходит на машину как `sdk-cli` -
+    // тем же словом, что и боты харнеса. Спрашивать сначала entrypoint
+    // значило бы подписать «SDK» человеческий чат: замер 17.09.2026 -
+    // семь живых сессий на двух машинах, все семь `sdk-cli`, все семь
+    // через мост. То есть ярлык стоял у всех и не различал ничего.
+    //
+    // Ответ «Remote» отвечает на тот же вопрос, что и остальные слова
+    // ряда: где искать это окно. Искать его на этой машине не нужно -
+    // оно в телефоне или в браузере.
+    static func surface(_ entrypoint: String?, bridged: Bool = false) -> String {
+        if bridged { return "Remote" }
         switch entrypoint {
         case "claude-desktop", "claude-desktop-3p": return "Desktop"
         case "claude-vscode":                       return "VS Code"
