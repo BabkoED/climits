@@ -1396,14 +1396,14 @@ let hisSession = AgentSession(pid: 2, name: "s", folder: "f", surface: "",
 let twoGroups = Sessions.lines([mySession, hisSession],
                           machines: ["": loadHere, "vps7": loadHere],
                           localName: "мак")
-let otherRows = twoGroups.rows.filter { $0.contains(L("прочие программы", "other apps")) }
+let otherRows = twoGroups.rows.filter { $0.contains(L("прочее", "other")) }
 check("строка про чужие программы одна - серверная", otherRows.count, 1)
 check("и стоит она в группе сервера",
       twoGroups.rows.firstIndex(where: { $0.hasPrefix("  vps7") })
-        .map { i in twoGroups.rows[i...].contains { $0.contains(L("прочие программы", "other apps")) } } ?? false)
+        .map { i in twoGroups.rows[i...].contains { $0.contains(L("прочее", "other")) } } ?? false)
 check("в группе своей машины её нет",
       twoGroups.rows.prefix(while: { !$0.hasPrefix("  vps7") })
-        .allSatisfy { !$0.contains(L("прочие программы", "other apps")) })
+        .allSatisfy { !$0.contains(L("прочее", "other")) })
 
 // ---- тот ли это процесс ----------------------------------------------------
 //

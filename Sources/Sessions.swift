@@ -1183,8 +1183,7 @@ enum Sessions {
             // открыл сам. На сервере то же число означает другое -
             // сторонние службы, которых там быть не должно.
             if !host.isEmpty, let other = otherLoadMB(load: load, sessions: mine) {
-                out.rows.append("    " + L("прочие программы", "other apps")
-                                + " \u{00B7} " + Fmt.gb(other))
+                out.rows.append("    " + L("прочее", "other") + " \u{00B7} " + Fmt.gb(other))
             }
         }
         if skipped > 0 {
