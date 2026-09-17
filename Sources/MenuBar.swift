@@ -54,6 +54,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var remoteMemory: [String: MachineMemory] = [:]
     private var localMemory = MachineMemory()
 
+    // Сколько сожгла каждая машина за недельное окно.
+    //
+    // ЗАЧЕМ. Подпись под деньгами перечисляла машины по именам - «по
+    // расшифровкам 3 машин: этой и vps7, mono», - и на этом останавливалась.
+    // А вопрос у неё простой: откуда уходит лимит. Замер 17.09.2026: vps7
+    // $1817 против $136 на моноблоке за ту же неделю, то есть доли крупные
+    // и разные, и одно имя рядом с другим об этом не говорит ничего.
+    //
+    // Своя машина стоит первой и всегда: даже когда её вклад мал, «эта ≈$0»
+    // отвечает на вопрос, а её отсутствие в перечне читалось бы как «мой
+    // мак не в счёте».
+    private var spendByMachine: [(name: String, cost: Double)] = []
+
     // Куда ушли деньги за недельное окно - по разговорам. Считается тем
     // же проходом, что и сами деньги, - отдельного чтения не стоит.
     private var chats: [Transcripts.ChatUsage] = []
@@ -238,6 +251,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // одни и те же числа приходили бы разными между обходами.
             var machines = 1
             var errs: [String: String] = [:]
+            // Своя доля снимается ДО сложения с удалёнными: после него
+            // w[1] - это уже сумма по всем машинам, и вычитать её обратно
+            // значило бы считать одно и то же дважды разными путями.
+            var spend: [(name: String, cost: Double)] = [
+                (L("эта", "this one"), w.count > 1 ? w[1].cost : 0)
+            ]
             var remoteSessions: [AgentSession] = []
             var remoteMemory: [String: MachineMemory] = [:]
             for t in targets {
@@ -251,6 +270,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     // сервер. Ярлык берётся из настройки, иначе из
                     // ~/.ssh/config, иначе остаётся сам адрес.
                     let shown = t.label.isEmpty ? SSHConfig.label(for: t.host) : t.label
+                    spend.append((shown, r.windows.count > 1 ? r.windows[1].cost : 0))
                     remoteSessions += r.sessions.map { s -> AgentSession in
                         var out = s
                         out.machine = shown
@@ -277,6 +297,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 self.scanning = false
                 self.lastScan = Date()
                 self.machines = machines
+                self.spendByMachine = spend
                 self.remoteErrors = errs
                 self.remoteSessions = remoteSessions
                 self.remoteMemory = remoteMemory
@@ -410,6 +431,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(extraRow(u.extra, cols: cols))
             if Prefs.showMoney || Prefs.showTokens {
                 menu.addItem(dim(estimateNote()))
+                if let byMachine = machineSpendNote() { menu.addItem(dim(byMachine)) }
                 for (host, e) in remoteErrors.sorted(by: { $0.key < $1.key }) {
                     menu.addItem(dim(L("\(host) не ответил: \(e)",
                                        "\(host) did not answer: \(e)")))
@@ -497,6 +519,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(action(L("Выйти", "Quit"), #selector(quit), key: "q"))
+    }
+
+    // Откуда уходит лимит: сколько сожгла каждая машина за неделю.
+    //
+    // ЗАЧЕМ ОТДЕЛЬНОЙ СТРОКОЙ, а не дописать к подписи выше. Подпись уже
+    // несёт две оговорки - перечень машин и дату прайса, - и суммы сделали
+    // бы её самой широкой строкой меню. Рост ширины от содержимого
+    // закрывали в 1.6.2, и возвращать его ради экономии одной строки
+    // незачем.
+    //
+    // Доля в процентах НЕ показывается, в отличие от разбивки по чатам.
+    // Там доля нужна, потому что сумма по прайсу API при работе по
+    // подписке ничему не равна, а доля верна всегда. Здесь вопрос другой -
+    // «какая машина жжёт», - и на него отвечает сравнение сумм между
+    // собой; проценты заняли бы место, ничего не добавив.
+    //
+    // Молчит, когда машина одна: «эта ≈$258» и есть вся недельная сумма,
+    // которая стоит строкой выше. Повторять её другими словами - это не
+    // подтверждение, а повод не поверить ни одной из двух.
+    private func machineSpendNote() -> String? {
+        guard Prefs.showMoney, spendByMachine.count > 1 else { return nil }
+        let total = spendByMachine.reduce(0.0) { $0 + $1.cost }
+        guard total > 0 else { return nil }
+        // Порядок - по расходу, самая жадная первой: вопрос «откуда уходит»
+        // отвечается верхней строкой, а не чтением всего ряда.
+        let parts = spendByMachine
+            .sorted { $0.cost > $1.cost }
+            .map { "\($0.name) \u{2248}\(MoneyView.money($0.cost))" }
+        return Fmt.clip(L("за неделю: ", "this week: ")
+                        + parts.joined(separator: " \u{00B7} "), Sessions.maxLine + 14)
     }
 
     // Чем именно посчитаны деньги и токены. Разница между «этой машиной» и
@@ -1145,6 +1197,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Ярлык «мак» вместо имени хоста: в списке из трёх машин человеку
         // нужно слово, которым он их зовёт сам.
         Prefs.localLabel = L("мак", "mac")
+        // Расход по машинам - с натуры: замер 17.09.2026 за недельное окно.
+        // Разброс здесь и есть ответ на «откуда уходит лимит», ради
+        // которого строку и завели.
+        spendByMachine = [(L("эта", "this one"), 258.4),
+                          ("vps7", 1816.9),
+                          ("mono", 136.2)]
         localMemory = MachineMemory(totalMB: 16384, availableMB: 6349,
                                     swapTotalMB: 6144, swapUsedMB: 1126,
                                     load1: 1.2, cores: 8)
