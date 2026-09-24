@@ -821,7 +821,41 @@ enum Sessions {
     struct SessionLines: Equatable {
         var header = ""
         var rows: [String] = []
+        // Какая сессия стоит в строке - по одной на каждую строку rows,
+        // nil у заголовков машин и у «прочего». Нужна для клика: строка
+        // меню открывает окно своей сессии, а текст строки для этого
+        // не годится - в нём обрезанное имя, а не pid.
+        //
+        // Отдельный массив, а не пары в rows: rows сравнивается и
+        // проверяется тестами как текст, и менять его форму ради клика
+        // значило бы переписать все эти проверки.
+        var picks: [AgentSession?] = []
         var notes: [String] = []
+    }
+
+    // Режим «скрыть личное» - для показа экрана.
+    //
+    // ЗАЧЕМ. Имя чата без `/rename` - это первый запрос человека дословно,
+    // и оно видно в меню всегда. «Над чем работает» ради этого выключено
+    // по умолчанию, а имя, говорящее то же самое, стояло на виду. Приём
+    // из CodexBar («Hide personal info»): имена заменяются номерами, числа
+    // остаются - по ним и смотрят.
+    //
+    // Что уходит: имя чата, последний запрос, чего ждёт (там бывает текст
+    // команды), что крутится (там путь или команда). Что остаётся: машина,
+    // где запущено, состояние, память, время - это числа и слова о работе,
+    // а не сама работа. Номер - по порядку показа, чтобы «чат 1» стоял
+    // первым, а не где придётся.
+    static func anonymized(_ list: [AgentSession]) -> [AgentSession] {
+        return sorted(list).enumerated().map { i, x in
+            var y = x
+            y.title = ""
+            y.name = L("чат \(i + 1)", "chat \(i + 1)")
+            y.activity = ""
+            y.waitingFor = nil
+            if var l = y.loop { l.what = ""; y.loop = l }
+            return y
+        }
     }
 
     // Сколько сессий показываем. Выше этого меню растёт вниз без предела,
@@ -1145,6 +1179,7 @@ enum Sessions {
             // ярлык не должен раздвигать меню.
             out.rows.append(load.isEmpty ? "  " + label
                                          : Fmt.clip("  " + label + " \u{00B7} " + load.shortText, maxLine))
+            out.picks.append(nil)
 
             let shown = Array(mine.prefix(max(0, budget)))
             budget -= shown.count
@@ -1171,6 +1206,7 @@ enum Sessions {
                     memory: x.memoryText,
                     activity: x.activity,
                     loop: x.loop))
+                out.picks.append(x)
             }
 
             // «Прочие программы» - ТОЛЬКО на удалённых машинах.
@@ -1184,10 +1220,12 @@ enum Sessions {
             // сторонние службы, которых там быть не должно.
             if !host.isEmpty, let other = otherLoadMB(load: load, sessions: mine) {
                 out.rows.append("    " + L("прочее", "other") + " \u{00B7} " + Fmt.gb(other))
+                out.picks.append(nil)
             }
         }
         if skipped > 0 {
             out.rows.append("  " + L("и ещё \(skipped)", "\(skipped) more"))
+            out.picks.append(nil)
         }
 
         // Оговорки. Молчать про них нельзя: раздел, который показывает

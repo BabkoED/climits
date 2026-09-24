@@ -44,6 +44,14 @@ enum Notifier {
                          // как длительность, а не как остаток.
                          body: "\(b.long): \(b.pct)% \u{00B7} "
                              + L("через ", "in ") + Fmt.untilReset(b.resetsAt))
+                    // И сразу - сообщение на время сброса. Ставится сейчас,
+                    // а не ловится опросом: система доставит его сама,
+                    // даже если опрос в этот момент ушёл на 15 минут.
+                    if Prefs.notifyReset, let after = ResetNotice.delay(resetsAt: b.resetsAt) {
+                        let t = ResetNotice.text(long: b.long)
+                        send(title: t.title, body: t.body,
+                             id: ResetNotice.id(b.key), after: after)
+                    }
                 }
             } else if firedFor == stamp {
                 // Ушли ниже порога внутри того же окна - взводим заново.
@@ -97,7 +105,19 @@ enum Notifier {
         d.set(Array(known.keys).sorted(), forKey: loopKeys)
     }
 
-    private static func send(title: String, body: String) {
+    // Снять все поставленные «лимит снова есть» - галочку выключили.
+    static func cancelResets() {
+        let center = UNUserNotificationCenter.current()
+        center.getPendingNotificationRequests { reqs in
+            let ids = reqs.map { $0.identifier }.filter { $0.hasPrefix("reset.") }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+    }
+
+    // id и after - для отложенного сообщения. Тот же id заменяет прежнее,
+    // а не ставит второе рядом.
+    private static func send(title: String, body: String,
+                             id: String? = nil, after: TimeInterval? = nil) {
         // Центр уведомлений спрашивается лениво, при первом же поводе:
         // приложение, которое просит разрешение на старте, ничего ещё
         // не показав, разрешение обычно и не получает.
@@ -108,8 +128,11 @@ enum Notifier {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            let req = UNNotificationRequest(identifier: UUID().uuidString,
-                                            content: content, trigger: nil)
+            let trigger = after.map {
+                UNTimeIntervalNotificationTrigger(timeInterval: max(1, $0), repeats: false)
+            }
+            let req = UNNotificationRequest(identifier: id ?? UUID().uuidString,
+                                            content: content, trigger: trigger)
             center.add(req, withCompletionHandler: nil)
         }
     }

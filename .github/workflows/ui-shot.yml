@@ -60,8 +60,8 @@ jobs:
           # Меню снимается отдельной функцией: открытие меню - не окно,
           # ему нужны свои две секунды на выход из didFinishLaunching и
           # цифры, которых в CI взять негде (см. showMenuForShot).
-          shoot_menu() {   # $1 - имя файла, $2 - 1, если тёмная тема
-            CLIMITS_UI_SHOT=menu CLIMITS_UI_SHOT_DARK="$2" \
+          shoot_menu() {   # $1 - имя файла, $2 - 1, если тёмная тема, $3 - 1, если «скрыть личное»
+            CLIMITS_UI_SHOT=menu CLIMITS_UI_SHOT_DARK="$2" CLIMITS_UI_SHOT_PRIVATE="$3" \
               build/climits.app/Contents/MacOS/climits &
             local pid=$!
             sleep 14
@@ -89,6 +89,7 @@ jobs:
           # фоном меню. Одна тема из двух проверяет половину.
           shoot_menu menu-light.png ""
           shoot_menu menu-dark.png 1
+          shoot_menu menu-private.png "" 1
           ls -la shot/
 
       - name: выложить в ветку shots
@@ -98,7 +99,7 @@ jobs:
           git checkout -q -b shots
           git config user.name "climits ui-shot"
           git config user.email "noreply@github.com"
-          git add settings.png settings-wide.png menu-light.png menu-dark.png
+          git add settings.png settings-wide.png menu-light.png menu-dark.png menu-private.png
           git commit -q -m "снимок настроек и меню с ${GITHUB_REF_NAME}"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
         env:

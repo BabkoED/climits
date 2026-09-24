@@ -36,6 +36,8 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/History.swift \
   Sources/Version.swift \
   Sources/RemoteScan.swift \
+  Sources/ServiceStatus.swift \
+  Sources/AdaptiveRefresh.swift \
   Tests/main.swift
 
 "$OUT"

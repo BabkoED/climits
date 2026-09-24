@@ -14,7 +14,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var remoteField: NSComboBox!
     private var remoteResult: NSTextField!
 
+    // Ноль - «частоту выбирает приложение»: 2 минуты, пока смотришь
+    // в меню, 5 - пока идёт работа, 15 - в простое.
     private let intervals: [(String, Int)] = [
+        (L("сама: 2-15 минут по ситуации", "auto: 2-15 minutes as needed"), 0),
         (L("каждую минуту", "every minute"), 60),
         (L("раз в 5 минут", "every 5 minutes"), 300),
         (L("раз в 15 минут", "every 15 minutes"), 900),
@@ -173,7 +176,9 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         row.addArrangedSubview(NSTextField(labelWithString: L("Обновлять:", "Refresh:")))
         intervalPopup = NSPopUpButton()
         intervalPopup.addItems(withTitles: intervals.map { $0.0 })
-        if let idx = intervals.firstIndex(where: { $0.1 == Prefs.refreshInterval }) {
+        if Prefs.adaptiveRefresh {
+            intervalPopup.selectItem(at: 0)
+        } else if let idx = intervals.firstIndex(where: { $0.1 == Prefs.refreshInterval }) {
             intervalPopup.selectItem(at: idx)
         }
         intervalPopup.target = self
@@ -201,6 +206,18 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         stack.addArrangedSubview(fieldRow([
             field(L("порог уведомления, %", "notify at, %"), "notifyAt", "\(Prefs.notifyAt)", width: 40),
         ]))
+        addCheck(stack, "notifyReset",
+                 L("Сказать, когда лимит, в который упёрся, сбросится",
+                   "Tell me when a limit I hit has reset"),
+                 Prefs.notifyReset)
+        addCheck(stack, "showServiceStatus",
+                 L("Статус Anthropic: точка на значке, пока идёт сбой",
+                   "Anthropic status: a dot on the icon during an incident"),
+                 Prefs.showServiceStatus)
+        addCheck(stack, "privacyMode",
+                 L("Скрыть личное: чаты номерами, без запросов (для показа экрана)",
+                   "Hide personal info: chats as numbers, no prompts (for screen sharing)"),
+                 Prefs.privacyMode)
 
         stack.addArrangedSubview(spacer(10))
         stack.addArrangedSubview(header(L("Вид", "Appearance")))
@@ -580,6 +597,12 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showTokens": Prefs.showTokens = on
         case "showHistory": Prefs.showHistory = on
         case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
+        case "notifyReset":
+            Prefs.notifyReset = on
+            if !on { Notifier.cancelResets() }
+            applied(); return
+        case "showServiceStatus": Prefs.showServiceStatus = on; applied(); return
+        case "privacyMode": Prefs.privacyMode = on; applied(); return
         // Вид шкалы в меню - не кусок строки трея, макроса за ним нет.
         // Уходим сразу, не заглядывая в шаблон: иначе галочка «вида»
         // прошла бы через сборку строки меню и потрогала её ни за чем.
@@ -805,7 +828,9 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     @objc private func changeInterval() {
         let idx = intervalPopup.indexOfSelectedItem
         if idx >= 0 && idx < intervals.count {
-            Prefs.refreshInterval = intervals[idx].1
+            let v = intervals[idx].1
+            Prefs.adaptiveRefresh = v == 0
+            if v > 0 { Prefs.refreshInterval = v }
         }
         applied()
     }

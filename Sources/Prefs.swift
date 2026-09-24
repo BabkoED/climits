@@ -272,6 +272,30 @@ struct Prefs {
     static var notifyAt: Int {
         get { max(1, min(100, int("notifyAt", 80))) } set { d.set(newValue, forKey: "notifyAt") } }
 
+    // Сказать, когда лимит, в который упирался, сбросился. Ставится вместе
+    // с предупреждением о пороге и без него не приходит: сообщать о сбросе
+    // окна, в которое не упирался, - шум.
+    static var notifyReset: Bool {
+        get { bool("notifyReset", true) } set { d.set(newValue, forKey: "notifyReset") } }
+
+    // Частоту опроса выбирает приложение (см. AdaptiveRefresh).
+    //
+    // ВКЛЮЧЕНО по умолчанию: при открытом меню это чаще прежних пяти
+    // минут, в простое реже - и то и другое лучше фиксированного. Кто
+    // выбрал интервал руками, выбирает его в том же списке.
+    static var adaptiveRefresh: Bool {
+        get { bool("adaptiveRefresh", true) } set { d.set(newValue, forKey: "adaptiveRefresh") } }
+
+    // Статус Anthropic на значке и в меню, пока идёт инцидент.
+    static var showServiceStatus: Bool {
+        get { bool("showServiceStatus", true) } set { d.set(newValue, forKey: "showServiceStatus") } }
+
+    // «Скрыть личное» - для показа экрана: имена чатов номерами, без
+    // запросов и команд. Переключается и из самого меню - на демонстрации
+    // лезть в настройки некогда.
+    static var privacyMode: Bool {
+        get { bool("privacyMode", false) } set { d.set(newValue, forKey: "privacyMode") } }
+
     // --- вид ---
     //
     // Всё, что описывает внешность, вынесено в настройки. Значение по

@@ -35,6 +35,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var remoteErrors: [String: String] = [:]
     // Новая версия, если фоновая проверка её нашла.
     private var pendingUpdate: String?
+    // Когда меню открывали в последний раз - вход умного опроса. Только
+    // в памяти: после перезапуска «смотрел ли человек» неизвестно, и это
+    // честно считается «давно».
+    private var lastMenuOpen: Date?
+    // Почему выбрана текущая частота - для --doctor и снимка, не для меню.
+    private(set) var refreshReason = ""
 
     // Сессии: кто работает, кто ждёт ответа. Два источника лежат отдельно
     // намеренно. Свои читаются дёшево и прямо перед показом меню - это
@@ -91,14 +97,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Кэш живёт не меньше минуты, даже если пользователь выставил
         // обновление раз в минуту: совпавшие по времени поводы обновиться
         // (таймер, открытие меню, ⌘R) не должны превращаться в три запроса.
+        //
+        // В умном режиме кэш короче самой частой ступени (2 минуты): иначе
+        // таймер срабатывал бы вовремя и получал кэш, то есть ступень
+        // «смотрю в меню» на деле была бы пятиминутной.
+        if Prefs.adaptiveRefresh { return AdaptiveRefresh.fastest - 10 }
         return max(60, TimeInterval(Prefs.refreshInterval))
+    }
+
+    // Сколько ждать до следующего опроса и почему.
+    private func nextDelay() -> TimeInterval {
+        guard Prefs.adaptiveRefresh else {
+            refreshReason = "fixed"
+            return TimeInterval(Prefs.refreshInterval)
+        }
+        let info = ProcessInfo.processInfo
+        let hot = info.thermalState == .serious || info.thermalState == .critical
+        // Работает ли что-то - по всем машинам: сессия на сервере тратит тот
+        // же лимит, что и своя. Крутящаяся считается работающей - она тратит.
+        let busy = sessions.contains { $0.state == .busy || $0.loop != nil }
+        let r = AdaptiveRefresh.next(.init(now: Date(), lastMenuOpen: lastMenuOpen,
+                                           busySessions: busy,
+                                           constrained: info.isLowPowerModeEnabled || hot))
+        refreshReason = r.reason.rawValue
+        return r.delay
     }
 
     func rearmTimer() {
         timer?.invalidate()
-        let t = Timer.scheduledTimer(withTimeInterval: TimeInterval(Prefs.refreshInterval),
-                                     repeats: true) { [weak self] _ in
+        // Таймер одноразовый: в умном режиме каждый следующий срок свой,
+        // а повторяющийся таймер держал бы первый выбранный навсегда.
+        // Для фиксированного интервала это то же самое - перевзвод на
+        // каждом срабатывании с тем же числом.
+        let t = Timer.scheduledTimer(withTimeInterval: nextDelay(),
+                                     repeats: false) { [weak self] _ in
             self?.refresh(force: false)
+            self?.rearmTimer()
         }
         // Без .common иконка перестаёт обновляться, пока открыто меню или
         // пользователь тащит окно: обычный режим RunLoop на это время встаёт.
@@ -113,6 +147,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // и цены после подорожания так и остались бы прошлыми. Сам вызов
         // дешёвый - смотрит отметку времени и обычно сразу возвращается.
         PricingFetch.refreshIfStale { [weak self] in self?.updateTitle() }
+        // Статус Anthropic - по тем же поводам, со своим порогом в пять
+        // минут. Перерисовка только когда он сменился.
+        ServiceStatusFetch.claude.refreshIfDue { [weak self] in self?.updateTitle() }
         if inFlight { return }
         inFlight = true
         UsageAPI.shared.fetch(ttl: ttl, force: force) { [weak self] result in
@@ -328,10 +365,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // --- строка в трее ------------------------------------------------------
     private func updateTitle() {
         guard let button = statusItem.button else { return }
+        let alarm = Prefs.showServiceStatus ? ServiceStatusFetch.claude.alarm : nil
+        // Серьёзный сбой - красным, мелкий и плановые работы - оранжевым.
+        let badge: NSColor? = alarm.map { $0.level >= 2 ? .systemRed : .systemOrange }
         guard let u = usage else {
+            button.image = nil
+            button.imagePosition = .noImage
             button.attributedTitle = NSAttributedString(
-                string: lastError == nil ? "Claude \u{2026}" : "Claude ?",
-                attributes: [.foregroundColor: NSColor.secondaryLabelColor])
+                string: (alarm != nil ? "\u{26A0} " : "")
+                    + (lastError == nil ? "Claude \u{2026}" : "Claude ?"),
+                attributes: [.foregroundColor: badge ?? NSColor.secondaryLabelColor])
             return
         }
         let money = (Prefs.showMoney ? u.session.map { Money.view(for: $0, in: sessionWindow) } : nil)
@@ -342,10 +385,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // {icon} отдаётся пустым, и он схлопывается вместе со своим
         // разделителем. Иначе в строке стояли бы оба - и картинка, и знак.
         let ring = Prefs.barRing && template.contains("{icon}")
-        let text = BarTitle.render(template, usage: u,
+        var text = BarTitle.render(template, usage: u,
                                    money: money ?? nil, tokens: tokens ?? nil,
                                    sessions: Sessions.summary(sessions),
                                    iconGlyph: ring ? "" : nil)
+        // Без кольца точку рисовать не на чем - сбой говорит знак в тексте.
+        // Два знака места, и только пока сбой идёт.
+        if alarm != nil && !ring { text = "\u{26A0} " + text }
         // Строка меню остаётся нейтральной, пока всё спокойно: цветом
         // в строке меню стоит тревожить только по делу.
         let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
@@ -361,7 +407,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // в начало значит переставить человеку его же строку.
             let trailing = template.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}")
             button.image = RingBar.image(percent: u.worst?.pct ?? 0, color: color,
-                                         font: Palette.barFont, trailing: trailing)
+                                         font: Palette.barFont, trailing: trailing,
+                                         badge: badge)
             button.imagePosition = trailing ? .imageTrailing : .imageLeading
         } else {
             // Снимать обязательно: галочку можно выключить на живом
@@ -381,11 +428,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // устаревшее на пять минут - это ровно та цифра, ради которой
         // меню и открывают.
         refreshLocalSessions()
+        lastMenuOpen = Date()
         refresh(force: false)
+        // Смотрит - значит ближайший опрос переносится на самую частую
+        // ступень, а не ждёт пятнадцатиминутного срока из простоя.
+        if Prefs.adaptiveRefresh { rearmTimer() }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+
+        // Сбой у Anthropic - первой строкой, выше любых цифр: он объясняет
+        // всё, что ниже может выглядеть странно. Клик открывает страницу.
+        if Prefs.showServiceStatus, let st = ServiceStatusFetch.claude.alarm {
+            let color: NSColor = st.level >= 2 ? .systemRed : .systemOrange
+            let i = action("\u{26A0} Anthropic: " + Fmt.clip(st.line, 60), #selector(openStatus), key: "")
+            i.attributedTitle = NSAttributedString(string: i.title, attributes: [
+                .foregroundColor: color,
+                .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize)),
+            ])
+            menu.addItem(i)
+            if !st.components.isEmpty {
+                menu.addItem(dim(L("не работает: ", "affected: ")
+                                 + Fmt.clip(st.components.joined(separator: ", "), 60)))
+            }
+            menu.addItem(.separator())
+        }
 
         if let u = usage {
             if u.isStale || lastError != nil {
@@ -471,6 +539,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(action(L("Обновить", "Refresh"), #selector(doRefresh), key: "r"))
         menu.addItem(action(L("Настройки\u{2026}", "Settings\u{2026}"), #selector(openSettings), key: ","))
         menu.addItem(action(L("Открыть claude.ai/usage", "Open claude.ai/usage"), #selector(openWeb), key: ""))
+        menu.addItem(action(L("Статус Anthropic", "Anthropic status"), #selector(openStatus), key: ""))
+        // Переключатель прямо в меню, а не только в настройках: на
+        // демонстрации экрана лезть в окно настроек некогда.
+        let priv = action(L("Скрыть личное", "Hide personal info"), #selector(togglePrivacy), key: "")
+        priv.state = Prefs.privacyMode ? .on : .off
+        menu.addItem(priv)
         menu.addItem(.separator())
         if let v = pendingUpdate {
             menu.addItem(dim(L("вышла версия \(v)", "version \(v) is out")))
@@ -848,13 +922,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var out: [NSMenuItem] = [.separator(),
                                  dim(L("Куда ушло за неделю", "Where the week went"))]
         let shown = chats.prefix(Prefs.maxChats)
-        for c in shown {
+        for (n, c) in shown.enumerated() {
             let share = Int((c.cost / total * 100).rounded())
+            let name = Prefs.privacyMode ? L("чат \(n + 1)", "chat \(n + 1)") : c.title
             // Имя длиннее остальной строки, поэтому режется ОНО, а не
             // числа: «≈$392 · 10%» без имени бесполезно, имя без хвоста
             // всё ещё узнаётся.
             let tail = " \u{00B7} \u{2248}\(MoneyView.money(c.cost)) \u{00B7} \(share)%"
-            out.append(plain(Fmt.clip(c.title, max(8, Sessions.maxLine - tail.count)) + tail))
+            out.append(plain(Fmt.clip(name, max(8, Sessions.maxLine - tail.count)) + tail))
         }
         // Хвост не выбрасываем молча: «показано 5 из 135» без остатка
         // читается как «всего пять», и доли в строках выше начинают
@@ -878,12 +953,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // без нагрузки, а нагрузка - без группы.
         var load = remoteMemory
         if !localMemory.isEmpty { load[""] = localMemory }
-        let lines = Sessions.lines(sessions, remoteScanAt: lastScan,
+        let list = Prefs.privacyMode ? Sessions.anonymized(sessions) : sessions
+        let lines = Sessions.lines(list, remoteScanAt: lastScan,
                                    machines: load, localName: Sessions.localName())
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
-        for r in lines.rows { out.append(plain(r)) }
+        for (i, r) in lines.rows.enumerated() {
+            let item = plain(r)
+            // Строка сессии кликается: открывает её окно. Удалённая без
+            // моста не кликается - открыть на этом маке нечего.
+            if i < lines.picks.count, let x = lines.picks[i],
+               x.machine.isEmpty || x.bridged {
+                item.action = #selector(focusSession(_:))
+                item.target = self
+                item.representedObject = SessionRef(x)
+                item.toolTip = x.machine.isEmpty
+                    ? L("Открыть окно этой сессии", "Bring this session's window forward")
+                    : L("Открыть Claude Code в браузере", "Open Claude Code in the browser")
+            }
+            out.append(item)
+        }
         for n in lines.notes { out.append(dim(n)) }
         return out
     }
@@ -949,6 +1039,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func openStatus() {
+        if let u = URL(string: ServiceStatusFetch.claude.page) { NSWorkspace.shared.open(u) }
+    }
+    @objc private func togglePrivacy() {
+        Prefs.privacyMode.toggle()
+        updateTitle()
+    }
+    @objc private func focusSession(_ sender: NSMenuItem) {
+        guard let ref = sender.representedObject as? SessionRef else { return }
+        // Не нашли окно - звук, а не молчание: иначе клик выглядит как
+        // промах мышью, и человек кликает ещё раз.
+        if !SessionFocus.focus(ref.session) { NSSound.beep() }
+    }
     @objc private func openWeb() {
         if let u = URL(string: "https://claude.ai/settings/usage") { NSWorkspace.shared.open(u) }
     }
@@ -1000,6 +1103,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         """
         usage = UsageParser.parse(body: body, fetchedAt: Date(), isStale: false)
         lastError = nil
+        // Сбой у Anthropic - тоже в кадр: строка наверху меню и точка на
+        // кольце существуют только на настоящем macOS. Имя длинное
+        // нарочно - проверяется обрезка, а не короткий случай.
+        ServiceStatusFetch.claude.injectForShot(ServiceStatus(
+            level: 2, indicator: "major", description: "Partial System Outage",
+            incidents: ["Elevated errors on Claude Code and claude.ai for some users"],
+            components: ["Claude Code"], fetchedAt: Date()))
         updateTitle()
 
         // Деньги и токены в CI взять неоткуда: расшифровок на машине нет.
@@ -1167,6 +1277,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // статус-элемента своё оформление у приложения не наследует.
         // Оба раза снимок «тёмной» выходил светлым, то есть подложка
         // полоски на тёмном фоне так и оставалась непроверенной.
+        // Третий кадр - «скрыть личное»: имена чатов, запросы и команды
+        // обязаны уйти из ВСЕГО меню, а не из одного раздела. Проверяется
+        // только глазами на полном меню.
+        Prefs.privacyMode = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_PRIVATE"] == "1"
         if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_DARK"] == "1" {
             statusItem.menu?.appearance = NSAppearance(named: .darkAqua)
         }
@@ -1189,4 +1303,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
 extension Notification.Name {
     static let climitsPrefsChanged = Notification.Name("climitsPrefsChanged")
+}
+
+// Обёртка: representedObject у пункта меню - объект, а сессия - структура.
+final class SessionRef: NSObject {
+    let session: AgentSession
+    init(_ s: AgentSession) { session = s }
 }

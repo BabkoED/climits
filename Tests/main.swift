@@ -1991,5 +1991,122 @@ check("у показываемого имя ищется - и без файла 
       localChats.first?.title, L("без имени", "unnamed"))
 check("у непоказываемых имя не ищется вовсе", localChats.last?.title, "")
 
+
+// --- статус сервиса (1.19.0) --------------------------------------------
+//
+// Настоящий ответ status.claude.com от 24.09.2026, в спокойный день.
+let calmSummary = """
+{"page":{"id":"tymt9n04zgry","name":"Claude","url":"https://status.claude.com"},
+ "components":[{"name":"claude.ai","status":"operational"},
+               {"name":"Claude Code","status":"operational"}],
+ "incidents":[],"scheduled_maintenances":[],
+ "status":{"indicator":"none","description":"All Systems Operational"}}
+"""
+let calm = ServiceStatus.parse(Data(calmSummary.utf8))
+check("спокойный день разбирается", calm != nil)
+check("спокойный день - нулевая ступень", calm?.level ?? -1, 0)
+check("спокойный день - строки в меню нет", calm?.isCalm ?? false)
+
+// Инцидент: два открытых разной тяжести, один решённый, работы по плану.
+let badSummary = """
+{"status":{"indicator":"major","description":"Partial System Outage"},
+ "components":[{"name":"Claude Code","status":"partial_outage"},
+               {"name":"claude.ai","status":"operational"}],
+ "incidents":[
+   {"name":"Slow responses on claude.ai","status":"monitoring","impact":"minor"},
+   {"name":"Elevated errors on Claude Code","status":"investigating","impact":"major"},
+   {"name":"Old one","status":"resolved","impact":"critical"}],
+ "scheduled_maintenances":[
+   {"name":"Planned later","status":"scheduled"},
+   {"name":"DB upgrade","status":"in_progress"}]}
+"""
+let bad = ServiceStatus.parse(Data(badSummary.utf8))
+check("инцидент - вторая ступень", bad?.level ?? -1, 2)
+check("тяжёлый инцидент стоит первым", bad?.incidents.first, "Elevated errors on Claude Code")
+check("решённый не показывается", !(bad?.incidents.contains("Old one") ?? true))
+check("идущие работы показываются", bad?.incidents.contains("DB upgrade") ?? false)
+check("работы на потом - нет", !(bad?.incidents.contains("Planned later") ?? true))
+check("сломанный компонент назван", (bad?.components ?? []).joined(separator: ","), "Claude Code")
+check("строка меню - имя инцидента и хвост",
+      bad?.line, L("Elevated errors on Claude Code и ещё 2", "Elevated errors on Claude Code and 2 more"))
+
+// Инцидент открыт, а общий уровень ещё не разметили.
+let early = ServiceStatus.parse(Data("""
+{"status":{"indicator":"none","description":"All Systems Operational"},
+ "incidents":[{"name":"Investigating","status":"investigating","impact":"none"}]}
+""".utf8))
+check("открытый инцидент при «none» - не спокойствие", early?.level ?? 0, 1)
+
+check("мусор - не статус", ServiceStatus.parse(Data("<html>".utf8)) == nil)
+check("без уровня - не статус", ServiceStatus.parse(Data(#"{"status":{}}"#.utf8)) == nil)
+check("незнакомое слово - тревога, а не тишина", ServiceStatus.level(for: "degraded"), 1)
+
+// --- умный опрос ----------------------------------------------------------
+let t9 = Date(timeIntervalSince1970: 1_800_000_000)
+func ar(_ menuAgo: TimeInterval?, busy: Bool = false, hot: Bool = false) -> AdaptiveRefresh.Reason {
+    return AdaptiveRefresh.next(.init(now: t9,
+                                      lastMenuOpen: menuAgo.map { t9.addingTimeInterval(-$0) },
+                                      busySessions: busy, constrained: hot)).reason
+}
+check("смотрю в меню - чаще всего", ar(60) == .looking)
+check("меню недавно - тёплый", ar(20 * 60) == .warm)
+check("меню давно, но идёт работа", ar(3 * 3600, busy: true) == .working)
+check("никого - простой", ar(nil) == .idle)
+check("перегрев важнее всего", ar(10, hot: true) == .constrained)
+check("часы из будущего - как только что", ar(-600) == .looking)
+var allIn = true
+for m in [nil, 0, 100, 400, 4000, 20000] as [TimeInterval?] {
+    for b in [false, true] { for h in [false, true] {
+        let d = AdaptiveRefresh.next(.init(now: t9, lastMenuOpen: m.map { t9.addingTimeInterval(-$0) },
+                                           busySessions: b, constrained: h)).delay
+        if d < 120 || d > 900 { allIn = false }
+    } }
+}
+check("всегда в пределах 2-15 минут", allIn)
+
+// --- «лимит снова есть» ---------------------------------------------------
+check("сброса нет - сообщать нечего", ResetNotice.delay(resetsAt: nil, now: t9) == nil)
+check("сброс прошёл - не сообщаем задним числом",
+      ResetNotice.delay(resetsAt: t9.addingTimeInterval(-5), now: t9) == nil)
+check("сброс через час - через час и минуту",
+      ResetNotice.delay(resetsAt: t9.addingTimeInterval(3600), now: t9) ?? 0, 3660)
+check("один идентификатор на лимит", ResetNotice.id("five_hour"), "reset.five_hour")
+
+// --- строки сессий привязаны к сессиям ------------------------------------
+let pickList = [
+    AgentSession(pid: 11, name: "a", folder: "a", surface: "Terminal", state: .waiting,
+                 waitingFor: "разрешение: удалить /секрет", since: nil,
+                 title: "Тариф Альфы для мерчанта", machine: ""),
+    AgentSession(pid: 12, name: "b", folder: "b", surface: "VS Code", state: .busy,
+                 waitingFor: nil, since: nil,
+                 loop: LoopAlert(tool: "Bash", count: 4, what: "cat /секрет/путь"),
+                 machine: ""),
+    AgentSession(pid: 13, name: "c", folder: "c", surface: "Remote", state: .idle,
+                 waitingFor: nil, since: nil, bridged: true,
+                 activity: "посчитай отказы Займера",
+                 machine: "vps7", rssMB: 200, swapMB: 100),
+]
+let pl = Sessions.lines(pickList, machines: ["vps7": MachineMemory(totalMB: 4000, availableMB: 1000,
+                                                                   swapTotalMB: 0, swapUsedMB: 0,
+                                                                   load1: 0.5, cores: 2)])
+check("у каждой строки своя привязка", pl.picks.count, pl.rows.count)
+check("каждая сессия привязана ровно раз",
+      pl.picks.compactMap { $0?.pid }.sorted().map(String.init).joined(separator: ","), "11,12,13")
+var picksMatch = true
+for (i, p) in pl.picks.enumerated() {
+    if let x = p, !pl.rows[i].contains(String(x.displayName.prefix(6))) { picksMatch = false }
+}
+check("привязка стоит на строке своей же сессии", picksMatch)
+
+// --- «скрыть личное» ------------------------------------------------------
+let anon = Sessions.anonymized(pickList)
+let anonText = Sessions.lines(anon).rows.joined(separator: "\n")
+for secret in ["Тариф", "мерчант", "секрет", "Займер", "удалить"] {
+    check("скрыто: \(secret)", !anonText.contains(secret))
+}
+check("номера вместо имён", anonText.contains(L("чат 1", "chat 1")))
+check("состояние остаётся", anonText.contains(SessionState.waiting.word))
+check("крутится - видно и без команды", anonText.contains("Bash"))
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

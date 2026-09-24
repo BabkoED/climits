@@ -29,8 +29,12 @@ enum RingBar {
     // Прозрачный отступ с той стороны, где стоят цифры. Своего зазора
     // между картинкой и заголовком AppKit не даёт настраивать, поэтому
     // он нарисован внутри картинки.
+    // badge - точка в правом верхнем углу кольца: сбой у Anthropic.
+    // Приём CodexBar (значок статуса поверх индикатора). Точка, а не знак
+    // в тексте: места в строке меню нет, а сигнал «это не у тебя» должен
+    // быть виден, не открывая меню.
     static func image(percent: Int, color: NSColor, font: NSFont,
-                      trailing: Bool = false) -> NSImage {
+                      trailing: Bool = false, badge: NSColor? = nil) -> NSImage {
         let d = CGFloat(Layout.ringDiameter(capHeight: Double(font.capHeight)))
         let stroke = CGFloat(Layout.ringStroke(diameter: Double(d)))
         let gap = CGFloat(Layout.ringGap)
@@ -75,6 +79,19 @@ enum RingBar {
                 arc.lineCapStyle = .butt
                 color.setStroke()
                 arc.stroke()
+            }
+            if let b = badge {
+                // Треть диаметра: меньше не видно на обычном экране, больше
+                // закрывает то самое кольцо, ради которого значок и стоит.
+                let dot = max(4, (d * 0.38).rounded())
+                let rect = NSRect(x: originX + d - dot, y: d - dot, width: dot, height: dot)
+                // Вырез под точку - фоном строки меню нельзя (он у каждого
+                // свой), поэтому кольцо под точкой стирается прозрачностью.
+                NSGraphicsContext.current?.compositingOperation = .clear
+                NSBezierPath(ovalIn: rect.insetBy(dx: -1, dy: -1)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                b.setFill()
+                NSBezierPath(ovalIn: rect).fill()
             }
             return true
         }
