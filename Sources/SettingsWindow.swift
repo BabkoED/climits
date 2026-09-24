@@ -238,6 +238,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // Галочка стоит ПЕРЕД знаками, а не после: она решает, значат ли
         // они что-нибудь в меню вообще. Снятая - возвращает прежний вид
         // из знаков, и тогда «шкала» и «фон» снова правят то, что видно.
+        addCheck(stack, "menuCards",
+                 L("Меню карточками: заголовок, полоса, сброс, темп",
+                   "Menu as cards: title, bar, reset, pace"),
+                 Prefs.menuCards)
         addCheck(stack, "menuCapsule",
                  L("Полоской, а не знаками", "Draw the bar, not glyphs"),
                  Prefs.menuCapsule)
@@ -612,6 +616,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // Уходим сразу, не заглядывая в шаблон: иначе галочка «вида»
         // прошла бы через сборку строки меню и потрогала её ни за чем.
         case "menuCapsule": Prefs.menuCapsule = on; applied(); return
+        case "menuCards": Prefs.menuCards = on; applied(); return
         default: break
         }
         // При включённом «своём формате» галочка ДОПОЛНЯЕТ строку, а не

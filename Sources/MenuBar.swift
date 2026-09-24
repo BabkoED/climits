@@ -466,7 +466,27 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        if let u = usage {
+        if let u = usage, Prefs.menuCards {
+            // Вид карточками (1.20.0). Несвежесть - подписью в шапке, а не
+            // отдельной строкой: шапка для того и стоит, чтобы сказать,
+            // насколько цифрам ниже можно верить.
+            menu.addItem(cardItem(HeaderCardView(headerCard(u))))
+            // Указатель «упрётся первым» - только когда лимитов больше
+            // одного: у единственного он ничего не выделяет.
+            let first = u.buckets.count > 1 ? u.active?.key : nil
+            for b in u.buckets {
+                menu.addItem(cardItem(LimitCardView(limitCard(b, first: b.key == first))))
+            }
+            menu.addItem(.separator())
+            menu.addItem(cardItem(LimitCardView(extraCard(u.extra))))
+            moneyNotes(into: menu)
+            if Prefs.showHistory {
+                menu.addItem(.separator())
+                for line in historyRows(u) { menu.addItem(plain(line)) }
+            }
+            for item in chatRows() { menu.addItem(item) }
+            for item in sessionRows() { menu.addItem(item) }
+        } else if let u = usage {
             if u.isStale || lastError != nil {
                 menu.addItem(dim(staleNote(u)))
                 if let next = UsageAPI.shared.nextAttemptAt {
@@ -488,26 +508,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra, cols: cols))
-            if Prefs.showMoney || Prefs.showTokens {
-                menu.addItem(dim(estimateNote()))
-                for (host, e) in remoteErrors.sorted(by: { $0.key < $1.key }) {
-                    menu.addItem(dim(L("\(host) не ответил: \(e)",
-                                       "\(host) did not answer: \(e)")))
-                }
-                // Флаги, которые до этого собирались и никуда не попадали.
-                // Собирать и не показывать - хуже, чем не собирать: в коде
-                // выглядит как учтённое, а человек об этом не узнаёт.
-                let unknown = sessionWindow.unknownModels.union(weeklyWindow.unknownModels)
-                if !unknown.isEmpty {
-                    let list = unknown.sorted().joined(separator: ", ")
-                    menu.addItem(dim(L("нет цены для \(list) - считаю по Sonnet",
-                                       "no price for \(list) - counted as Sonnet")))
-                }
-                if sessionWindow.truncated || weeklyWindow.truncated {
-                    menu.addItem(dim(L("история не прочитана целиком - итог занижен",
-                                       "history not read in full - the total is understated")))
-                }
-            }
+            moneyNotes(into: menu)
             if Prefs.showHistory {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
@@ -583,6 +584,90 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(action(L("Выйти", "Quit"), #selector(quit), key: "q"))
+    }
+
+    // Оговорки к деньгам и токенам - общие для обоих видов меню.
+    private func moneyNotes(into menu: NSMenu) {
+        guard Prefs.showMoney || Prefs.showTokens else { return }
+        menu.addItem(dim(estimateNote()))
+        for (host, e) in remoteErrors.sorted(by: { $0.key < $1.key }) {
+            menu.addItem(dim(L("\(host) не ответил: \(e)",
+                               "\(host) did not answer: \(e)")))
+        }
+        // Флаги, которые до этого собирались и никуда не попадали.
+        // Собирать и не показывать - хуже, чем не собирать: в коде
+        // выглядит как учтённое, а человек об этом не узнаёт.
+        let unknown = sessionWindow.unknownModels.union(weeklyWindow.unknownModels)
+        if !unknown.isEmpty {
+            let list = unknown.sorted().joined(separator: ", ")
+            menu.addItem(dim(L("нет цены для \(list) - считаю по Sonnet",
+                               "no price for \(list) - counted as Sonnet")))
+        }
+        if sessionWindow.truncated || weeklyWindow.truncated {
+            menu.addItem(dim(L("история не прочитана целиком - итог занижен",
+                               "history not read in full - the total is understated")))
+        }
+    }
+
+    // --- карточки -----------------------------------------------------------
+
+    private func headerCard(_ u: Usage) -> HeaderCard {
+        // Тариф словом с большой буквы: «max» -> «Max», как в самом Claude.
+        let plan = UsageAPI.shared.plan.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
+        if u.isStale || lastError != nil {
+            var sub = staleNote(u)
+            if let next = UsageAPI.shared.nextAttemptAt {
+                sub += L(" \u{00B7} снова в \(Fmt.hhmm(next))", " \u{00B7} retry at \(Fmt.hhmm(next))")
+            }
+            return HeaderCard(title: "Claude", right: plan, sub: sub, subAlarm: true)
+        }
+        let age = Date().timeIntervalSince(u.fetchedAt)
+        let sub = age < 60 ? L("обновлено только что", "updated just now")
+                           : L("обновлено \(Fmt.ago(u.fetchedAt)) назад",
+                               "updated \(Fmt.ago(u.fetchedAt)) ago")
+        return HeaderCard(title: "Claude", right: plan, sub: sub, subAlarm: false)
+    }
+
+    private func limitCard(_ b: Bucket, first: Bool) -> LimitCard {
+        let sp = spentParts(for: b)
+        let corner = [sp.money, sp.tokens].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
+        let pace = Pace.reading(key: b.key, pct: b.pct, resetsAt: b.resetsAt)
+        // Темп и метка - у общих лимитов всегда, у модельных только когда
+        // модель упрётся раньше сброса. Иначе у Sonnet на 4% стояло бы
+        // «с запасом (−46%)» в каждой карточке, и строка темпа стала бы
+        // шумом, который пролистывают мимо.
+        let showPace = pace.map { !b.isModel || !$0.lastsToReset } ?? false
+        return LimitCard(
+            title: b.long,
+            first: first,
+            corner: corner,
+            pct: b.pct,
+            color: Palette.color(for: b),
+            marker: showPace ? pace?.expected : nil,
+            left: "\(b.pct)% " + L("использовано", "used"),
+            right: b.resetsAt == nil ? "" : L("сброс через ", "resets in ") + Fmt.untilReset(b.resetsAt),
+            note: showPace ? pace.map { Pace.text($0, hhmm: Fmt.hhmm) } ?? "" : "",
+            noteAlarm: pace.map { !$0.lastsToReset } ?? false)
+    }
+
+    // «Сверх лимита» карточкой - те же три случая, что у строки.
+    private func extraCard(_ e: Extra) -> LimitCard {
+        let title = L("Сверх лимита", "Extra usage")
+        if !e.enabled {
+            return LimitCard(title: title, first: false, corner: "", pct: nil,
+                             color: .secondaryLabelColor, marker: nil,
+                             left: L("выключено", "off"), right: "", note: "", noteAlarm: false)
+        }
+        if let limit = e.limitMinor, limit > 0, let p = e.percent {
+            return LimitCard(title: title, first: false, corner: "", pct: p,
+                             color: Palette.color(forPercent: p, severity: "normal"), marker: nil,
+                             left: e.usedText + L(" из ", " of ") + e.money(limit),
+                             right: "\(p)%", note: "", noteAlarm: false)
+        }
+        return LimitCard(title: title, first: false, corner: "", pct: nil,
+                         color: .secondaryLabelColor, marker: nil,
+                         left: e.usedText + L(" за месяц", " this month"),
+                         right: L("потолок не задан", "no cap set"), note: "", noteAlarm: false)
     }
 
     // Чем именно посчитаны деньги и токены. Разница между «этой машиной» и
@@ -1297,6 +1382,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // обязаны уйти из ВСЕГО меню, а не из одного раздела. Проверяется
         // только глазами на полном меню.
         Prefs.privacyMode = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_PRIVATE"] == "1"
+        // Прежний вид строками - своим кадром: он остаётся галочкой, и
+        // сломать его, перестраивая меню под карточки, проще всего.
+        Prefs.menuCards = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_ROWS"] != "1"
         if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_DARK"] == "1" {
             statusItem.menu?.appearance = NSAppearance(named: .darkAqua)
         }
