@@ -184,6 +184,27 @@ enum CLI {
 
     // Диагностика. Сам токен не печатается никогда - только его длина и то,
     // удалось ли его разобрать.
+    // Один синхронный запрос к странице статуса - для отчёта, не для трея.
+    private static func serviceStatusLine() -> String {
+        guard let url = URL(string: ServiceStatusFetch.claude.api) else { return "?" }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        req.setValue(Prefs.userAgent, forHTTPHeaderField: "User-Agent")
+        let sem = DispatchSemaphore(value: 0)
+        var out = L("не ответил за 10 с", "no answer in 10 s")
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            if let d = data, let st = ServiceStatus.parse(d) {
+                out = st.isCalm ? L("всё работает", "all systems operational")
+                                : "\(st.indicator): \(st.line)"
+            } else if data != nil {
+                out = L("ответ не разобран", "answer not understood")
+            }
+            sem.signal()
+        }.resume()
+        _ = sem.wait(timeout: .now() + 12)
+        return out
+    }
+
     private static func doctor() -> Int32 {
         print("climits \(version)\n")
 
@@ -211,6 +232,16 @@ enum CLI {
                 + L("НЕ ОПОЗНАН - настройки и версия будут не те",
                     "NOT FOUND - settings and version will be wrong"))
         }
+
+        // Режим опроса и статус Anthropic - две причины, по которым цифры
+        // в трее могут выглядеть «застрявшими»: опрос ушёл в простой или
+        // сбой на той стороне. Обе называются здесь словами.
+        print(Fmt.pad(L("Опрос", "Refresh"), 18)
+            + (Prefs.adaptiveRefresh
+               ? L("сам: 2 мин при открытом меню, 5 при работе, 15 в простое",
+                   "auto: 2 min with the menu open, 5 while working, 15 idle")
+               : L("каждые \(Prefs.refreshInterval / 60) мин", "every \(Prefs.refreshInterval / 60) min")))
+        print(Fmt.pad(L("Статус Anthropic", "Anthropic status"), 18) + serviceStatusLine())
 
         print(Fmt.pad("User-Agent", 18) + Prefs.userAgent
             .components(separatedBy: CharacterSet(charactersIn: "\r\n\0")).joined(separator: " "))

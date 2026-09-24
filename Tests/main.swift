@@ -2107,6 +2107,27 @@ for secret in ["Тариф", "мерчант", "секрет", "Займер", "
 check("номера вместо имён", anonText.contains(L("чат 1", "chat 1")))
 check("состояние остаётся", anonText.contains(SessionState.waiting.word))
 check("крутится - видно и без команды", anonText.contains("Bash"))
+// Номера идут по порядку показа: сверху вниз 1, 2, 3.
+let anonRows = Sessions.lines(anon).rows
+let nums = anonRows.compactMap { r -> Int? in
+    guard let rg = r.range(of: L("чат ", "chat ")) else { return nil }
+    return Int(r[rg.upperBound...].prefix(while: { $0.isNumber }))
+}
+check("номера сверху вниз по порядку", nums.map(String.init).joined(separator: ","), "1,2,3")
+// Случай, на котором общий порядок и порядок показа расходятся: ждущая
+// на сервере по общей сортировке выше простаивающей на маке, а в меню
+// ниже - там сначала вся своя машина.
+let mixedSessions = pickList.map { x -> AgentSession in
+    var y = x
+    if y.pid == 13 { y.state = .waiting; y.waitingFor = "ответа" }
+    return y
+} + [AgentSession(pid: 14, name: "d", folder: "d", surface: "Terminal", state: .idle,
+                  waitingFor: nil, since: nil, machine: "")]
+let mixedNums = Sessions.lines(Sessions.anonymized(mixedSessions)).rows.compactMap { r -> Int? in
+    guard let rg = r.range(of: L("чат ", "chat ")) else { return nil }
+    return Int(r[rg.upperBound...].prefix(while: { $0.isNumber }))
+}
+check("номера по показу и через машины", mixedNums.map(String.init).joined(separator: ","), "1,2,3,4")
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

@@ -366,8 +366,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func updateTitle() {
         guard let button = statusItem.button else { return }
         let alarm = Prefs.showServiceStatus ? ServiceStatusFetch.claude.alarm : nil
-        // Серьёзный сбой - красным, мелкий и плановые работы - оранжевым.
-        let badge: NSColor? = alarm.map { $0.level >= 2 ? .systemRed : .systemOrange }
+        // Цвет сбоя - СВОЙ, фиолетовый, вне светофора лимитов. Проверено
+        // снимком: красная точка на красном кольце читалась как часть
+        // кольца, и сигнал «это у них, а не у тебя» пропадал ровно тогда,
+        // когда он нужнее всего - при упёршемся лимите.
+        let badge: NSColor? = alarm.map { _ in Palette.serviceAlarm }
         guard let u = usage else {
             button.image = nil
             button.imagePosition = .noImage
@@ -441,8 +444,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Сбой у Anthropic - первой строкой, выше любых цифр: он объясняет
         // всё, что ниже может выглядеть странно. Клик открывает страницу.
         if Prefs.showServiceStatus, let st = ServiceStatusFetch.claude.alarm {
-            let color: NSColor = st.level >= 2 ? .systemRed : .systemOrange
-            let i = action("\u{26A0} Anthropic: " + Fmt.clip(st.line, 60), #selector(openStatus), key: "")
+            let color = Palette.serviceAlarm
+            // Обрезка обязательна: строка сбоя оказалась самой широкой
+            // в меню и раздвигала его целиком (снимок 1.19.0-a). Полное
+            // название - на странице статуса, клик ведёт туда.
+            let i = action("\u{26A0} Anthropic: " + Fmt.clip(st.line, 40), #selector(openStatus), key: "")
             i.attributedTitle = NSAttributedString(string: i.title, attributes: [
                 .foregroundColor: color,
                 .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize)),
@@ -450,7 +456,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(i)
             if !st.components.isEmpty {
                 menu.addItem(dim(L("не работает: ", "affected: ")
-                                 + Fmt.clip(st.components.joined(separator: ", "), 60)))
+                                 + Fmt.clip(st.components.joined(separator: ", "), 48)))
             }
             menu.addItem(.separator())
         }

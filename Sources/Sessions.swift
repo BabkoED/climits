@@ -847,7 +847,17 @@ enum Sessions {
     // а не сама работа. Номер - по порядку показа, чтобы «чат 1» стоял
     // первым, а не где придётся.
     static func anonymized(_ list: [AgentSession]) -> [AgentSession] {
-        return sorted(list).enumerated().map { i, x in
+        // Порядок - ТОТ ЖЕ, что в меню: своя машина первой, остальные по
+        // имени, внутри машины - как сортирует sorted. Иначе, проверено
+        // снимком, «чат 5» стоял выше «чата 4»: номера шли по общему
+        // порядку, а показ - по машинам.
+        let byMachine = Dictionary(grouping: list, by: { $0.machine })
+        let order = byMachine.keys.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return a.isEmpty }
+            return a < b
+        }
+        let shown = order.flatMap { sorted(byMachine[$0] ?? []) }
+        return shown.enumerated().map { i, x in
             var y = x
             y.title = ""
             y.name = L("чат \(i + 1)", "chat \(i + 1)")

@@ -80,4 +80,8 @@ enum Palette {
     static var menuFont: NSFont {
         return NSFont.monospacedSystemFont(ofSize: CGFloat(Prefs.menuFontSize), weight: .regular)
     }
+
+    // Сбой у Anthropic. Фиолетовый не занят светофором лимитов - по нему
+    // «у них» не спутать с «у тебя» ни на кольце, ни в меню.
+    static var serviceAlarm: NSColor { return .systemPurple }
 }
