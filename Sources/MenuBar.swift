@@ -39,8 +39,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // в памяти: после перезапуска «смотрел ли человек» неизвестно, и это
     // честно считается «давно».
     private var lastMenuOpen: Date?
-    // Почему выбрана текущая частота - для --doctor и снимка, не для меню.
-    private(set) var refreshReason = ""
 
     // Сессии: кто работает, кто ждёт ответа. Два источника лежат отдельно
     // намеренно. Свои читаются дёшево и прямо перед показом меню - это
@@ -101,25 +99,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // В умном режиме кэш короче самой частой ступени (2 минуты): иначе
         // таймер срабатывал бы вовремя и получал кэш, то есть ступень
         // «смотрю в меню» на деле была бы пятиминутной.
+        //
+        // И в фиксированном - на десять секунд короче интервала. Найдено
+        // ревью 24.09.2026, ошибка старше этой версии: кэш жил ровно
+        // интервал, таймер срабатывал через интервал после ПРОШЛОГО
+        // срабатывания, а кэш писался на время ответа позже - и каждый
+        // второй опрос попадал в кэш. «Раз в 5 минут» было раз в 10.
         if Prefs.adaptiveRefresh { return AdaptiveRefresh.fastest - 10 }
-        return max(60, TimeInterval(Prefs.refreshInterval))
+        return max(50, TimeInterval(Prefs.refreshInterval) - 10)
     }
 
     // Сколько ждать до следующего опроса и почему.
     private func nextDelay() -> TimeInterval {
-        guard Prefs.adaptiveRefresh else {
-            refreshReason = "fixed"
-            return TimeInterval(Prefs.refreshInterval)
-        }
+        guard Prefs.adaptiveRefresh else { return TimeInterval(Prefs.refreshInterval) }
         let info = ProcessInfo.processInfo
         let hot = info.thermalState == .serious || info.thermalState == .critical
         // Работает ли что-то - по всем машинам: сессия на сервере тратит тот
         // же лимит, что и своя. Крутящаяся считается работающей - она тратит.
-        let busy = sessions.contains { $0.state == .busy || $0.loop != nil }
+        //
+        // Раздел сессий выключен - свои сессии не читаются вовсе, и работа
+        // была бы не видна (ревью 24.09.2026). Тогда читаем их здесь, только
+        // ради признака: это десяток файлов по полкилобайта.
+        let pool = localSessions.isEmpty ? Sessions.read() + remoteSessions : sessions
+        let busy = pool.contains { $0.state == .busy || $0.loop != nil }
         let r = AdaptiveRefresh.next(.init(now: Date(), lastMenuOpen: lastMenuOpen,
                                            busySessions: busy,
                                            constrained: info.isLowPowerModeEnabled || hot))
-        refreshReason = r.reason.rawValue
         return r.delay
     }
 
@@ -930,7 +935,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let shown = chats.prefix(Prefs.maxChats)
         for (n, c) in shown.enumerated() {
             let share = Int((c.cost / total * 100).rounded())
-            let name = Prefs.privacyMode ? L("чат \(n + 1)", "chat \(n + 1)") : c.title
+            // «Тема», а не «чат»: номера здесь и в сессиях считаются
+            // независимо, и «чат 1» в обоих местах читался бы как один
+            // и тот же разговор (ревью 24.09.2026).
+            let name = Prefs.privacyMode ? L("тема \(n + 1)", "topic \(n + 1)") : c.title
             // Имя длиннее остальной строки, поэтому режется ОНО, а не
             // числа: «≈$392 · 10%» без имени бесполезно, имя без хвоста
             // всё ещё узнаётся.
@@ -1050,7 +1058,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
     @objc private func togglePrivacy() {
         Prefs.privacyMode.toggle()
-        updateTitle()
+        // Через общее извещение, а не одной перерисовкой: открытое окно
+        // настроек должно узнать о смене так же, как о своей галочке.
+        NotificationCenter.default.post(name: .climitsPrefsChanged, object: nil)
     }
     @objc private func focusSession(_ sender: NSMenuItem) {
         guard let ref = sender.representedObject as? SessionRef else { return }

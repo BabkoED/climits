@@ -18,6 +18,10 @@ import Security
 struct KeychainToken {
     let value: String
     let expiresAt: Date?   // nil, если в записи нет поля expiresAt
+    // Тариф подписки - «max», «pro». Лежит в той же записи рядом с
+    // токеном и секретом не является; показывается в шапке карточки,
+    // как у CodexBar. nil - поля нет, и тогда в шапке просто пусто.
+    var plan: String? = nil
 
     var isExpired: Bool {
         guard let exp = expiresAt else { return false }
@@ -104,7 +108,9 @@ struct Keychain {
                 if let ms = jsonNumber(node["expiresAt"]) {
                     exp = Date(timeIntervalSince1970: ms / 1000.0)
                 }
-                return KeychainToken(value: tok, expiresAt: exp)
+                let plan = (node["subscriptionType"] as? String)
+                    .flatMap { $0.isEmpty ? nil : $0 }
+                return KeychainToken(value: tok, expiresAt: exp, plan: plan)
             }
         }
         // Не JSON - считаем, что это сам токен.

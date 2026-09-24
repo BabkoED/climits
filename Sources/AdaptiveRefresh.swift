@@ -67,6 +67,41 @@ enum ResetNotice {
         return d > 30 ? d + 60 : nil
     }
 
+    // Лимит окна, которое сбросится, и остальные лимиты - для проверки,
+    // можно ли будет работать на самом деле.
+    struct Window {
+        let key: String
+        let pct: Int
+        let resetsAt: Date?
+        let isModel: Bool
+    }
+
+    // Что мешает сказать «можно работать» после сброса этого окна.
+    //
+    // Найдено ревью 24.09.2026: неделя на 100%, пятичасовое окно перешло
+    // порог - через несколько часов приходит «можно работать», а нельзя:
+    // неделя всё ещё выбрана. Мешает только ОБЩИЙ лимит, упёршийся до
+    // более позднего сброса. Лимит по модели не мешает: Opus на 100% -
+    // это «работай на другой модели», а не «жди».
+    static func blocked(_ w: Window, among all: [Window]) -> Bool {
+        guard let r = w.resetsAt else { return true }
+        return all.contains { o in
+            o.key != w.key && !o.isModel && o.pct >= 100
+                && (o.resetsAt ?? .distantFuture) > r.addingTimeInterval(60)
+        }
+    }
+
+    // Снимать ли поставленное сообщение, когда окно сменилось.
+    //
+    // Штатный сброс - время старого окна прошло: сообщение уже доставлено
+    // или вот-вот будет (оно стоит на минуту позже сброса), и снять его
+    // в эту минуту значило бы украсть его у человека. Снимаем, только
+    // если старое окно кончилось ДОСРОЧНО - его время ещё впереди.
+    static func stale(oldStamp: String?, now: Date = Date()) -> Bool {
+        guard let s = oldStamp, let t = Double(s) else { return false }
+        return Date(timeIntervalSince1970: t) > now
+    }
+
     static func text(long: String) -> (title: String, body: String) {
         return (L("Лимит снова есть", "Limit is back"),
                 // «5-часовое окно: окно сбросилось» повторяло бы слово,

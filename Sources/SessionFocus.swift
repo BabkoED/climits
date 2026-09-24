@@ -54,9 +54,22 @@ enum SessionFocus {
             return true
         }
         guard let app = ownerApp(of: s.pid) else { return false }
-        // С macOS 14 этот вызов помечен устаревшим, но работает; замена
-        // без опций есть только с 14, а минимум у нас 13. Предупреждение
-        // сборки - цена поддержки Ventura, а не ошибка.
+        // С macOS 14 активация «кооперативная»: чужое приложение вперёд
+        // пускают, только если активное уступило (ревью 24.09.2026 - без
+        // этого вызов мог вернуть true и ничего не сделать). Мы в этот
+        // момент - меню строки статуса, то есть уступать и нам есть что.
+        if #available(macOS 14.0, *) {
+            NSApp.yieldActivation(to: app)
+            if app.activate() { return true }
+        }
+        // Запасной путь и путь Ventura: открыть уже запущенное приложение
+        // через Launch Services - оно выходит вперёд со своими окнами.
+        if let url = app.bundleURL {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: cfg, completionHandler: nil)
+            return true
+        }
         return app.activate(options: [.activateIgnoringOtherApps])
     }
 }

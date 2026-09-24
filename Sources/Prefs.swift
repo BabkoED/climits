@@ -283,8 +283,15 @@ struct Prefs {
     // ВКЛЮЧЕНО по умолчанию: при открытом меню это чаще прежних пяти
     // минут, в простое реже - и то и другое лучше фиксированного. Кто
     // выбрал интервал руками, выбирает его в том же списке.
+    //
+    // Но только тем, кто интервал НЕ выбирал. Найдено ревью 24.09.2026:
+    // у выбравшего «раз в 15 минут» из-за 429 после обновления молча
+    // включался бы опрос раз в две минуты. Выбор человека сильнее
+    // нового умолчания: есть сохранённый интервал - умный режим выключен,
+    // пока его не выберут в списке.
     static var adaptiveRefresh: Bool {
-        get { bool("adaptiveRefresh", true) } set { d.set(newValue, forKey: "adaptiveRefresh") } }
+        get { bool("adaptiveRefresh", d.object(forKey: "refreshInterval") == nil) }
+        set { d.set(newValue, forKey: "adaptiveRefresh") } }
 
     // Статус Anthropic на значке и в меню, пока идёт инцидент.
     static var showServiceStatus: Bool {

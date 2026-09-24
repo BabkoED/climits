@@ -2129,5 +2129,56 @@ let mixedNums = Sessions.lines(Sessions.anonymized(mixedSessions)).rows.compactM
 }
 check("номера по показу и через машины", mixedNums.map(String.init).joined(separator: ","), "1,2,3,4")
 
+
+// --- темп окна (1.20.0) ---------------------------------------------------
+// Пятичасовое окно, прошло 4 часа из 5 (осталось час): ровно было бы 80%.
+let pNow = Date(timeIntervalSince1970: 1_800_000_000)
+let p1 = Pace.reading(key: "five_hour", pct: 38, resetsAt: pNow.addingTimeInterval(3600), now: pNow)
+check("ровная доля считается от прошедшего", p1?.expected ?? -1, 80)
+check("с запасом - минус", p1?.delta ?? 0, -42)
+check("с запасом хватит до сброса", p1?.lastsToReset ?? false)
+check("текст с запасом", p1.map { Pace.text($0, hhmm: { _ in "hh" }) },
+      L("Темп: с запасом (\u{2212}42%) \u{00B7} хватит до сброса",
+        "Pace: behind (\u{2212}42%) \u{00B7} lasts to reset"))
+// Прошёл час из пяти, потрачено 60%: при этой скорости 100% через 40 минут.
+let p2 = Pace.reading(key: "five_hour", pct: 60, resetsAt: pNow.addingTimeInterval(4 * 3600), now: pNow)
+check("быстрее ровного - плюс", p2?.delta ?? 0, 40)
+check("быстрее - не хватит", !(p2?.lastsToReset ?? true))
+check("упрёшься через 40 минут", (p2?.hitsAt?.timeIntervalSince(pNow) ?? 0).rounded(), 2400)
+// Неделя: прошло 3,5 дня, потрачено 52% - ровно.
+let p3 = Pace.reading(key: "seven_day_opus", pct: 52, resetsAt: pNow.addingTimeInterval(3.5 * 86400), now: pNow)
+check("неделя по модели - семь дней", p3?.expected ?? -1, 50)
+check("в полосе пяти процентов - ровно",
+      p3.map { Pace.text($0, hhmm: { _ in "" }).contains(L("ровно", "on pace")) } ?? false)
+check("незнакомое окно - темпа нет",
+      Pace.reading(key: "monthly_x", pct: 10, resetsAt: pNow.addingTimeInterval(3600), now: pNow) == nil)
+check("начало окна - молчим",
+      Pace.reading(key: "five_hour", pct: 5, resetsAt: pNow.addingTimeInterval(5 * 3600 - 60), now: pNow) == nil)
+check("сброс в прошлом - молчим",
+      Pace.reading(key: "five_hour", pct: 5, resetsAt: pNow.addingTimeInterval(-10), now: pNow) == nil)
+check("ноль потрачено - хватит",
+      Pace.reading(key: "five_hour", pct: 0, resetsAt: pNow.addingTimeInterval(3600), now: pNow)?.lastsToReset ?? false)
+
+// Тариф рядом с токеном - берётся, отсутствие - не ошибка.
+check("тариф из записи",
+      Keychain.parse(#"{"claudeAiOauth":{"accessToken":"x","subscriptionType":"max"}}"#)?.plan, "max")
+check("нет тарифа - пусто, токен есть",
+      Keychain.parse(#"{"claudeAiOauth":{"accessToken":"x"}}"#)?.plan == nil)
+
+// «Лимит снова есть» - не врать, когда держит другой лимит.
+let rw5 = ResetNotice.Window(key: "five_hour", pct: 85, resetsAt: t9.addingTimeInterval(3600), isModel: false)
+let rwWeekFull = ResetNotice.Window(key: "seven_day", pct: 100, resetsAt: t9.addingTimeInterval(3 * 86400), isModel: false)
+let rwWeekOk = ResetNotice.Window(key: "seven_day", pct: 60, resetsAt: t9.addingTimeInterval(3 * 86400), isModel: false)
+let rwOpusFull = ResetNotice.Window(key: "seven_day_opus", pct: 100, resetsAt: t9.addingTimeInterval(3 * 86400), isModel: true)
+check("неделя выбрана - «можно работать» не говорим", ResetNotice.blocked(rw5, among: [rw5, rwWeekFull]))
+check("неделя свободна - говорим", !ResetNotice.blocked(rw5, among: [rw5, rwWeekOk]))
+check("Opus выбран - всё равно можно (другая модель)", !ResetNotice.blocked(rw5, among: [rw5, rwOpusFull]))
+check("неделя сама себе не мешает", !ResetNotice.blocked(rwWeekFull, among: [rwWeekFull]))
+check("досрочный сброс - снимаем",
+      ResetNotice.stale(oldStamp: String(Int(Date().timeIntervalSince1970) + 3600)))
+check("штатный сброс - не трогаем",
+      !ResetNotice.stale(oldStamp: String(Int(Date().timeIntervalSince1970) - 30)))
+check("без отметки - не трогаем", !ResetNotice.stale(oldStamp: nil))
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

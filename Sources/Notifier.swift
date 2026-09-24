@@ -25,6 +25,9 @@ enum Notifier {
 
         let threshold = Prefs.notifyAt
         let d = UserDefaults.standard
+        let windows = usage.buckets.map {
+            ResetNotice.Window(key: $0.key, pct: $0.pct, resetsAt: $0.resetsAt, isModel: $0.isModel)
+        }
 
         for b in usage.buckets {
             let key = firedKey(b.key)
@@ -37,6 +40,10 @@ enum Notifier {
 
             if b.pct >= threshold {
                 if firedFor != stamp {
+                    // Окно сменилось с прошлого предупреждения. Если старое
+                    // кончилось досрочно, его «лимит снова есть» стоит на
+                    // время, которого больше нет, - снимаем.
+                    if ResetNotice.stale(oldStamp: firedFor) { cancelReset(b.key) }
                     d.set(stamp, forKey: key)
                     send(title: L("Лимит на исходе", "Limit running out"),
                          // В уведомлении «через» уместно: оно приходит само,
@@ -44,20 +51,56 @@ enum Notifier {
                          // как длительность, а не как остаток.
                          body: "\(b.long): \(b.pct)% \u{00B7} "
                              + L("через ", "in ") + Fmt.untilReset(b.resetsAt))
-                    // И сразу - сообщение на время сброса. Ставится сейчас,
-                    // а не ловится опросом: система доставит его сама,
-                    // даже если опрос в этот момент ушёл на 15 минут.
-                    if Prefs.notifyReset, let after = ResetNotice.delay(resetsAt: b.resetsAt) {
-                        let t = ResetNotice.text(long: b.long)
-                        send(title: t.title, body: t.body,
-                             id: ResetNotice.id(b.key), after: after)
-                    }
                 }
             } else if firedFor == stamp {
                 // Ушли ниже порога внутри того же окна - взводим заново.
+                // Сообщать о сбросе окна, в которое не упёрлись, незачем.
                 d.removeObject(forKey: key)
+                cancelReset(b.key)
+            } else if ResetNotice.stale(oldStamp: firedFor) {
+                // Окно сбросили досрочно, а процент ниже порога: старое
+                // сообщение пришло бы в прошлое время сброса и соврало.
+                d.removeObject(forKey: key)
+                cancelReset(b.key)
+            }
+
+            // «Лимит снова есть» - сверяется с текущим положением на
+            // КАЖДОМ обновлении, а не ставится раз навсегда: неделя могла
+            // упереться уже после предупреждения о пятичасовом окне, и
+            // тогда «можно работать» стало бы враньём (ревью 24.09.2026).
+            if d.string(forKey: key) == stamp {
+                planReset(b, among: windows)
             }
         }
+    }
+
+    private static func sigKey(_ key: String) -> String { return "resetsig." + key }
+
+    // Поставить, заменить или снять «лимит снова есть» для этого лимита.
+    // Подпись (окно + мешает ли что-то) помнится, чтобы не переставлять
+    // одно и то же на каждом обновлении.
+    private static func planReset(_ b: Bucket, among windows: [ResetNotice.Window]) {
+        let d = UserDefaults.standard
+        guard Prefs.notifyReset else { return }
+        let me = windows.first { $0.key == b.key }
+            ?? ResetNotice.Window(key: b.key, pct: b.pct, resetsAt: b.resetsAt, isModel: b.isModel)
+        let blocked = ResetNotice.blocked(me, among: windows)
+        let stamp = b.resetsAt.map { String(Int($0.timeIntervalSince1970)) } ?? "no-reset"
+        let sig = stamp + (blocked ? "#blocked" : "#open")
+        guard d.string(forKey: sigKey(b.key)) != sig else { return }
+        d.set(sig, forKey: sigKey(b.key))
+        if blocked {
+            cancelReset(b.key, keepSig: true)
+        } else if let after = ResetNotice.delay(resetsAt: b.resetsAt) {
+            let t = ResetNotice.text(long: b.long)
+            send(title: t.title, body: t.body, id: ResetNotice.id(b.key), after: after)
+        }
+    }
+
+    private static func cancelReset(_ key: String, keepSig: Bool = false) {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: [ResetNotice.id(key)])
+        if !keepSig { UserDefaults.standard.removeObject(forKey: sigKey(key)) }
     }
 
     // Сессия крутится на месте - сказать, не дожидаясь, пока откроют меню.
@@ -79,8 +122,13 @@ enum Notifier {
     // закрыта тестами.
     private static let loopKeys = "notified.loop.keys"
 
-    static func checkLoops(_ sessions: [AgentSession]) {
+    static func checkLoops(_ all: [AgentSession]) {
         guard Prefs.notifyEnabled, Prefs.watchLoops else { return }
+        // «Скрыть личное» касается и уведомлений: баннер на демонстрации
+        // экрана виден так же, как меню (ревью 24.09.2026 - имя из
+        // `/rename` уходило в баннер). Ключ тревоги - машина и pid, они
+        // обезличиванием не трогаются, так что «сказать один раз» держится.
+        let sessions = Prefs.privacyMode ? Sessions.anonymized(all) : all
         let d = UserDefaults.standard
 
         // Что помним. Список ключей держим отдельно: пройтись по всему
@@ -107,6 +155,12 @@ enum Notifier {
 
     // Снять все поставленные «лимит снова есть» - галочку выключили.
     static func cancelResets() {
+        // И подписи тоже: иначе после повторного включения сообщение не
+        // встало бы заново - подпись сказала бы «уже стоит».
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("resetsig.") {
+            d.removeObject(forKey: k)
+        }
         let center = UNUserNotificationCenter.current()
         center.getPendingNotificationRequests { reqs in
             let ids = reqs.map { $0.identifier }.filter { $0.hasPrefix("reset.") }

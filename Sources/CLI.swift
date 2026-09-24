@@ -201,7 +201,11 @@ enum CLI {
             }
             sem.signal()
         }.resume()
-        _ = sem.wait(timeout: .now() + 12)
+        // По таймауту не читаем out: ответ мог прийти в эту же секунду,
+        // и чтение попало бы на запись из другого потока.
+        if sem.wait(timeout: .now() + 12) == .timedOut {
+            return L("не ответил за 12 с", "no answer in 12 s")
+        }
         return out
     }
 
@@ -238,8 +242,8 @@ enum CLI {
         // сбой на той стороне. Обе называются здесь словами.
         print(Fmt.pad(L("Опрос", "Refresh"), 18)
             + (Prefs.adaptiveRefresh
-               ? L("сам: 2 мин при открытом меню, 5 при работе, 15 в простое",
-                   "auto: 2 min with the menu open, 5 while working, 15 idle")
+               ? L("сам: 2 мин - 5 мин после открытия меню, 5 - час после него или пока идёт работа, 15 - в простое и при энергосбережении",
+                   "auto: 2 min for 5 min after opening the menu, 5 for an hour after or while working, 15 idle or on low power")
                : L("каждые \(Prefs.refreshInterval / 60) мин", "every \(Prefs.refreshInterval / 60) min")))
         print(Fmt.pad(L("Статус Anthropic", "Anthropic status"), 18) + serviceStatusLine())
 

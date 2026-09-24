@@ -596,7 +596,12 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         case "showMoney": Prefs.showMoney = on
         case "showTokens": Prefs.showTokens = on
         case "showHistory": Prefs.showHistory = on
-        case "notifyEnabled": Prefs.notifyEnabled = on; applied(); return
+        case "notifyEnabled":
+            Prefs.notifyEnabled = on
+            // Выключили уведомления совсем - поставленные на будущее
+            // «лимит снова есть» тоже не должны прийти (ревью 24.09.2026).
+            if !on { Notifier.cancelResets() }
+            applied(); return
         case "notifyReset":
             Prefs.notifyReset = on
             if !on { Notifier.cancelResets() }

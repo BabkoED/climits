@@ -100,6 +100,9 @@ final class UsageAPI {
 
     // Когда состоится следующая попытка. Показывается в меню: «пробую снова
     // в 14:35» честнее, чем молчаливый значок.
+    // Тариф подписки последнего удачного запроса («max»). Для шапки карточки.
+    private(set) var plan: String?
+
     var nextAttemptAt: Date? {
         guard let until = backoffUntil, until > Date() else { return nil }
         return until
@@ -243,12 +246,17 @@ final class UsageAPI {
 
         var body: Data? = nil
         var code = 0
+        var usedPlan: String? = nil
         for tok in tokens {
             let r = request(token: tok.value)
             body = r.body
             code = r.code
+            usedPlan = tok.plan
             if code != 401 && code != 403 { break }
         }
+        // Тариф того токена, который ответил, а не первого попавшегося:
+        // записей в связке бывает несколько, и у них могут быть разные.
+        if code == 200 { plan = usedPlan }
 
         switch code {
         case 200:
