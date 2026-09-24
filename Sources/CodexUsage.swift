@@ -81,6 +81,19 @@ enum CodexUsageParser {
                        isActive: false, rank: rank, severity: "normal")
         b.window = len
         b.scoped = scoped
+        if scoped {
+            // В виде строками короткое имя - единственное, что различает
+            // лимиты, и «5ч» у модельного совпадало с общим (снимок
+            // 1.20.0-c). Берём хвост названия модели: «...-Codex-Spark» -
+            // «Spark», и приписываем окно, если оно не пятичасовое.
+            let tail = prefix.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+                .split(separator: "-").last.map(String.init) ?? n.short
+            let short = String(tail.prefix(8))
+            b = Bucket(key: b.key, short: n.short == L("5ч", "5h") ? short : short + " " + n.short,
+                       long: b.long, percent: b.percent, resetsAt: b.resetsAt,
+                       isActive: false, rank: rank, severity: "normal",
+                       window: len, scoped: true)
+        }
         return b
     }
 

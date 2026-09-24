@@ -2202,6 +2202,7 @@ check("Codex: сброс в секундах эпохи",
       cx?.usage.bucket("codex_primary")?.resetsAt?.timeIntervalSince1970 ?? 0, 1766948068)
 check("Codex: модельный лимит - модельный", cx?.usage.bucket("codex_m0_p")?.isModel ?? false)
 check("Codex: общий - не модельный", !(cx?.usage.bucket("codex_primary")?.isModel ?? true))
+check("Codex: короткое имя модельного - по модели", cx?.usage.bucket("codex_m0_p")?.short, "Spark")
 check("Codex: длина окна едет в темп",
       Pace.reading(key: "codex_primary", pct: 42, resetsAt: cx?.usage.bucket("codex_primary")?.resetsAt,
                    window: cx?.usage.bucket("codex_primary")?.window, now: cxNow) != nil)

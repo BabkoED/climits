@@ -80,8 +80,12 @@ final class HeaderCardView: NSView {
         let x = CardStyle.padX
         let w = bounds.width - 2 * x
         let y: CGFloat = 6
+        // Тариф - у ПРАВОГО края карточки. Выравнивание вправо внутри
+        // области от левого края ставило его в левую треть, поверх подписи
+        // (снимок 1.20.0-c: «updated just Plus»).
+        let area = w * 0.3
         let rw = drawText(card.right, font: CardStyle.body, color: .secondaryLabelColor,
-                          x: x, y: y + 2, width: w * 0.3, right: true)
+                          x: x + w - area, y: y + 2, width: area, right: true)
         let tw = drawText(card.title, font: CardStyle.big, color: .labelColor,
                           x: x, y: y, width: w - rw - 8)
         // Подпись - вслед за именем, на его же базовой линии: мельче и
