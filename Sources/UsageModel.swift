@@ -94,11 +94,17 @@ struct Bucket {
     // Когда он есть, он вернее наших порогов: пороги мы выдумали, а этот
     // приходит от того, кто лимит и считает.
     let severity: String
+    // Длина окна, если её сказал сам ответ (у Codex - limit_window_seconds).
+    // У Claude её нет, там длина следует из имени ключа - см. Pace.
+    var window: TimeInterval? = nil
+    // Лимит по отдельной модели у провайдера, где это не видно по ключу
+    // (у Codex - additional_rate_limits).
+    var scoped: Bool = false
 
     var pct: Int { return safeInt(percent) }   // как в /usage, но без trap
 
     // Недельный лимит по модели, а не окно целиком.
-    var isModel: Bool { return key.hasPrefix("seven_day_") || key == UsageParser.fableKey }
+    var isModel: Bool { return scoped || key.hasPrefix("seven_day_") || key == UsageParser.fableKey }
 
     // Однобуквенное имя для строки меню: Opus -> «O», Sonnet -> «S»,
     // Fable -> «F», Mythos -> «M». У окон сокращать нечего - «5ч» и «7д»

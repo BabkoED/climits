@@ -39,6 +39,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/ServiceStatus.swift \
   Sources/AdaptiveRefresh.swift \
   Sources/Pace.swift \
+  Sources/CodexUsage.swift \
   Tests/main.swift
 
 "$OUT"

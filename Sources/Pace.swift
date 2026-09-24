@@ -36,8 +36,10 @@ enum Pace {
     // пугало бы зря.
     static let evenBand = 5
 
-    static func reading(key: String, pct: Int, resetsAt: Date?, now: Date = Date()) -> Reading? {
-        guard let len = windowLength(key: key), let r = resetsAt else { return nil }
+    // window - длина окна из ответа, если провайдер её говорит сам.
+    static func reading(key: String, pct: Int, resetsAt: Date?, window: TimeInterval? = nil,
+                        now: Date = Date()) -> Reading? {
+        guard let len = window ?? windowLength(key: key), len > 0, let r = resetsAt else { return nil }
         let left = r.timeIntervalSince(now)
         guard left > 0, left <= len * 1.05 else { return nil }
         let elapsed = max(0, len - left)

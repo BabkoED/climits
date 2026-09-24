@@ -352,6 +352,11 @@ struct Prefs {
     // строки табуляторами. Карточки по умолчанию - слово Антона 24.09.2026
     // «дизайн там мне понравился, аккуратный и понятный». Строки остаются:
     // они ниже ростом, и выбраны были 05.09 именно ради этого.
+    // Второй провайдер. По умолчанию включён ровно тогда, когда Codex
+    // стоит на машине (есть файл входа): у кого его нет, меню не меняется.
+    static var codexEnabled: Bool {
+        get { bool("codexEnabled", CodexAuth.installed) } set { d.set(newValue, forKey: "codexEnabled") } }
+
     static var menuCards: Bool {
         get { bool("menuCards", true) } set { d.set(newValue, forKey: "menuCards") } }
 

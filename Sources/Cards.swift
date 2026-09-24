@@ -67,7 +67,10 @@ final class HeaderCardView: NSView {
 
     init(_ c: HeaderCard) {
         card = c
-        let h = 8 + lineHeight(CardStyle.big) + 2 + lineHeight(CardStyle.small) + 8
+        // Одна строка: «Claude · обновлено только что», тариф справа.
+        // Двумя строками шапка стоила ряда, а меню и без того упиралось
+        // в низ экрана (снимок 1.20.0-b).
+        let h = 6 + lineHeight(CardStyle.big) + 2
         super.init(frame: NSRect(x: 0, y: 0, width: CardStyle.width, height: h))
         autoresizingMask = [.width]
     }
@@ -76,15 +79,17 @@ final class HeaderCardView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let x = CardStyle.padX
         let w = bounds.width - 2 * x
-        var y: CGFloat = 8
+        let y: CGFloat = 6
         let rw = drawText(card.right, font: CardStyle.body, color: .secondaryLabelColor,
-                          x: x, y: y + 2, width: w, right: true)
-        _ = drawText(card.title, font: CardStyle.big, color: .labelColor,
-                     x: x, y: y, width: w - rw - 8)
-        y += lineHeight(CardStyle.big) + 2
-        _ = drawText(card.sub, font: CardStyle.small,
+                          x: x, y: y + 2, width: w * 0.3, right: true)
+        let tw = drawText(card.title, font: CardStyle.big, color: .labelColor,
+                          x: x, y: y, width: w - rw - 8)
+        // Подпись - вслед за именем, на его же базовой линии: мельче и
+        // ниже на разницу высот шрифтов.
+        let dy = CardStyle.big.ascender - CardStyle.small.ascender
+        _ = drawText("  " + card.sub, font: CardStyle.small,
                      color: card.subAlarm ? .systemOrange : .secondaryLabelColor,
-                     x: x, y: y, width: w)
+                     x: x + tw, y: y + dy, width: max(0, w - tw - rw - 8))
     }
 }
 
@@ -116,11 +121,11 @@ final class LimitCardView: NSView {
     override var isFlipped: Bool { return true }
 
     static func height(_ c: LimitCard) -> CGFloat {
-        var h: CGFloat = 6 + lineHeight(CardStyle.title) + 4
+        var h: CGFloat = 5 + lineHeight(CardStyle.title) + 3
         if c.pct != nil { h += CardStyle.barH + (c.compact ? 2 : 5) }
         if !c.compact && (!c.left.isEmpty || !c.right.isEmpty) { h += lineHeight(CardStyle.body) }
         if !c.note.isEmpty { h += 1 + lineHeight(CardStyle.small) }
-        return h + 6
+        return h + 5
     }
 
     init(_ c: LimitCard) {
@@ -133,7 +138,7 @@ final class LimitCardView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let x = CardStyle.padX
         let w = bounds.width - 2 * x
-        var y: CGFloat = 6
+        var y: CGFloat = 5
 
         // Заголовок и угол. Угол рисуется первым и узнаёт свою ширину:
         // заголовок режется по остатку, а не наезжает на деньги.
@@ -159,7 +164,7 @@ final class LimitCardView: NSView {
         }
         _ = drawText(card.title, font: CardStyle.title, color: .labelColor,
                      x: tx, y: y, width: max(20, w - (tx - x) - cornerW - 8))
-        y += lineHeight(CardStyle.title) + 4
+        y += lineHeight(CardStyle.title) + 3
 
         if let p = card.pct {
             let r = NSRect(x: x, y: y, width: w, height: CardStyle.barH)

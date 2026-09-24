@@ -494,6 +494,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
              Prefs.showSpendByChat),
             ("sparkleEnabled", L("Обновляться через Sparkle", "Update via Sparkle"),
              Prefs.sparkleEnabled),
+            ("codexEnabled", L("Codex: лимиты, если он стоит", "Codex: limits, if installed"),
+             Prefs.codexEnabled),
         ]
 
         var rows: [[NSView]] = [[subheader(L("В строке меню", "In the menu bar")),
@@ -617,6 +619,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // прошла бы через сборку строки меню и потрогала её ни за чем.
         case "menuCapsule": Prefs.menuCapsule = on; applied(); return
         case "menuCards": Prefs.menuCards = on; applied(); return
+        case "codexEnabled": Prefs.codexEnabled = on; applied(); return
         default: break
         }
         // При включённом «своём формате» галочка ДОПОЛНЯЕТ строку, а не

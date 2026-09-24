@@ -2180,5 +2180,47 @@ check("штатный сброс - не трогаем",
       !ResetNotice.stale(oldStamp: String(Int(Date().timeIntervalSince1970) - 30)))
 check("без отметки - не трогаем", !ResetNotice.stale(oldStamp: nil))
 
+// --- Codex (1.20.0) -------------------------------------------------------
+// Форма ответа - как в тестах CodexBar (CodexOAuthRequestTests).
+let cxNow = Date(timeIntervalSince1970: 1_766_940_000)
+let cxBody = """
+{"plan_type":"pro","rate_limit":{
+  "primary_window":{"used_percent":42,"reset_at":1766948068,"limit_window_seconds":18000},
+  "secondary_window":{"used_percent":7,"reset_at":1767407914,"limit_window_seconds":604800}},
+ "additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{
+   "primary_window":{"used_percent":3,"reset_at":1766948068,"limit_window_seconds":18000}}},
+   {"limit_name":"битый","rate_limit":{"primary_window":{"reset_at":1}}}]}
+"""
+let cx = CodexUsageParser.parse(Data(cxBody.utf8), at: cxNow)
+check("Codex разбирается", cx != nil)
+check("Codex: три лимита, битый выпал", cx?.usage.buckets.count ?? 0, 3)
+check("Codex: тариф", cx?.plan, "pro")
+check("Codex: пятичасовое по длине окна", cx?.usage.bucket("codex_primary")?.long, L("Codex, 5 ч", "Codex, 5 h"))
+check("Codex: неделя по длине окна", cx?.usage.bucket("codex_secondary")?.long, L("Codex, неделя", "Codex, week"))
+check("Codex: процент", cx?.usage.bucket("codex_primary")?.pct ?? -1, 42)
+check("Codex: сброс в секундах эпохи",
+      cx?.usage.bucket("codex_primary")?.resetsAt?.timeIntervalSince1970 ?? 0, 1766948068)
+check("Codex: модельный лимит - модельный", cx?.usage.bucket("codex_m0_p")?.isModel ?? false)
+check("Codex: общий - не модельный", !(cx?.usage.bucket("codex_primary")?.isModel ?? true))
+check("Codex: длина окна едет в темп",
+      Pace.reading(key: "codex_primary", pct: 42, resetsAt: cx?.usage.bucket("codex_primary")?.resetsAt,
+                   window: cx?.usage.bucket("codex_primary")?.window, now: cxNow) != nil)
+check("Codex: без длины окна темпа нет",
+      Pace.reading(key: "codex_primary", pct: 42, resetsAt: cxNow.addingTimeInterval(3600), now: cxNow) == nil)
+check("Codex: пустой ответ - не лимиты", CodexUsageParser.parse(Data("{}".utf8)) == nil)
+check("Codex: мусор - не лимиты", CodexUsageParser.parse(Data("<html>".utf8)) == nil)
+check("Codex: миллисекунды тоже сброс",
+      CodexUsageParser.parse(Data(#"{"rate_limit":{"primary_window":{"used_percent":1,"reset_at":1766948068000,"limit_window_seconds":18000}}}"#.utf8))?
+        .usage.buckets.first?.resetsAt?.timeIntervalSince1970 ?? 0, 1766948068)
+
+check("вход Codex: токен и аккаунт",
+      CodexAuth.parse(Data(#"{"tokens":{"access_token":"t","account_id":"acc"}}"#.utf8))?.account, "acc")
+check("вход Codex: без токена - нет входа",
+      CodexAuth.parse(Data(#"{"tokens":{"access_token":""}}"#.utf8)) == nil)
+check("вход Codex: CODEX_HOME уважается",
+      CodexAuth.path(env: ["CODEX_HOME": "/x/y"]).path, "/x/y/auth.json")
+check("вход Codex: по умолчанию ~/.codex",
+      CodexAuth.path(env: [:]).path.hasSuffix("/.codex/auth.json"))
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

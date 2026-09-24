@@ -155,6 +155,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Статус Anthropic - по тем же поводам, со своим порогом в пять
         // минут. Перерисовка только когда он сменился.
         ServiceStatusFetch.claude.refreshIfDue { [weak self] in self?.updateTitle() }
+        // Второй провайдер - независимо от первого: упавший Claude не
+        // должен останавливать Codex и наоборот.
+        if Prefs.codexEnabled {
+            CodexAPI.status.refreshIfDue { }
+            CodexAPI.shared.refreshIfDue(ttl: ttl, force: force) { [weak self] in
+                let c = CodexAPI.shared
+                if c.lastError == nil, let u = c.usage { Notifier.check(u) }
+                self?.updateTitle()
+            }
+        }
         if inFlight { return }
         inFlight = true
         UsageAPI.shared.fetch(ttl: ttl, force: force) { [weak self] result in
@@ -481,6 +491,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(cardItem(LimitCardView(extraCard(u.extra))))
+            for item in codexSection(cards: true, cols: nil) { menu.addItem(item) }
             moneyNotes(into: menu)
             if Prefs.showHistory {
                 menu.addItem(.separator())
@@ -510,6 +521,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra, cols: cols))
+            for item in codexSection(cards: false, cols: cols) { menu.addItem(item) }
             moneyNotes(into: menu)
             if Prefs.showHistory {
                 menu.addItem(.separator())
@@ -611,6 +623,50 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    // --- Codex ---------------------------------------------------------------
+
+    // Раздел второго провайдера. Пуст, пока Codex не включён: у кого его
+    // нет, меню не меняется вовсе.
+    private func codexSection(cards: Bool, cols: Columns?) -> [NSMenuItem] {
+        guard Prefs.codexEnabled else { return [] }
+        let api = CodexAPI.shared
+        var out: [NSMenuItem] = [.separator()]
+        if Prefs.showServiceStatus, let st = CodexAPI.status.alarm {
+            let i = action("\u{26A0} OpenAI: " + Fmt.clip(st.line, 40), #selector(openOpenAIStatus), key: "")
+            i.attributedTitle = NSAttributedString(string: i.title, attributes: [
+                .foregroundColor: Palette.serviceAlarm,
+                .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize)),
+            ])
+            out.append(i)
+        }
+        let plan = api.plan.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
+        guard let u = api.usage else {
+            let why = api.lastError ?? L("загружаю\u{2026}", "loading\u{2026}")
+            out.append(cards ? cardItem(HeaderCardView(HeaderCard(title: "Codex", right: plan, sub: why,
+                                                                  subAlarm: api.lastError != nil)))
+                             : dim("Codex \u{00B7} " + why))
+            return out
+        }
+        var sub = Date().timeIntervalSince(u.fetchedAt) < 60
+            ? L("обновлено только что", "updated just now")
+            : L("обновлено \(Fmt.ago(u.fetchedAt)) назад", "updated \(Fmt.ago(u.fetchedAt)) ago")
+        if let e = api.lastError {
+            sub = L("данные от \(Fmt.hhmm(u.fetchedAt)) \u{00B7} ", "data from \(Fmt.hhmm(u.fetchedAt)) \u{00B7} ") + e
+        }
+        if cards {
+            out.append(cardItem(HeaderCardView(HeaderCard(title: "Codex", right: plan, sub: sub,
+                                                          subAlarm: api.lastError != nil))))
+            let weekReset = u.bucket("codex_secondary")?.resetsAt
+            for b in u.buckets {
+                out.append(cardItem(LimitCardView(limitCard(b, first: false, weekReset: weekReset))))
+            }
+        } else if let c = cols {
+            out.append(dim("Codex \u{00B7} " + sub))
+            for b in u.buckets { out.append(row(for: b, active: false, cols: c)) }
+        }
+        return out
+    }
+
     // --- карточки -----------------------------------------------------------
 
     private func headerCard(_ u: Usage) -> HeaderCard {
@@ -633,7 +689,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func limitCard(_ b: Bucket, first: Bool, weekReset: Date? = nil) -> LimitCard {
         let sp = spentParts(for: b)
         let corner = [sp.money, sp.tokens].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
-        let pace = Pace.reading(key: b.key, pct: b.pct, resetsAt: b.resetsAt)
+        let pace = Pace.reading(key: b.key, pct: b.pct, resetsAt: b.resetsAt, window: b.window)
         // Темп и метка - у общих лимитов всегда, у модельных только когда
         // модель упрётся раньше сброса. Иначе у Sonnet на 4% стояло бы
         // «с запасом (−46%)» в каждой карточке, и строка темпа стала бы
@@ -938,6 +994,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // лимита: сколько всего выдано, Anthropic не говорит. «≈» здесь про
     // прайс и про неполноту машин, а не про догадку о размере лимита.
     private func spentParts(for b: Bucket) -> (money: String, tokens: String) {
+        // Расшифровки - Claude Code. Приписать их деньги лимиту Codex значило
+        // бы показать чужой расход под чужим именем.
+        if b.key.hasPrefix("codex_") { return ("", "") }
         let w = window(for: b)
         var money = ""
         var tokens = ""
@@ -1156,6 +1215,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func openOpenAIStatus() {
+        if let u = URL(string: CodexAPI.status.page) { NSWorkspace.shared.open(u) }
+    }
     @objc private func openStatus() {
         if let u = URL(string: ServiceStatusFetch.claude.page) { NSWorkspace.shared.open(u) }
     }
@@ -1225,6 +1287,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Сбой у Anthropic - тоже в кадр: строка наверху меню и точка на
         // кольце существуют только на настоящем macOS. Имя длинное
         // нарочно - проверяется обрезка, а не короткий случай.
+        // Codex - в кадр: второй провайдер впервые, и его раздел существует
+        // только на настоящем macOS. Форма ответа - как в тестах CodexBar.
+        Prefs.codexEnabled = true
+        let cx = """
+        {"plan_type":"plus","rate_limit":{
+          "primary_window":{"used_percent":34,"reset_at":\(Int(Date().timeIntervalSince1970) + 3 * 3600),"limit_window_seconds":18000},
+          "secondary_window":{"used_percent":61,"reset_at":\(Int(Date().timeIntervalSince1970) + 2 * 86400),"limit_window_seconds":604800}},
+         "additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{
+          "primary_window":{"used_percent":12,"reset_at":\(Int(Date().timeIntervalSince1970) + 3 * 3600),"limit_window_seconds":18000}}}]}
+        """
+        if let a = CodexUsageParser.parse(Data(cx.utf8)) {
+            CodexAPI.shared.injectForShot(a.usage, plan: a.plan)
+        }
         ServiceStatusFetch.claude.injectForShot(ServiceStatus(
             level: 2, indicator: "major", description: "Partial System Outage",
             incidents: ["Elevated errors on Claude Code and claude.ai for some users"],
