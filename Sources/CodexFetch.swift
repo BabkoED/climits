@@ -21,8 +21,15 @@ final class CodexAPI {
     private var strikes = 0
 
     static let url = "https://chatgpt.com/backend-api/wham/usage"
-    static let status = ServiceStatusFetch(api: "https://status.openai.com/api/v2/summary.json",
-                                           page: "https://status.openai.com")
+    // Только то, чем пользуется Codex: Codex Web, Codex API, CLI, VS Code
+    // extension (имена со страницы на 24.09.2026). Остальное OpenAI - не наше.
+    static let status = ServiceStatusFetch(
+        api: "https://status.openai.com/api/v2/summary.json",
+        page: "https://status.openai.com",
+        relevant: { n in
+            let x = n.lowercased()
+            return x.contains("codex") || x == "cli" || x.contains("vs code")
+        })
 
     // Только для снимка в CI.
     func injectForShot(_ u: Usage, plan p: String?) {
@@ -73,6 +80,11 @@ final class CodexAPI {
                     // владеет Codex, и запись в чужой файл входа - это
                     // шанс разлогинить саму программу.
                     self.lastError = L("вход в Codex истёк - запусти codex", "Codex login expired - run codex")
+                    // Пауза и здесь: протухший токен иначе уходил бы на
+                    // chatgpt.com каждую минуту, пока человек не войдёт.
+                    // Файл входа перечитывается после паузы - новый вход
+                    // подхватится сам.
+                    self.backoffUntil = Date().addingTimeInterval(15 * 60)
                 case 429:
                     self.strikes += 1
                     self.backoffUntil = Date().addingTimeInterval(min(3600, 120 * pow(2, Double(self.strikes))))

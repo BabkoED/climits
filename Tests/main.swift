@@ -2223,5 +2223,24 @@ check("вход Codex: CODEX_HOME уважается",
 check("вход Codex: по умолчанию ~/.codex",
       CodexAuth.path(env: [:]).path.hasSuffix("/.codex/auth.json"))
 
+// Ревью 1.20.0.
+let pFull = Pace.reading(key: "five_hour", pct: 100, resetsAt: pNow.addingTimeInterval(3600), now: pNow)
+check("упёрся - не «упрёшься в сейчас»", pFull?.hitsAt == nil && !(pFull?.lastsToReset ?? true))
+check("упёрся - так и сказано", pFull.map { Pace.text($0, hhmm: { _ in "сейчас" }).contains(L("лимит выбран", "limit used up")) } ?? false)
+let oai = ServiceStatus.parse(Data("""
+{"status":{"indicator":"minor","description":"Partial"},
+ "components":[{"name":"Sora","status":"partial_outage"},{"name":"Codex API","status":"operational"}]}
+""".utf8))
+let isCodex: (String) -> Bool = { $0.lowercased().contains("codex") || $0.lowercased() == "cli" }
+check("сбой в Sora - Codex спокоен", oai?.scoped(isCodex).isCalm ?? false)
+let oai2 = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial"},
+ "components":[{"name":"Codex API","status":"major_outage"},{"name":"CLI","status":"operational"}]}
+""".utf8))
+check("сбой в Codex API - тревога", !(oai2?.scoped(isCodex).isCalm ?? true))
+check("сбой в Codex API - назван", oai2?.scoped(isCodex).line, L("не работает: Codex API", "affected: Codex API"))
+let gpt5 = CodexUsageParser.parse(Data(#"{"additional_rate_limits":[{"limit_name":"GPT-5","rate_limit":{"primary_window":{"used_percent":1,"limit_window_seconds":18000}}}]}"#.utf8))
+check("модель «GPT-5» - не «5»", gpt5?.usage.buckets.first?.short, "GPT-5")
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

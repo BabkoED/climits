@@ -40,6 +40,21 @@ struct ServiceStatus: Equatable {
         return s
     }
 
+    // Статус, суженный до своих компонентов.
+    //
+    // У OpenAI страница одна на всё: Sora, Ads Manager, FedRAMP и ещё два
+    // десятка. Общий индикатор зажигал бы «⚠ OpenAI» в разделе Codex при
+    // сбое в Sora (ревью 1.20.0). Инцидентов их summary.json не отдаёт
+    // вовсе (проверено 24.09.2026), так что судим по компонентам.
+    func scoped(_ mine: (String) -> Bool) -> ServiceStatus {
+        let broken = components.filter(mine)
+        let lvl = broken.isEmpty ? 0 : Swift.max(1, level)
+        return ServiceStatus(level: lvl, indicator: lvl == 0 ? "none" : indicator,
+                             description: broken.isEmpty ? description
+                                 : L("не работает: ", "affected: ") + broken.joined(separator: ", "),
+                             incidents: [], components: broken, fetchedAt: fetchedAt)
+    }
+
     static func level(for indicator: String) -> Int {
         switch indicator.lowercased() {
         case "none": return 0

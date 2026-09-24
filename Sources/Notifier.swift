@@ -154,16 +154,17 @@ enum Notifier {
     }
 
     // Снять все поставленные «лимит снова есть» - галочку выключили.
-    static func cancelResets() {
+    // prefix - снять только лимиты одного провайдера (выключили Codex).
+    static func cancelResets(prefix: String = "") {
         // И подписи тоже: иначе после повторного включения сообщение не
         // встало бы заново - подпись сказала бы «уже стоит».
         let d = UserDefaults.standard
-        for k in d.dictionaryRepresentation().keys where k.hasPrefix("resetsig.") {
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("resetsig." + prefix) {
             d.removeObject(forKey: k)
         }
         let center = UNUserNotificationCenter.current()
         center.getPendingNotificationRequests { reqs in
-            let ids = reqs.map { $0.identifier }.filter { $0.hasPrefix("reset.") }
+            let ids = reqs.map { $0.identifier }.filter { $0.hasPrefix("reset." + prefix) }
             center.removePendingNotificationRequests(withIdentifiers: ids)
         }
     }

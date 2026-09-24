@@ -619,7 +619,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // прошла бы через сборку строки меню и потрогала её ни за чем.
         case "menuCapsule": Prefs.menuCapsule = on; applied(); return
         case "menuCards": Prefs.menuCards = on; applied(); return
-        case "codexEnabled": Prefs.codexEnabled = on; applied(); return
+        case "codexEnabled":
+            Prefs.codexEnabled = on
+            if !on { Notifier.cancelResets(prefix: "codex_") }
+            applied(); return
         default: break
         }
         // При включённом «своём формате» галочка ДОПОЛНЯЕТ строку, а не

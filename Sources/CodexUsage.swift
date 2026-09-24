@@ -30,7 +30,14 @@ enum CodexAuth {
             .appendingPathComponent(".codex/auth.json")
     }
 
-    static var installed: Bool { return FileManager.default.fileExists(atPath: path().path) }
+    // «Стоит» - это есть ВХОД ПО ПОДПИСКЕ, а не просто файл. У того, кто
+    // работает в Codex по ключу API, в auth.json лежит OPENAI_API_KEY, а
+    // tokens пуст: лимитов подписки у него нет, и раздел с вечным «нет
+    // входа» менял бы ему меню ни за что (ревью 1.20.0).
+    static var installed: Bool {
+        guard let d = try? Data(contentsOf: path()) else { return false }
+        return parse(d) != nil
+    }
 
     struct Token {
         let value: String
@@ -86,8 +93,11 @@ enum CodexUsageParser {
             // лимиты, и «5ч» у модельного совпадало с общим (снимок
             // 1.20.0-c). Берём хвост названия модели: «...-Codex-Spark» -
             // «Spark», и приписываем окно, если оно не пятичасовое.
-            let tail = prefix.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
-                .split(separator: "-").last.map(String.init) ?? n.short
+            let full = prefix.trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+            // Хвост после последнего дефиса - только если это слово: у
+            // «GPT-5» хвост «5» читался бы как «5 часов».
+            let last = full.split(separator: "-").last.map(String.init) ?? full
+            let tail = last.contains(where: { $0.isLetter }) ? last : full
             let short = String(tail.prefix(8))
             b = Bucket(key: b.key, short: n.short == L("5ч", "5h") ? short : short + " " + n.short,
                        long: b.long, percent: b.percent, resetsAt: b.resetsAt,

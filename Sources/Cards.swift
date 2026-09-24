@@ -25,10 +25,14 @@ enum CardStyle {
     static let padX: CGFloat = 16
     static let barH: CGFloat = 6
 
-    static var title: NSFont { return .systemFont(ofSize: 13, weight: .semibold) }
-    static var body: NSFont { return .monospacedDigitSystemFont(ofSize: 12, weight: .regular) }
-    static var small: NSFont { return .monospacedDigitSystemFont(ofSize: 11, weight: .regular) }
-    static var big: NSFont { return .systemFont(ofSize: 15, weight: .bold) }
+    // Размеры - от настройки «шрифт в меню» (по умолчанию 12): кто её
+    // увеличил, должен получить крупнее и карточки, а не только строки
+    // вокруг них (ревью 1.20.0).
+    static var base: CGFloat { return CGFloat(Prefs.menuFontSize) }
+    static var title: NSFont { return .systemFont(ofSize: base + 1, weight: .semibold) }
+    static var body: NSFont { return .monospacedDigitSystemFont(ofSize: base, weight: .regular) }
+    static var small: NSFont { return .monospacedDigitSystemFont(ofSize: base - 1, weight: .regular) }
+    static var big: NSFont { return .systemFont(ofSize: base + 3, weight: .bold) }
 }
 
 // Текст одной строкой с обрезкой по ширине. Выравнивание вправо - по
@@ -70,7 +74,11 @@ final class HeaderCardView: NSView {
         // Одна строка: «Claude · обновлено только что», тариф справа.
         // Двумя строками шапка стоила ряда, а меню и без того упиралось
         // в низ экрана (снимок 1.20.0-b).
-        let h = 6 + lineHeight(CardStyle.big) + 2
+        //
+        // Но беда - своей строкой во всю ширину: в остатке шапки причина
+        // резалась ровно на том, что надо сделать («...Перелогинься»).
+        var h = 6 + lineHeight(CardStyle.big) + 2
+        if c.subAlarm { h += lineHeight(CardStyle.small) + 2 }
         super.init(frame: NSRect(x: 0, y: 0, width: CardStyle.width, height: h))
         autoresizingMask = [.width]
     }
@@ -90,10 +98,14 @@ final class HeaderCardView: NSView {
                           x: x, y: y, width: w - rw - 8)
         // Подпись - вслед за именем, на его же базовой линии: мельче и
         // ниже на разницу высот шрифтов.
-        let dy = CardStyle.big.ascender - CardStyle.small.ascender
-        _ = drawText("  " + card.sub, font: CardStyle.small,
-                     color: card.subAlarm ? .systemOrange : .secondaryLabelColor,
-                     x: x + tw, y: y + dy, width: max(0, w - tw - rw - 8))
+        if card.subAlarm {
+            _ = drawText(card.sub, font: CardStyle.small, color: .systemOrange,
+                         x: x, y: y + lineHeight(CardStyle.big), width: w)
+        } else {
+            let dy = CardStyle.big.ascender - CardStyle.small.ascender
+            _ = drawText("  " + card.sub, font: CardStyle.small, color: .secondaryLabelColor,
+                         x: x + tw, y: y + dy, width: max(0, w - tw - rw - 8))
+        }
     }
 }
 

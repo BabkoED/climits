@@ -491,8 +491,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             menu.addItem(.separator())
             menu.addItem(cardItem(LimitCardView(extraCard(u.extra))))
-            for item in codexSection(cards: true, cols: nil) { menu.addItem(item) }
+            // Оговорки про деньги - сразу под лимитами Claude: они про его
+            // расшифровки, и под разделом Codex читались как про Codex.
             moneyNotes(into: menu)
+            for item in codexSection(cards: true, cols: nil) { menu.addItem(item) }
             if Prefs.showHistory {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
@@ -514,15 +516,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // Верхняя граница обязательна: без неё ширина меню зависит от
             // того, как Anthropic назовёт следующую модель. См. Fmt.clip.
             let nameCells = min(MenuBarController.nameLimit,
-                                (u.buckets.map { $0.short.count } + [extraName.count]).max() ?? 4)
+                                (u.buckets.map { $0.short.count } + [extraName.count]
+                                 + codexShortNames.map { $0.count }).max() ?? 4)
             let cols = columns(nameCells: nameCells, font: Palette.menuFont)
             for b in u.buckets {
                 menu.addItem(row(for: b, active: u.active?.key == b.key, cols: cols))
             }
             menu.addItem(.separator())
             menu.addItem(extraRow(u.extra, cols: cols))
-            for item in codexSection(cards: false, cols: cols) { menu.addItem(item) }
             moneyNotes(into: menu)
+            for item in codexSection(cards: false, cols: cols) { menu.addItem(item) }
             if Prefs.showHistory {
                 menu.addItem(.separator())
                 for line in historyRows(u) { menu.addItem(plain(line)) }
@@ -530,6 +533,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             for item in chatRows() { menu.addItem(item) }
             for item in sessionRows() { menu.addItem(item) }
         } else if let err = lastError {
+            defer { for item in codexSection(cards: Prefs.menuCards, cols: nil) { menu.addItem(item) } }
             let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
             i.isEnabled = true
             i.attributedTitle = NSAttributedString(string: err,
@@ -559,6 +563,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
         } else {
             menu.addItem(dim(L("загружаю\u{2026}", "loading\u{2026}")))
+            for item in codexSection(cards: Prefs.menuCards, cols: nil) { menu.addItem(item) }
         }
 
         menu.addItem(.separator())
@@ -625,6 +630,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // --- Codex ---------------------------------------------------------------
 
+    // Короткие имена лимитов Codex - в общий счёт колонки вида строками:
+    // «Spark 7д» длиннее любого имени Claude и наезжал бы на процент.
+    private var codexShortNames: [String] {
+        guard Prefs.codexEnabled, let u = CodexAPI.shared.usage else { return [] }
+        return u.buckets.map { $0.short }
+    }
+
     // Раздел второго провайдера. Пуст, пока Codex не включён: у кого его
     // нет, меню не меняется вовсе.
     private func codexSection(cards: Bool, cols: Columns?) -> [NSMenuItem] {
@@ -660,8 +672,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             for b in u.buckets {
                 out.append(cardItem(LimitCardView(limitCard(b, first: false, weekReset: weekReset))))
             }
-        } else if let c = cols {
+        } else {
             out.append(dim("Codex \u{00B7} " + sub))
+            // Колонки приходят от лимитов Claude; нет их (Claude не ответил) -
+            // считаем свои по именам Codex.
+            let c = cols ?? columns(nameCells: min(MenuBarController.nameLimit,
+                                                   u.buckets.map { $0.short.count }.max() ?? 4),
+                                    font: Palette.menuFont)
             for b in u.buckets { out.append(row(for: b, active: false, cols: c)) }
         }
         return out

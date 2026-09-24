@@ -29,9 +29,13 @@ final class ServiceStatusFetch {
     static let trust: TimeInterval = 30 * 60
     private static let maxBytes = 2 * 1024 * 1024
 
-    init(api: String, page: String) {
+    // Какие компоненты страницы относятся к нам. nil - вся страница.
+    let relevant: ((String) -> Bool)?
+
+    init(api: String, page: String, relevant: ((String) -> Bool)? = nil) {
         self.api = api
         self.page = page
+        self.relevant = relevant
     }
 
     // Что показывать сейчас. nil - спокойно или не знаем; и то и другое
@@ -67,6 +71,7 @@ final class ServiceStatusFetch {
             if let data = data, data.count <= ServiceStatusFetch.maxBytes,
                let http = response as? HTTPURLResponse, http.statusCode == 200 {
                 parsed = ServiceStatus.parse(data)
+                if let r = self?.relevant { parsed = parsed?.scoped(r) }
             }
             DispatchQueue.main.async {
                 guard let self = self else { return }

@@ -53,6 +53,11 @@ enum Pace {
         let perSec = Double(pct) / elapsed
         var hits: Date? = nil
         var lasts = true
+        // Уже упёрся - «упрёшься в <сейчас>» было бы бессмыслицей (ревью
+        // 1.20.0). Время упора неизвестно и не нужно: лимит выбран.
+        if pct >= 100 {
+            return Reading(expected: expected, delta: delta, lastsToReset: false, hitsAt: nil)
+        }
         if perSec > 0 {
             let toFull = Double(max(0, 100 - pct)) / perSec
             if toFull < left {
@@ -76,9 +81,14 @@ enum Pace {
         } else {
             word = L("ровно", "on pace")
         }
-        let tail = r.lastsToReset
-            ? L("хватит до сброса", "lasts to reset")
-            : L("упрёшься в \(r.hitsAt.map(hhmm) ?? "?")", "runs out at \(r.hitsAt.map(hhmm) ?? "?")")
+        let tail: String
+        if r.lastsToReset {
+            tail = L("хватит до сброса", "lasts to reset")
+        } else if let h = r.hitsAt {
+            tail = L("упрёшься в \(hhmm(h))", "runs out at \(hhmm(h))")
+        } else {
+            tail = L("лимит выбран", "limit used up")
+        }
         return L("Темп: ", "Pace: ") + word + " (\(signed)) \u{00B7} " + tail
     }
 }
