@@ -101,6 +101,14 @@ struct LimitCard {
     var right: String       // «сброс через 2ч 13м»
     var note: String        // строка темпа; пусто - нет
     var noteAlarm: Bool     // темп обгоняет - цветом полосы
+    // Компактная: число справа от заголовка, без ряда под полосой.
+    //
+    // Для модельных лимитов и «сверх лимита». Снимок 1.20.0-a: пять
+    // полных карточек плюс разделы ниже не влезли в экран 1080 точек,
+    // и меню получило стрелку прокрутки. У модельных сброс тот же, что
+    // у недели, - повторять его четыре раза значит тратить ряд на
+    // сказанное. У CodexBar модельная карточка так же короче общей.
+    var compact: Bool = false
 }
 
 final class LimitCardView: NSView {
@@ -109,8 +117,8 @@ final class LimitCardView: NSView {
 
     static func height(_ c: LimitCard) -> CGFloat {
         var h: CGFloat = 6 + lineHeight(CardStyle.title) + 4
-        if c.pct != nil { h += CardStyle.barH + 5 }
-        if !c.left.isEmpty || !c.right.isEmpty { h += lineHeight(CardStyle.body) }
+        if c.pct != nil { h += CardStyle.barH + (c.compact ? 2 : 5) }
+        if !c.compact && (!c.left.isEmpty || !c.right.isEmpty) { h += lineHeight(CardStyle.body) }
         if !c.note.isEmpty { h += 1 + lineHeight(CardStyle.small) }
         return h + 6
     }
@@ -131,12 +139,17 @@ final class LimitCardView: NSView {
         // заголовок режется по остатку, а не наезжает на деньги.
         // Угол не шире половины карточки: деньги с токенами длинные, а
         // заголовок важнее них.
-        let cornerW = card.corner.isEmpty ? 0
-            : min(w * 0.5, ceil(NSAttributedString(string: card.corner,
-                                                   attributes: [.font: CardStyle.small]).size().width))
-        if !card.corner.isEmpty {
-            _ = drawText(card.corner, font: CardStyle.small, color: .secondaryLabelColor,
-                         x: x + w - cornerW, y: y + 2, width: cornerW + 1)
+        // У компактной в углу стоит само число - оно главное, поэтому
+        // шрифтом основного текста и цветом лимита, а не мелким серым.
+        let cornerText = card.compact ? card.right : card.corner
+        let cornerFont = card.compact ? CardStyle.body : CardStyle.small
+        let cornerW = cornerText.isEmpty ? 0
+            : min(w * 0.6, ceil(NSAttributedString(string: cornerText,
+                                                   attributes: [.font: cornerFont]).size().width))
+        if !cornerText.isEmpty {
+            _ = drawText(cornerText, font: cornerFont,
+                         color: card.compact ? .labelColor : .secondaryLabelColor,
+                         x: x + w - cornerW, y: y + (card.compact ? 1 : 2), width: cornerW + 1)
         }
         var tx = x
         if card.first {
@@ -175,10 +188,10 @@ final class LimitCardView: NSView {
                 NSColor.labelColor.withAlphaComponent(0.55).setStroke()
                 tick.stroke()
             }
-            y += CardStyle.barH + 5
+            y += CardStyle.barH + (card.compact ? 2 : 5)
         }
 
-        if !card.left.isEmpty || !card.right.isEmpty {
+        if !card.compact && (!card.left.isEmpty || !card.right.isEmpty) {
             let rw = drawText(card.right, font: CardStyle.body, color: .secondaryLabelColor,
                               x: x, y: y, width: w, right: true)
             _ = drawText(card.left, font: CardStyle.body, color: .labelColor,

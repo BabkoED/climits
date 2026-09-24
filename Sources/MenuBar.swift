@@ -474,8 +474,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // Указатель «упрётся первым» - только когда лимитов больше
             // одного: у единственного он ничего не выделяет.
             let first = u.buckets.count > 1 ? u.active?.key : nil
+            let weekReset = u.bucket("seven_day")?.resetsAt
             for b in u.buckets {
-                menu.addItem(cardItem(LimitCardView(limitCard(b, first: b.key == first))))
+                menu.addItem(cardItem(LimitCardView(limitCard(b, first: b.key == first,
+                                                              weekReset: weekReset))))
             }
             menu.addItem(.separator())
             menu.addItem(cardItem(LimitCardView(extraCard(u.extra))))
@@ -628,7 +630,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return HeaderCard(title: "Claude", right: plan, sub: sub, subAlarm: false)
     }
 
-    private func limitCard(_ b: Bucket, first: Bool) -> LimitCard {
+    private func limitCard(_ b: Bucket, first: Bool, weekReset: Date? = nil) -> LimitCard {
         let sp = spentParts(for: b)
         let corner = [sp.money, sp.tokens].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
         let pace = Pace.reading(key: b.key, pct: b.pct, resetsAt: b.resetsAt)
@@ -637,6 +639,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // «с запасом (−46%)» в каждой карточке, и строка темпа стала бы
         // шумом, который пролистывают мимо.
         let showPace = pace.map { !b.isModel || !$0.lastsToReset } ?? false
+        if b.isModel {
+            // Компактная: «20% · ≈$12.7 · 21,5M» справа от имени. Сброс -
+            // только если он НЕ совпадает с недельным: тогда это новость.
+            var right = "\(b.pct)%"
+            if !corner.isEmpty { right += " \u{00B7} " + corner }
+            var note = showPace ? pace.map { Pace.text($0, hhmm: Fmt.hhmm) } ?? "" : ""
+            if let r = b.resetsAt, let wr = weekReset, abs(r.timeIntervalSince(wr)) > 3600 {
+                let reset = L("сброс через ", "resets in ") + Fmt.untilReset(r)
+                note = note.isEmpty ? reset : note + " \u{00B7} " + reset
+            }
+            return LimitCard(title: b.long, first: first, corner: "", pct: b.pct,
+                             color: Palette.color(for: b), marker: nil, left: "",
+                             right: right, note: note,
+                             noteAlarm: pace.map { !$0.lastsToReset } ?? false, compact: true)
+        }
         return LimitCard(
             title: b.long,
             first: first,
@@ -661,8 +678,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let limit = e.limitMinor, limit > 0, let p = e.percent {
             return LimitCard(title: title, first: false, corner: "", pct: p,
                              color: Palette.color(forPercent: p, severity: "normal"), marker: nil,
-                             left: e.usedText + L(" из ", " of ") + e.money(limit),
-                             right: "\(p)%", note: "", noteAlarm: false)
+                             left: "",
+                             right: e.usedText + L(" из ", " of ") + e.money(limit) + " \u{00B7} \(p)%",
+                             note: "", noteAlarm: false, compact: true)
         }
         return LimitCard(title: title, first: false, corner: "", pct: nil,
                          color: .secondaryLabelColor, marker: nil,
