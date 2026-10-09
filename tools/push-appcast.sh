@@ -33,8 +33,21 @@ python3 -c "import sys,xml.etree.ElementTree as E; E.parse(sys.argv[1])" "$FEED"
 
 BLOB="$(git hash-object -w "$FEED")"
 TREE="$(printf '100644 blob %s\tappcast.xml\n' "$BLOB" | git mktree)"
-COMMIT="$(git commit-tree "$TREE" -m "лента обновлений")"
-git push -f origin "$COMMIT:refs/heads/appcast"
+# Новая лента - ПРОДОЛЖЕНИЕ ветки, а не её замена.
+#
+# До 1.21.0 ветка была сиротой в один коммит и переписывалась `push -f`.
+# С 08.10.2026 голый force-push запрещён гейтом удаления (решение Антона),
+# и он здесь не нужен вовсе: обычный пуш поверх текущей ленты даёт тот же
+# файл по тому же адресу, а прошлые ленты остаются в истории ветки.
+# В каждом коммите по-прежнему один файл - история кода сюда не попадает.
+git fetch -q origin appcast || true
+PARENT="$(git rev-parse --verify -q refs/remotes/origin/appcast || true)"
+if [ -n "$PARENT" ]; then
+  COMMIT="$(git commit-tree "$TREE" -p "$PARENT" -m "лента обновлений")"
+else
+  COMMIT="$(git commit-tree "$TREE" -m "лента обновлений")"
+fi
+git push origin "$COMMIT:refs/heads/appcast"
 
 echo "опубликовано:"
 echo "  https://raw.githubusercontent.com/BabkoED/climits/appcast/appcast.xml"
