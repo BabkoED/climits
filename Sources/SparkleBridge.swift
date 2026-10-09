@@ -47,6 +47,10 @@ enum SparkleState {
     case off               // фреймворк есть, галочка снята
     case ready             // работает
     case failed(String)    // сказал об ошибке
+    // Подпись или проверка архива не сошлись. Это не поломка Sparkle, а
+    // повод насторожиться: установка остановлена, и запасной путь через
+    // GitHub намеренно НЕ открывался (ревью 09.10.2026).
+    case refused(String)
 
     var word: String {
         switch self {
@@ -54,6 +58,7 @@ enum SparkleState {
         case .off:      return L("выключен", "off")
         case .ready:    return L("готов", "ready")
         case .failed(let e): return L("ошибка: \(e)", "error: \(e)")
+        case .refused(let e): return L("остановлен: \(e)", "stopped: \(e)")
         }
     }
 }
@@ -67,7 +72,10 @@ enum SparkleState {
 // НЕ будет: отказы бывают разные, а угадывать их коды по памяти - то же
 // самое, что выдумывать ключи codesign. Он только называет причину.
 private final class BridgeDelegate: NSObject, SPUUpdaterDelegate {
-    var onAbort: ((String) -> Void)?
+    // Текст, домен и код ошибки. Одного текста мало: по нему не отличить
+    // «подпись не сошлась» от «сеть моргнула», а поступать с ними надо
+    // противоположно.
+    var onAbort: ((String, String, Int) -> Void)?
     var onNoUpdate: (() -> Void)?
 
     // «У тебя последняя версия» - это НОРМАЛЬНЫЙ ответ, а не отказ.
@@ -87,7 +95,8 @@ private final class BridgeDelegate: NSObject, SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-        onAbort?(error.localizedDescription)
+        let ns = error as NSError
+        onAbort?(error.localizedDescription, ns.domain, ns.code)
     }
 }
 #endif
@@ -97,6 +106,9 @@ final class SparkleBridge {
     private init() {}
 
     private var lastError: String?
+    // Отказ по подписи - отдельно от прочих: он показывается иначе и
+    // запасного пути не открывает.
+    private var refusedText: String?
     // Отметка «нам только что сказали, что версия последняя». Гасит
     // следующий за этим отказ: он про ту же самую проверку.
     private var sawNoUpdate = false
@@ -121,6 +133,7 @@ final class SparkleBridge {
 
     var state: SparkleState {
         guard isBuiltIn else { return .notBuilt }
+        if let r = refusedText { return .refused(r) }
         if let e = lastError { return .failed(e) }
         return Prefs.sparkleEnabled ? .ready : .off
     }
@@ -135,7 +148,7 @@ final class SparkleBridge {
             self?.sawNoUpdate = true
             self?.lastError = nil
         }
-        delegate.onAbort = { [weak self] text in
+        delegate.onAbort = { [weak self] text, domain, code in
             guard let self = self else { return }
             // Отказ сразу после «версия последняя» - это конец той же
             // проверки, а не поломка. Запасной путь тут не нужен: ответ
@@ -144,6 +157,22 @@ final class SparkleBridge {
                 self.sawNoUpdate = false
                 self.fallback = nil
                 return
+            }
+            switch UpdateAbort.decide(domain: domain, code: code) {
+            case .quiet:
+                // Человек сам отменил установку - например, окно пароля.
+                // Это не отказ: второй обновлятор поверх не открываем.
+                self.fallback = nil
+                return
+            case .stop:
+                // Подпись EdDSA или проверка архива не сошлись. Путь через
+                // GitHub сверяет только сумму из текста того же релиза -
+                // подменённый архив прошёл бы его. Останавливаемся.
+                self.refusedText = text
+                self.fallback = nil
+                return
+            case .fallback:
+                break
             }
             self.lastError = text
             // А вот это настоящий отказ - и тогда переключаемся сами.
@@ -176,6 +205,7 @@ final class SparkleBridge {
         #if canImport(Sparkle)
         guard Prefs.sparkleEnabled else { return false }
         lastError = nil
+        refusedText = nil
         sawNoUpdate = false
         startIfEnabled()
         guard let c = controller else { return false }

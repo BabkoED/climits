@@ -47,3 +47,31 @@ enum Version {
         return String(notes[r]).lowercased()
     }
 }
+
+// Что делать, когда Sparkle отказал.
+//
+// ЗАЧЕМ. До 1.21.0 любой отказ сам открывал путь через GitHub, в том числе
+// «подпись не сошлась». А на пути через GitHub сверяется только сумма из
+// текста того же релиза: кто может править релиз, подменит и архив, и
+// сумму. Подпись EdDSA - единственная проверка, ключ от которой не лежит
+// на GitHub, и обходить её запасным путём нельзя (ревью 09.10.2026).
+//
+// Вынесено сюда, а не в SparkleBridge: там AppKit и Sparkle, и решение
+// не проверялось бы ничем, кроме живой поломки. Коды - из SUErrors.h
+// Sparkle 2.9.6, домен - из SUConstants.m.
+enum UpdateAbort: Equatable {
+    case fallback   // обычный отказ: сеть, лента, распаковка - можно GitHub
+    case stop       // подпись или проверка архива не сошлись - стоп
+    case quiet      // человек сам отменил установку - не отказ вовсе
+
+    static let sparkleDomain = "SUSparkleErrorDomain"
+
+    static func decide(domain: String, code: Int) -> UpdateAbort {
+        guard domain == sparkleDomain else { return .fallback }
+        switch code {
+        case 3001, 3002: return .stop      // SUSignatureError, SUValidationError
+        case 4007: return .quiet           // SUInstallationCanceledError
+        default: return .fallback
+        }
+    }
+}

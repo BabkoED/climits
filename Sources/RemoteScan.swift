@@ -619,7 +619,20 @@ for path, fams in sorted(projects.items(), key=lambda kv: -_weight(kv[1]))[:TITL
     if name:
         # Ключ-имя мак отличает от ключа-пути по ведущей косой черте
         # и второй раз имя искать не идёт.
-        named_projects[name] = fams
+        #
+        # Одинаковое имя у двух разговоров - СКЛАДЫВАЕМ, а не затираем.
+        # До 1.21.0 здесь было присваивание: два чата, начатые словом
+        # «продолжаем», давали в разбивке один, причём дешёвый затирал
+        # дорогой (ревью 09.10.2026, прогон: из 3000 токенов осталось 1000).
+        # Мак складывает одинаковые ключи с разных машин так же.
+        if name in named_projects:
+            acc = named_projects[name]
+            for f, v in fams.items():
+                cur = acc.setdefault(f, [0, 0, 0, 0, 0, 0])
+                for k in range(6):
+                    cur[k] += v[k]
+        else:
+            named_projects[name] = fams
         projects[path] = None
 for path, fams in projects.items():
     if fams is not None:
@@ -670,7 +683,12 @@ def _result_sig(res):
         return str(res)[:2000] if res is not None else None
     out = res.get("stdout")
     err = res.get("stderr")
-    if isinstance(out, str) or isinstance(err, str):
+    # Вывод - только НЕПУСТОЙ, как в Loops.resultSignature на маке. Пустой
+    # stdout у фонового запуска - не вывод: настоящий придёт позже, а в
+    # ответе лежит новый backgroundTaskId. Прежде пустая строка считалась
+    # выводом, и три фоновых запуска одной команды давали «крутится»,
+    # а мак в том же случае молчал (ревью 09.10.2026).
+    if (isinstance(out, str) and out) or (isinstance(err, str) and err):
         return (out or "") + "\x00" + (err or "")
     return json.dumps(res, sort_keys=True, default=str)[:2000]
 

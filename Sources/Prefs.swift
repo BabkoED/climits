@@ -237,6 +237,28 @@ struct Prefs {
         return out
     }
 
+    // Хост, выбранный из выпадающего списка, ДОПОЛНЯЕТ список машин.
+    //
+    // Поле в настройках однострочное, а выпадающий список подставлял
+    // выбранное значение вместо всего текста: было «vps7, mono», выбрал
+    // mono - и vps7 молча выпадал из счёта (ревью 09.10.2026). Уже
+    // вписанный хост - в том числе под ярлыком «vps7=адрес» - не
+    // повторяется: повтор удвоил бы его деньги.
+    static func addingHost(_ picked: String, to list: String) -> String {
+        let p = picked.trimmingCharacters(in: .whitespaces)
+        let entries = list.split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !p.isEmpty else { return list }
+        func host(_ entry: String) -> String {
+            let first = entry.split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? entry
+            if let eq = first.firstIndex(of: "=") { return String(first[first.index(after: eq)...]) }
+            return first
+        }
+        if entries.contains(where: { host($0) == host(p) }) { return list }
+        return (entries + [p]).joined(separator: ", ")
+    }
+
     // Прежние ключи остались читаемыми: ими пользуется переход выше и
     // окно настроек, когда список ещё не заполнен.
     static var remoteHost: String {

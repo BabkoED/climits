@@ -193,8 +193,11 @@ enum CLI {
         let sem = DispatchSemaphore(value: 0)
         var out = L("не ответил за 10 с", "no answer in 10 s")
         URLSession.shared.dataTask(with: req) { data, _, _ in
-            if let d = data, let st = ServiceStatus.parse(d) {
-                out = st.isCalm ? L("всё работает", "all systems operational")
+            // Тем же сужением, что и трей: иначе отчёт кричал бы о сбое
+            // Console, а значок молчал, и они противоречили бы друг другу.
+            if let d = data, let st = ServiceStatus.parse(d)?.scoped(ServiceStatus.claudeRelevant) {
+                out = st.isCalm ? L("claude.ai, Claude Code и API работают",
+                                    "claude.ai, Claude Code and API are operational")
                                 : "\(st.indicator): \(st.line)"
             } else if data != nil {
                 out = L("ответ не разобран", "answer not understood")

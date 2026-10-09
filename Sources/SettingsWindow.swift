@@ -665,6 +665,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // Выбор мышью из списка не проходит через controlTextDidEndEditing:
     // без этого выбранный адрес виден в поле, но никуда не записан.
     func comboBoxSelectionDidChange(_ notification: Notification) {
+        // Текст поля ДО выбора - он ещё старый как раз в этот момент. Для
+        // списка машин выбранный хост ДОПИСЫВАЕТСЯ к нему: прежде выбор
+        // заменял весь текст, и из «vps7, mono» выбор mono молча стирал
+        // vps7 (ревью 09.10.2026).
+        let before = (notification.object as? NSComboBox)?.stringValue ?? ""
         // Через главную очередь: в момент уведомления stringValue у поля
         // ещё старый, и записалось бы предыдущее значение.
         DispatchQueue.main.async { [weak self] in
@@ -676,9 +681,19 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             // при каких обстоятельствах - оно станет частью шкалы или
             // шаблона и вылезет в строку меню.
             let picked = Presets.value(of: raw)
-            box.stringValue = picked
             let key = box.identifier?.rawValue ?? ""
-            if key == "remoteHosts" { self.remoteResult.stringValue = "" }
+            if key == "remoteHosts" {
+                // Если поле уже успело показать выбранное, текста «до» нет -
+                // тогда дополняем сохранённый список, а не пустоту.
+                let base = before.trimmingCharacters(in: .whitespaces) == picked
+                    ? Prefs.remoteHosts : before
+                let merged = Prefs.addingHost(picked, to: base)
+                box.stringValue = merged
+                self.remoteResult.stringValue = ""
+                self.apply(key: key, value: merged)
+                return
+            }
+            box.stringValue = picked
             self.apply(key: key, value: picked)
         }
     }

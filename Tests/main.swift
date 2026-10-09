@@ -173,7 +173,11 @@ print("\nденьги")
 
 // Прайс Opus 5: $5 за 1M входных, $25 за 1M выходных, запись в кэш 1.25x
 // от входа, чтение 0.1x. Миллион входных и миллион выходных - это $30.
-let opus = Pricing.price(for: "claude-opus-5")
+//
+// Цена задаётся ЗДЕСЬ, а не берётся из встроенной таблицы: эти проверки -
+// про арифметику счёта, а таблица меняется с каждым новым Opus (09.10.2026
+// она переехала на Opus 5.5, и арифметика от этого не должна краснеть).
+let opus = ModelPrice.standard(input: 5, output: 25)
 check("прайс Opus разобран", "\(opus.input)/\(opus.output)", "5.0/25.0")
 check("запись в кэш дороже входа в 1.25 раза", "\(opus.cacheWrite)", "6.25")
 check("чтение из кэша дешевле входа в 10 раз", "\(opus.cacheRead)", "0.5")
@@ -257,8 +261,9 @@ check("всего два сообщения, а не пять строк", win.t
 check("чтение из кэша учтено отдельно", "\(win.byFamily["opus"]?.cacheRead ?? -1)", "500000")
 check("сообщение за пределами окна не попало", (win.byFamily["opus"]?.input ?? 0) < 9_999_999)
 check("короткий файл не помечен обрезанным", !win.truncated)
-// 1000*5 + 2000*25 + 500000*0.5 = 5000 + 50000 + 250000 = 305000 / 1e6 = $0.305
-check("стоимость окна посчитана", MoneyView.money(win.cost).hasPrefix("$0.3"))
+// Встроенная таблица с 09.10.2026 - Opus 5.5 и Sonnet 5.5:
+// 1000*4 + 2000*20 + 500000*0.2 + 300*2 + 100*10 = 145600 / 1e6 = $0.1456
+check("стоимость окна посчитана", MoneyView.money(win.cost), "$0.15")
 try? FileManager.default.removeItem(at: tmp)
 
 
@@ -992,7 +997,9 @@ check("и не пусто", !everything.isEmpty)
 // целиком объяснилась ценой записи в кэш.
 print("\nсрок жизни кэша и быстрый режим")
 
-let opusP = Pricing.price(for: "claude-opus-5")
+// Явная цена Opus 5 - по той же причине, что и выше: проверяется
+// арифметика записи в кэш, а не версия встроенной таблицы.
+let opusP = ModelPrice.standard(input: 5, output: 25)
 check("пятиминутная запись - вход x1.25", "\(opusP.cacheWrite)", "6.25")
 check("часовая запись - вход x2", "\(opusP.cacheWrite1h)", "10.0")
 
@@ -1021,9 +1028,11 @@ let legacy = TokenTally(input: 0, output: 0, cacheWrite: 1_000_000, cacheRead: 0
 check("без разбивки - по пятиминутной цене", MoneyView.money(legacy.cost(opusP)), "$6.25")
 
 let fastP = Pricing.price(for: "opus-fast")
-check("быстрый режим вдвое дороже по входу", "\(fastP.input)", "10.0")
-check("и по выходу", "\(fastP.output)", "50.0")
-check("обычный ключ остался прежним", "\(Pricing.price(for: "opus").input)", "5.0")
+// Быстрый Opus 5.5 - $8/$40 (страница цен Anthropic, 09.10.2026), вдвое
+// дороже обычного $4/$20.
+check("быстрый режим вдвое дороже по входу", "\(fastP.input)", "8.0")
+check("и по выходу", "\(fastP.output)", "40.0")
+check("обычный ключ остался прежним", "\(Pricing.price(for: "opus").input)", "4.0")
 // Незнакомое семейство с суффиксом не должно проваливаться в sonnet:
 // это занизило бы втрое, а не на надбавку.
 check("незнакомый быстрый не падает на запасную цену",
@@ -2241,6 +2250,115 @@ check("сбой в Codex API - тревога", !(oai2?.scoped(isCodex).isCalm ?
 check("сбой в Codex API - назван", oai2?.scoped(isCodex).line, L("не работает: Codex API", "affected: Codex API"))
 let gpt5 = CodexUsageParser.parse(Data(#"{"additional_rate_limits":[{"limit_name":"GPT-5","rate_limit":{"primary_window":{"used_percent":1,"limit_window_seconds":18000}}}]}"#.utf8))
 check("модель «GPT-5» - не «5»", gpt5?.usage.buckets.first?.short, "GPT-5")
+
+// Ревью 09.10.2026 - выпуск 1.21.0.
+print("\nревью 09.10.2026")
+
+// 1. Статус Anthropic - только про то, чем пользуемся: claude.ai, Claude
+// Code и API. 09.10.2026 точка горела 57 часов из-за сбоя одной Console.
+// Главное - подключение: до 1.21.0 фильтр для Claude не стоял вовсе.
+check("статус Claude сужен: Console не наше",
+      ServiceStatusFetch.claude.relevant?("Claude Console (platform.claude.com)") == false)
+check("статус Claude сужен: Claude Code наше",
+      ServiceStatusFetch.claude.relevant?("Claude Code") == true)
+check("Console - не наше", !ServiceStatus.claudeRelevant("Claude Console (platform.claude.com)"))
+check("Cowork - не наше", !ServiceStatus.claudeRelevant("Claude Cowork"))
+check("claude.ai - наше", ServiceStatus.claudeRelevant("claude.ai"))
+check("Claude Code - наше", ServiceStatus.claudeRelevant("Claude Code"))
+check("API - наше", ServiceStatus.claudeRelevant("Claude API (api.anthropic.com)"))
+// Ответ - как живой от 09.10.2026: инцидент и сломанный компонент - Console.
+let consoleOnly = ServiceStatus.parse(Data("""
+{"status":{"indicator":"minor","description":"Partially Degraded Service"},
+ "incidents":[{"name":"Elevated errors on platform.claude.com","status":"monitoring","impact":"major",
+               "components":[{"name":"Claude Console (platform.claude.com)"}]}],
+ "components":[{"name":"claude.ai","status":"operational"},
+               {"name":"Claude Console (platform.claude.com)","status":"degraded_performance"},
+               {"name":"Claude Code","status":"operational"}]}
+""".utf8))
+check("без фильтра сбой Console - тревога, как было", !(consoleOnly?.isCalm ?? true))
+check("с фильтром сбой Console - спокойно", consoleOnly?.scoped(ServiceStatus.claudeRelevant).isCalm ?? false)
+// Инцидент уже назвал Claude Code, а компонент ещё не перевели в сбой.
+let codeDown = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial Outage"},
+ "incidents":[{"name":"Elevated errors for Claude Opus 5.5","status":"investigating","impact":"major",
+               "components":[{"name":"claude.ai"},{"name":"Claude Code"}]},
+              {"name":"Delayed exports on platform.claude.com","status":"investigating","impact":"minor",
+               "components":[{"name":"Claude Console (platform.claude.com)"}]}],
+ "components":[{"name":"Claude Code","status":"operational"}]}
+""".utf8))
+check("инцидент назвал Claude Code - тревога", !(codeDown?.scoped(ServiceStatus.claudeRelevant).isCalm ?? true))
+check("тревога названа инцидентом, чужой отброшен",
+      codeDown?.scoped(ServiceStatus.claudeRelevant).line, "Elevated errors for Claude Opus 5.5")
+// Компонент в сбое без инцидента - тоже тревога, словами о компоненте.
+let compOnly = ServiceStatus.parse(Data("""
+{"status":{"indicator":"minor","description":"Minor"},
+ "components":[{"name":"Claude Code","status":"partial_outage"}]}
+""".utf8))
+check("сломан Claude Code без инцидента - тревога",
+      compOnly?.scoped(ServiceStatus.claudeRelevant).line, L("не работает: Claude Code", "affected: Claude Code"))
+// Инцидент без списка компонентов: за 30 дней до 09.10.2026 оба таких были
+// не про Claude Code (подписки Google Play, лимиты трат). Не тревожим.
+let noScope = ServiceStatus.parse(Data("""
+{"status":{"indicator":"minor","description":"Minor"},
+ "incidents":[{"name":"Issues with Google Play subscriptions","status":"investigating","impact":"none"}],
+ "components":[]}
+""".utf8))
+check("инцидент без компонентов - спокойно", noScope?.scoped(ServiceStatus.claudeRelevant).isCalm ?? false)
+
+// 2. После ошибки запроса трей помечает цифры как несвежие.
+let freshU = UsageParser.parse(body: #"{"five_hour":{"utilization":23,"resets_at":"2030-01-01T00:00:00Z"}}"#,
+                               fetchedAt: Date(), isStale: false)!
+check("свежие цифры - без «~»", !BarTitle.render("{5h}", usage: freshU).hasSuffix("~"))
+check("после ошибки запроса - с «~»", BarTitle.render("{5h}", usage: freshU, stale: true).hasSuffix("~"))
+check("сброс уже прошёл - «0м», а не вечная «~1м»", Fmt.left(at(-3600)), L("0м", "0m"))
+
+// 4. «Упрёшься в 15:56» - с днём, если это не сегодня.
+let noonToday = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+let soonT = noonToday.addingTimeInterval(2 * 3600)
+check("сегодня - только время", Fmt.moment(soonT, now: noonToday), Fmt.hhmm(soonT))
+let in2d = noonToday.addingTimeInterval(2 * 86400)
+check("через двое суток - с днём недели", Fmt.moment(in2d, now: noonToday),
+      weekdayShort(Calendar.current.component(.weekday, from: in2d)) + " " + Fmt.hhmm(in2d))
+let in10d = noonToday.addingTimeInterval(10 * 86400)
+check("дальше недели - с числом, а не днём недели",
+      Fmt.moment(in10d, now: noonToday).contains(String(Calendar.current.component(.day, from: in10d)))
+      && Fmt.moment(in10d, now: noonToday).hasSuffix(Fmt.hhmm(in10d)))
+let weekPace = Pace.reading(key: "seven_day", pct: 70, resetsAt: noonToday.addingTimeInterval(3 * 86400), now: noonToday)
+check("темп недели называет день",
+      weekPace.map { Pace.text($0, hhmm: { Fmt.moment($0, now: noonToday) }) }?
+          .contains(weekdayShort(Calendar.current.component(.weekday, from: weekPace!.hitsAt!))) ?? false)
+
+// 6. Хост из выпадающего списка ДОПОЛНЯЕТ список машин, а не заменяет его.
+check("хост добавляется к списку", Prefs.addingHost("mono", to: "vps7"), "vps7, mono")
+check("уже есть - список не трогаем", Prefs.addingHost("mono", to: "vps7, mono"), "vps7, mono")
+check("уже есть под ярлыком", Prefs.addingHost("51.38.110.54", to: "vps7=51.38.110.54"), "vps7=51.38.110.54")
+check("пустой список - один хост", Prefs.addingHost("vps7", to: ""), "vps7")
+check("каталог при хосте не теряется", Prefs.addingHost("mono", to: "vps8 ~/work/.claude/projects"),
+      "vps8 ~/work/.claude/projects, mono")
+check("список по строкам - тоже дополняем", Prefs.addingHost("mono", to: "vps7\nvps8"), "vps7, vps8, mono")
+
+// 8. Отказ Sparkle по подписи НЕ открывает путь через GitHub.
+check("подпись не сошлась - запасной путь закрыт",
+      UpdateAbort.decide(domain: "SUSparkleErrorDomain", code: 3001) == .stop)
+check("архив не прошёл проверку - тоже", UpdateAbort.decide(domain: "SUSparkleErrorDomain", code: 3002) == .stop)
+check("отмена установки человеком - не отказ", UpdateAbort.decide(domain: "SUSparkleErrorDomain", code: 4007) == .quiet)
+check("сеть не ответила - запасной путь", UpdateAbort.decide(domain: "SUSparkleErrorDomain", code: 2001) == .fallback)
+check("чужой домен с тем же кодом - запасной путь", UpdateAbort.decide(domain: "NSURLErrorDomain", code: 3001) == .fallback)
+
+// Встроенный прайс - официальные цены на 09.10.2026: страница цен и анонсы
+// Anthropic, LiteLLM совпал по Opus 5.5. Нужен, только когда скачать прайс
+// не удалось ни разу, - и тогда он не должен завышать неделю на 75%.
+let bOpus = Pricing.builtin["opus"]!
+check("встроенный Opus 5.5: $4/$20", "\(bOpus.input)/\(bOpus.output)", "4.0/20.0")
+check("встроенный Opus 5.5: чтение кэша $0.20, запись $5 и $8",
+      "\(bOpus.cacheRead)/\(bOpus.cacheWrite)/\(bOpus.cacheWrite1h)", "0.2/5.0/8.0")
+let bSonnet = Pricing.builtin["sonnet"]!
+check("встроенный Sonnet 5.5: $2/$10, чтение кэша $0.20",
+      "\(bSonnet.input)/\(bSonnet.output)/\(bSonnet.cacheRead)", "2.0/10.0/0.2")
+let bFable = Pricing.builtin["fable"]!
+check("встроенный Fable 5.1: чтение кэша $0.25", "\(bFable.cacheRead)", "0.25")
+let bHaiku = Pricing.builtin["haiku"]!
+check("встроенный Haiku 4.5: $1/$5", "\(bHaiku.input)/\(bHaiku.output)", "1.0/5.0")
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

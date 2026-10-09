@@ -43,6 +43,10 @@ enum Fmt {
     static func left(_ date: Date?) -> String {
         guard let d = date else { return "\u{2014}" }
         let secs = Int(d.timeIntervalSinceNow)
+        // Сброс уже прошёл - времени не осталось, и это ноль, а не «около
+        // минуты». Бывает на несвежих цифрах: после ошибки запроса трей
+        // держал «23% ~1м» сутками (ревью 09.10.2026).
+        if secs <= 0 { return L("0м", "0m") }
         if secs < 60 { return L("~1м", "~1m") }
         let days = secs / 86400
         let hours = (secs % 86400) / 3600
@@ -95,6 +99,27 @@ enum Fmt {
         f.locale = .autoupdatingCurrent
         f.setLocalizedDateFormatFromTemplate("j:mm")
         return f.string(from: date)
+    }
+
+    // Момент в будущем: «15:56» сегодня, «вс 15:56» в ближайшую неделю,
+    // «12.10 15:56» дальше.
+    //
+    // ЗАЧЕМ. «Упрёшься в 15:56» у недельного лимита бывает через двое-трое
+    // суток, а одни часы читаются как сегодня. Прогон 09.10.2026: пятница
+    // 22:48, карточка «упрёшься в 15:56» - а на деле воскресенье.
+    static func moment(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let t = hhmm(date)
+        if calendar.isDate(date, inSameDayAs: now) { return t }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                           to: calendar.startOfDay(for: date)).day ?? 0
+        if days > 0 && days < 7 {
+            return weekdayShort(calendar.component(.weekday, from: date)) + " " + t
+        }
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.timeZone = calendar.timeZone
+        f.setLocalizedDateFormatFromTemplate("ddMM")
+        return f.string(from: date) + " " + t
     }
 
     // 1_234_567 -> «1,2м», 1_739_000_000 -> «1,7млрд». В меню важно оценить
@@ -320,7 +345,8 @@ enum BarTitle {
     static func render(_ template: String, usage: Usage,
                        money: MoneyView? = nil, tokens: TokensView? = nil,
                        sessions: SessionSummary? = nil,
-                       iconGlyph: String? = nil) -> String {
+                       iconGlyph: String? = nil,
+                       stale: Bool? = nil) -> String {
         var s = template
 
         func put(_ macro: String, _ value: String) {
@@ -409,7 +435,10 @@ enum BarTitle {
 
         s = tidy(s)
         if s.isEmpty { s = "\(usage.worst?.short ?? "") \(usage.worst?.pct ?? 0)%" }
-        if usage.isStale { s = s.isEmpty ? "~" : s + "~" }  // честный признак несвежих цифр
+        // Честный признак несвежих цифр. stale задаёт трей: после ошибки
+        // запроса цифры остаются прежними, а сами они про это не знают -
+        // до 1.21.0 трей показывал их как живые (ревью 09.10.2026).
+        if stale ?? usage.isStale { s = s.isEmpty ? "~" : s + "~" }
         return s
     }
 

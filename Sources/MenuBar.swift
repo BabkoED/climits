@@ -39,6 +39,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // в памяти: после перезапуска «смотрел ли человек» неизвестно, и это
     // честно считается «давно».
     private var lastMenuOpen: Date?
+    // Снимок меню в CI: сессии там подставлены руками, и перечитывать их
+    // с диска нельзя - на машине CI их нет, и раздел ушёл бы из кадра.
+    private var shotMode = false
 
     // Сессии: кто работает, кто ждёт ответа. Два источника лежат отдельно
     // намеренно. Свои читаются дёшево и прямо перед показом меню - это
@@ -152,6 +155,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // и цены после подорожания так и остались бы прошлыми. Сам вызов
         // дешёвый - смотрит отметку времени и обычно сразу возвращается.
         PricingFetch.refreshIfStale { [weak self] in self?.updateTitle() }
+        // Новая версия - по тому же правилу, что и прайс: раньше проверка шла
+        // только при запуске, а приложение живёт неделями, и выпуск не
+        // замечался до перезапуска (ревью 09.10.2026). Порог в сутки живёт
+        // внутри Updater, так что лишних запросов к GitHub это не даёт.
+        checkUpdatesQuietly()
         // Статус Anthropic - по тем же поводам, со своим порогом в пять
         // минут. Перерисовка только когда он сменился.
         ServiceStatusFetch.claude.refreshIfDue { [weak self] in self?.updateTitle() }
@@ -203,6 +211,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // строка меню. Отдельная функция, а не строка внутри updateTitle,
     // чтобы чтение файлов не оказалось внутри отрисовки.
     private func refreshLocalSessions() {
+        guard !shotMode else { return }
         guard Prefs.showSessions || Prefs.effectiveTemplate.contains("{sessions}") else {
             localSessions = []
             localMemory = MachineMemory()
@@ -403,10 +412,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // {icon} отдаётся пустым, и он схлопывается вместе со своим
         // разделителем. Иначе в строке стояли бы оба - и картинка, и знак.
         let ring = Prefs.barRing && template.contains("{icon}")
+        // Несвежие - и когда ответ взят из кэша, и когда последний запрос
+        // не прошёл: цифры тогда прежние, а сами они об этом не знают. До
+        // 1.21.0 после 401 трей показывал их как живые (ревью 09.10.2026).
         var text = BarTitle.render(template, usage: u,
                                    money: money ?? nil, tokens: tokens ?? nil,
                                    sessions: Sessions.summary(sessions),
-                                   iconGlyph: ring ? "" : nil)
+                                   iconGlyph: ring ? "" : nil,
+                                   stale: u.isStale || lastError != nil)
         // Без кольца точку рисовать не на чем - сбой говорит знак в тексте.
         // Два знака места, и только пока сбой идёт.
         if alarm != nil && !ring { text = "\u{26A0} " + text }
@@ -441,11 +454,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Открытие меню - хороший повод освежить данные: человек смотрит именно
     // сейчас. Порог между запросами внутри fetch всё равно не даст частить.
     func menuWillOpen(_ menu: NSMenu) {
-        // Сессии читаются здесь, а не только по ответу сети: ответ может
-        // прийти из кэша и вообще не дойти до чтения файлов, а «ждёт меня»
-        // устаревшее на пять минут - это ровно та цифра, ради которой
-        // меню и открывают.
-        refreshLocalSessions()
         lastMenuOpen = Date()
         refresh(force: false)
         // Смотрит - значит ближайший опрос переносится на самую частую
@@ -454,6 +462,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Сессии читаются ЗДЕСЬ, до сборки меню. Ответ сети может прийти из
+        // кэша и до файлов не дойти, а «ждёт меня», устаревшее на пять
+        // минут, - ровно та цифра, ради которой меню и открывают.
+        //
+        // До 1.21.0 чтение стояло в menuWillOpen, а AppKit зовёт его ПОСЛЕ
+        // menuNeedsUpdate. Доказано снимком CI: в кадре были подставные
+        // сессии, хотя menuWillOpen их перечитывал. То есть свежее чтение
+        // доставалось только следующему открытию, а это открытие показывало
+        // прошлый опрос - в простое до 15 минут (ревью 09.10.2026).
+        refreshLocalSessions()
         menu.removeAllItems()
 
         // Сбой у Anthropic - первой строкой, выше любых цифр: он объясняет
@@ -597,6 +615,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Об отказе Sparkle молчать нельзя даже теперь, когда он не мешает
         // обновиться: иначе «работает» и «молча падает каждый раз, а
         // обновляет запасной» выглядят одинаково, и поломка живёт годами.
+        // Подпись обновления не сошлась - красным: это не сбой сети, а повод
+        // разобраться, и запасной путь здесь намеренно не открывался.
+        if case .refused(let e) = SparkleBridge.shared.state {
+            let i = dim(L("обновление остановлено - подпись не сошлась: \(Fmt.clip(e, 24))",
+                          "update stopped - signature mismatch: \(Fmt.clip(e, 24))"))
+            i.attributedTitle = NSAttributedString(string: i.title, attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.systemRed,
+            ])
+            menu.addItem(i)
+        }
         if case .failed(let e) = SparkleBridge.shared.state {
             menu.addItem(dim(L("Sparkle не смог, шёл через GitHub: \(Fmt.clip(e, 32))",
                                "Sparkle failed, used GitHub: \(Fmt.clip(e, 32))")))
@@ -717,7 +746,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // только если он НЕ совпадает с недельным: тогда это новость.
             var right = "\(b.pct)%"
             if !corner.isEmpty { right += " \u{00B7} " + corner }
-            var note = showPace ? pace.map { Pace.text($0, hhmm: Fmt.hhmm) } ?? "" : ""
+            var note = showPace ? pace.map { Pace.text($0, hhmm: { d in Fmt.moment(d) }) } ?? "" : ""
             if let r = b.resetsAt, let wr = weekReset, abs(r.timeIntervalSince(wr)) > 3600 {
                 let reset = L("сброс через ", "resets in ") + Fmt.untilReset(r)
                 note = note.isEmpty ? reset : note + " \u{00B7} " + reset
@@ -736,7 +765,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             marker: showPace ? pace?.expected : nil,
             left: "\(b.pct)% " + L("использовано", "used"),
             right: b.resetsAt == nil ? "" : L("сброс через ", "resets in ") + Fmt.untilReset(b.resetsAt),
-            note: showPace ? pace.map { Pace.text($0, hhmm: Fmt.hhmm) } ?? "" : "",
+            note: showPace ? pace.map { Pace.text($0, hhmm: { d in Fmt.moment(d) }) } ?? "" : "",
             noteAlarm: pace.map { !$0.lastsToReset } ?? false)
     }
 
@@ -848,8 +877,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     out.append("  " + L("при таком темпе до сброса не упрёшься",
                                         "at this pace you will not hit the wall before reset"))
                 } else {
-                    out.append("  " + L("при таком темпе 100% в \(Fmt.hhmm(hit))",
-                                        "at this pace 100% at \(Fmt.hhmm(hit))"))
+                    // С днём, если не сегодня: у недели это бывают сутки и больше.
+                    out.append("  " + L("при таком темпе 100% в \(Fmt.moment(hit))",
+                                        "at this pace 100% at \(Fmt.moment(hit))"))
                 }
             } else if rate == nil {
                 out.append("  " + L("темпа пока не видно - замеров мало",
@@ -1285,6 +1315,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // попали все три уровня тревоги разом - спокойный, внимание, тревога:
     // снимок с одним цветом подтверждает только одну треть.
     func showMenuForShot() {
+        shotMode = true
         let iso = ISO8601DateFormatter()
         let soon = iso.string(from: Date().addingTimeInterval(2 * 3600 + 14 * 60))
         let later = iso.string(from: Date().addingTimeInterval(3 * 86400 + 4 * 3600))

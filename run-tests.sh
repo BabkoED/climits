@@ -18,6 +18,11 @@ command -v swiftc >/dev/null 2>&1 || { echo "нет swiftc" >&2; exit 1; }
 # настройку переименовали, одно обращение осталось, снимок меню упал.
 python3 tools/check-refs.py
 
+# Питон, который уезжает по ssh на удалённую машину, - на подставных файлах.
+# До 1.21.0 его не проверял никто: Swift видит только разбор его ответа,
+# а две тихие ошибки в нём нашлись ревью 09.10.2026 только прогоном.
+python3 tools/check-remote-script.py
+
 OUT="$(mktemp -d)/climits-tests"
 trap 'rm -rf "$(dirname "$OUT")"' EXIT
 
@@ -37,6 +42,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/Version.swift \
   Sources/RemoteScan.swift \
   Sources/ServiceStatus.swift \
+  Sources/ServiceStatusFetch.swift \
   Sources/AdaptiveRefresh.swift \
   Sources/Pace.swift \
   Sources/CodexUsage.swift \

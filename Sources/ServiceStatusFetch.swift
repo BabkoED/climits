@@ -12,9 +12,13 @@ import FoundationNetworking
 final class ServiceStatusFetch {
     // Адрес - свойство провайдера. Сейчас он один, но формат Statuspage
     // общий у Anthropic и OpenAI, и второй провайдер получит свой объект.
+    //
+    // Сужен до своего с 1.21.0: claude.ai, Claude Code и API. Без этого
+    // точка горела 57 часов из-за сбоя одной Console (ревью 09.10.2026).
     static let claude = ServiceStatusFetch(
         api: "https://status.claude.com/api/v2/summary.json",
-        page: "https://status.claude.com")
+        page: "https://status.claude.com",
+        relevant: ServiceStatus.claudeRelevant)
 
     let api: String
     let page: String
