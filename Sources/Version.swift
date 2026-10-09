@@ -66,12 +66,42 @@ enum UpdateAbort: Equatable {
 
     static let sparkleDomain = "SUSparkleErrorDomain"
 
-    static func decide(domain: String, code: Int) -> UpdateAbort {
-        guard domain == sparkleDomain else { return .fallback }
-        switch code {
-        case 3001, 3002: return .stop      // SUSignatureError, SUValidationError
-        case 4007: return .quiet           // SUInstallationCanceledError
-        default: return .fallback
+    // Одно звено цепочки ошибки: домен и код.
+    struct Link: Equatable {
+        let domain: String
+        let code: Int
+    }
+
+    // Ошибка со всеми вложенными - сверху вниз по NSUnderlyingErrorKey.
+    //
+    // ЗАЧЕМ. Sparkle 2.9.6 сообщает несошедшуюся подпись НЕ кодом 3002
+    // наверху: делегат получает общий 4005 «The update is improperly
+    // signed», а 3002 лежит на два уровня глубже (AppInstaller.m заворачивает
+    // провал проверки в SPUInstallerError, SPUInstallerDriver - ещё раз в
+    // SUInstallationError). Первая версия правки смотрела только наверх и
+    // подпись пропускала - поймало ревью правки 09.10.2026. Глубина ограничена:
+    // кольцевая или бесконечная цепочка не должна вешать главный поток.
+    static func chain(of error: Error, limit: Int = 8) -> [Link] {
+        var out: [Link] = []
+        var e: NSError? = error as NSError
+        while let x = e, out.count < limit {
+            out.append(Link(domain: x.domain, code: x.code))
+            e = x.userInfo[NSUnderlyingErrorKey] as? NSError
         }
+        return out
+    }
+
+    static func decide(_ chain: [Link]) -> UpdateAbort {
+        // Отмену Sparkle присылает верхним звеном.
+        if let top = chain.first, top.domain == sparkleDomain, top.code == 4007 { return .quiet }
+        // Подпись или проверка архива - на любой глубине.
+        if chain.contains(where: { $0.domain == sparkleDomain && ($0.code == 3001 || $0.code == 3002) }) {
+            return .stop                   // SUSignatureError, SUValidationError
+        }
+        return .fallback
+    }
+
+    static func decide(domain: String, code: Int) -> UpdateAbort {
+        return decide([Link(domain: domain, code: code)])
     }
 }

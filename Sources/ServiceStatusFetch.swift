@@ -18,7 +18,8 @@ final class ServiceStatusFetch {
     static let claude = ServiceStatusFetch(
         api: "https://status.claude.com/api/v2/summary.json",
         page: "https://status.claude.com",
-        relevant: ServiceStatus.claudeRelevant)
+        relevant: ServiceStatus.claudeRelevant,
+        unscopedMajor: true)
 
     let api: String
     let page: String
@@ -35,11 +36,24 @@ final class ServiceStatusFetch {
 
     // Какие компоненты страницы относятся к нам. nil - вся страница.
     let relevant: ((String) -> Bool)?
+    // Крупный инцидент без списка компонентов - свой? У Anthropic да: так
+    // размечены сбои всех моделей сразу. У OpenAI нет: там без компонентов
+    // приходят все инциденты подряд. См. ServiceStatus.scoped.
+    let unscopedMajor: Bool
 
-    init(api: String, page: String, relevant: ((String) -> Bool)? = nil) {
+    init(api: String, page: String, relevant: ((String) -> Bool)? = nil,
+         unscopedMajor: Bool = false) {
         self.api = api
         self.page = page
         self.relevant = relevant
+        self.unscopedMajor = unscopedMajor
+    }
+
+    // Статус, суженный ровно так, как его покажет значок. Одна функция на
+    // опрос, `--doctor` и проверки: разойдись они - отчёт спорил бы с трем.
+    func narrow(_ s: ServiceStatus) -> ServiceStatus {
+        guard let r = relevant else { return s }
+        return s.scoped(r, unscopedMajor: unscopedMajor)
     }
 
     // Что показывать сейчас. nil - спокойно или не знаем; и то и другое
@@ -75,7 +89,7 @@ final class ServiceStatusFetch {
             if let data = data, data.count <= ServiceStatusFetch.maxBytes,
                let http = response as? HTTPURLResponse, http.statusCode == 200 {
                 parsed = ServiceStatus.parse(data)
-                if let r = self?.relevant { parsed = parsed?.scoped(r) }
+                if let me = self { parsed = parsed.map { me.narrow($0) } }
             }
             DispatchQueue.main.async {
                 guard let self = self else { return }

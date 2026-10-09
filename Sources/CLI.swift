@@ -195,7 +195,7 @@ enum CLI {
         URLSession.shared.dataTask(with: req) { data, _, _ in
             // Тем же сужением, что и трей: иначе отчёт кричал бы о сбое
             // Console, а значок молчал, и они противоречили бы друг другу.
-            if let d = data, let st = ServiceStatus.parse(d)?.scoped(ServiceStatus.claudeRelevant) {
+            if let d = data, let st = ServiceStatus.parse(d).map({ ServiceStatusFetch.claude.narrow($0) }) {
                 out = st.isCalm ? L("claude.ai, Claude Code и API работают",
                                     "claude.ai, Claude Code and API are operational")
                                 : "\(st.indicator): \(st.line)"

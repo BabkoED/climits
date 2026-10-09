@@ -83,7 +83,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             self, selector: #selector(prefsChanged), name: .climitsPrefsChanged, object: nil)
         refresh(force: false)
         rearmTimer()
-        checkUpdatesQuietly()
         // Тихая проверка остаётся на первом пути - он проверен временем.
         // Sparkle поднимается только по галочке и только для установки.
         SparkleBridge.shared.startIfEnabled()
@@ -149,6 +148,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func refresh(force: Bool) {
+        // В снимке CI всё подставлено руками, а сети и ключа там нет: опрос
+        // поставил бы lastError, и в трее кадра появилось бы «~».
+        if shotMode { return }
         // Прайс проверяем и здесь, а не только при запуске. Приложение в
         // трее живёт неделями между перезапусками: с проверкой только на
         // старте «раз в сутки» означало бы «один раз за всё время работы»,
@@ -1257,8 +1259,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // новое, а не ждать, пока о нём вспомнят. Показывает строку в меню и
     // ничего не качает без нажатия.
     private func checkUpdatesQuietly() {
+        // Найденное не стираем: тихая проверка теперь идёт каждые сутки,
+        // и сбой сети на следующий день убирал бы строку «вышла версия»
+        // до следующей попытки (ревью правки 09.10.2026). Пропадает она с
+        // перезапуском после обновления.
         Updater.shared.check(silent: true) { [weak self] found in
-            self?.pendingUpdate = found
+            if let f = found { self?.pendingUpdate = f }
         }
     }
     @objc private func quit() { NSApp.terminate(nil) }

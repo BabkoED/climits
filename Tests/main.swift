@@ -261,9 +261,14 @@ check("всего два сообщения, а не пять строк", win.t
 check("чтение из кэша учтено отдельно", "\(win.byFamily["opus"]?.cacheRead ?? -1)", "500000")
 check("сообщение за пределами окна не попало", (win.byFamily["opus"]?.input ?? 0) < 9_999_999)
 check("короткий файл не помечен обрезанным", !win.truncated)
-// Встроенная таблица с 09.10.2026 - Opus 5.5 и Sonnet 5.5:
-// 1000*4 + 2000*20 + 500000*0.2 + 300*2 + 100*10 = 145600 / 1e6 = $0.1456
-check("стоимость окна посчитана", MoneyView.money(win.cost), "$0.15")
+// Арифметика окна - на явных ценах, а не на встроенной таблице: таблица
+// меняется с каждым новым Opus, а проверяется здесь разбор и счёт.
+// Opus 5 $5/$25, чтение $0.50; Sonnet 5 $2/$10:
+// 1000*5 + 2000*25 + 500000*0.5 + 300*2 + 100*10 = 306600 / 1e6 = $0.3066
+let winOpus = win.byFamily["opus"]?.cost(ModelPrice.standard(input: 5, output: 25)) ?? 0
+let winSonnet = win.byFamily["sonnet"]?.cost(ModelPrice.standard(input: 2, output: 10)) ?? 0
+check("стоимость окна посчитана", MoneyView.money(winOpus + winSonnet), "$0.31")
+check("и по таблице не ноль", win.cost > 0)
 try? FileManager.default.removeItem(at: tmp)
 
 
@@ -2276,7 +2281,7 @@ let consoleOnly = ServiceStatus.parse(Data("""
                {"name":"Claude Code","status":"operational"}]}
 """.utf8))
 check("без фильтра сбой Console - тревога, как было", !(consoleOnly?.isCalm ?? true))
-check("с фильтром сбой Console - спокойно", consoleOnly?.scoped(ServiceStatus.claudeRelevant).isCalm ?? false)
+check("с фильтром сбой Console - спокойно", consoleOnly.map { ServiceStatusFetch.claude.narrow($0) }?.isCalm ?? false)
 // Инцидент уже назвал Claude Code, а компонент ещё не перевели в сбой.
 let codeDown = ServiceStatus.parse(Data("""
 {"status":{"indicator":"major","description":"Partial Outage"},
@@ -2286,16 +2291,16 @@ let codeDown = ServiceStatus.parse(Data("""
                "components":[{"name":"Claude Console (platform.claude.com)"}]}],
  "components":[{"name":"Claude Code","status":"operational"}]}
 """.utf8))
-check("инцидент назвал Claude Code - тревога", !(codeDown?.scoped(ServiceStatus.claudeRelevant).isCalm ?? true))
+check("инцидент назвал Claude Code - тревога", !(codeDown.map { ServiceStatusFetch.claude.narrow($0) }?.isCalm ?? true))
 check("тревога названа инцидентом, чужой отброшен",
-      codeDown?.scoped(ServiceStatus.claudeRelevant).line, "Elevated errors for Claude Opus 5.5")
+      codeDown.map { ServiceStatusFetch.claude.narrow($0) }?.line, "Elevated errors for Claude Opus 5.5")
 // Компонент в сбое без инцидента - тоже тревога, словами о компоненте.
 let compOnly = ServiceStatus.parse(Data("""
 {"status":{"indicator":"minor","description":"Minor"},
  "components":[{"name":"Claude Code","status":"partial_outage"}]}
 """.utf8))
 check("сломан Claude Code без инцидента - тревога",
-      compOnly?.scoped(ServiceStatus.claudeRelevant).line, L("не работает: Claude Code", "affected: Claude Code"))
+      compOnly.map { ServiceStatusFetch.claude.narrow($0) }?.line, L("не работает: Claude Code", "affected: Claude Code"))
 // Инцидент без списка компонентов: за 30 дней до 09.10.2026 оба таких были
 // не про Claude Code (подписки Google Play, лимиты трат). Не тревожим.
 let noScope = ServiceStatus.parse(Data("""
@@ -2303,7 +2308,7 @@ let noScope = ServiceStatus.parse(Data("""
  "incidents":[{"name":"Issues with Google Play subscriptions","status":"investigating","impact":"none"}],
  "components":[]}
 """.utf8))
-check("инцидент без компонентов - спокойно", noScope?.scoped(ServiceStatus.claudeRelevant).isCalm ?? false)
+check("инцидент без компонентов - спокойно", noScope.map { ServiceStatusFetch.claude.narrow($0) }?.isCalm ?? false)
 
 // 2. После ошибки запроса трей помечает цифры как несвежие.
 let freshU = UsageParser.parse(body: #"{"five_hour":{"utilization":23,"resets_at":"2030-01-01T00:00:00Z"}}"#,
@@ -2320,9 +2325,11 @@ let in2d = noonToday.addingTimeInterval(2 * 86400)
 check("через двое суток - с днём недели", Fmt.moment(in2d, now: noonToday),
       weekdayShort(Calendar.current.component(.weekday, from: in2d)) + " " + Fmt.hhmm(in2d))
 let in10d = noonToday.addingTimeInterval(10 * 86400)
-check("дальше недели - с числом, а не днём недели",
-      Fmt.moment(in10d, now: noonToday).contains(String(Calendar.current.component(.day, from: in10d)))
-      && Fmt.moment(in10d, now: noonToday).hasSuffix(Fmt.hhmm(in10d)))
+let dayMonth = DateFormatter()
+dayMonth.locale = .autoupdatingCurrent
+dayMonth.setLocalizedDateFormatFromTemplate("ddMM")
+check("дальше недели - число и месяц, а не день недели",
+      Fmt.moment(in10d, now: noonToday), dayMonth.string(from: in10d) + " " + Fmt.hhmm(in10d))
 let weekPace = Pace.reading(key: "seven_day", pct: 70, resetsAt: noonToday.addingTimeInterval(3 * 86400), now: noonToday)
 check("темп недели называет день",
       weekPace.map { Pace.text($0, hhmm: { Fmt.moment($0, now: noonToday) }) }?
@@ -2359,6 +2366,60 @@ let bFable = Pricing.builtin["fable"]!
 check("встроенный Fable 5.1: чтение кэша $0.25", "\(bFable.cacheRead)", "0.25")
 let bHaiku = Pricing.builtin["haiku"]!
 check("встроенный Haiku 4.5: $1/$5", "\(bHaiku.input)/\(bHaiku.output)", "1.0/5.0")
+
+// Ревью правки 1.21.0 (09.10.2026).
+print("\nревью правки 1.21.0")
+
+// Sparkle 2.9.6 присылает несошедшуюся подпись НЕ кодом 3002 наверху, а
+// общим 4005 «The update is improperly signed», и 3002 лежит на два уровня
+// глубже (AppInstaller.m, SPUInstallerDriver._reportInstallerError).
+// Первая версия правки смотрела только наверх и подпись пропускала.
+func sparkleErr(_ code: Int, _ under: NSError? = nil) -> NSError {
+    var info: [String: Any] = [:]
+    if let u = under { info[NSUnderlyingErrorKey] = u }
+    return NSError(domain: "SUSparkleErrorDomain", code: code, userInfo: info)
+}
+let improperlySigned = sparkleErr(4005, sparkleErr(10, sparkleErr(3002)))
+check("цепочка ошибки разобрана до дна", UpdateAbort.chain(of: improperlySigned).map { $0.code } == [4005, 10, 3002])
+check("подпись не сошлась (4005 -> 10 -> 3002) - запасной путь закрыт",
+      UpdateAbort.decide(UpdateAbort.chain(of: improperlySigned)) == .stop)
+check("просто сбой установки 4005 - запасной путь",
+      UpdateAbort.decide(UpdateAbort.chain(of: sparkleErr(4005))) == .fallback)
+check("отмена установки 4007 - не отказ",
+      UpdateAbort.decide(UpdateAbort.chain(of: sparkleErr(4007))) == .quiet)
+var deep = sparkleErr(1)
+for c in 2...20 { deep = sparkleErr(c, deep) }
+check("цепочка ограничена и не вешает разбор", UpdateAbort.chain(of: deep).count <= 8)
+
+// Инцидент без списка компонентов. За 75 дней до 09.10.2026 таких было 5
+// из 50: три мелких (impact none) и два крупнейших сбоя - «Elevated errors
+// across all models» (critical) и «...many models» (major). Мелкие не
+// тревожат, крупные - тревожат.
+let unscopedBig = ServiceStatus.parse(Data("""
+{"status":{"indicator":"critical","description":"Major Outage"},
+ "incidents":[{"name":"Elevated errors across all models","status":"investigating","impact":"critical"}],
+ "components":[]}
+""".utf8))
+check("крупный сбой без компонентов - тревога", !(unscopedBig.map { ServiceStatusFetch.claude.narrow($0) }?.isCalm ?? true))
+check("и назван", unscopedBig.map { ServiceStatusFetch.claude.narrow($0) }?.line, "Elevated errors across all models")
+let ownAndSmall = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial"},
+ "incidents":[{"name":"Elevated errors on Claude Code","status":"investigating","impact":"major",
+               "components":[{"name":"Claude Code"}]},
+              {"name":"Issues with Google Play subscriptions","status":"investigating","impact":"none"}],
+ "components":[]}
+""".utf8))
+check("свой инцидент и мелкий безымянный - только свой, без «и ещё»",
+      ownAndSmall.map { ServiceStatusFetch.claude.narrow($0) }?.line, "Elevated errors on Claude Code")
+
+// Codex: крупный инцидент OpenAI без компонентов - не его. Так у OpenAI
+// приходят все инциденты, и без этого сбой Sora снова зажигал бы Codex.
+let oaiBig = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial"},
+ "incidents":[{"name":"Sora video generation degraded","status":"investigating","impact":"major"}],
+ "components":[{"name":"Codex API","status":"operational"}]}
+""".utf8))
+check("крупный инцидент OpenAI без компонентов - Codex спокоен", oaiBig?.scoped(isCodex).isCalm ?? false)
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

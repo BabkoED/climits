@@ -28,6 +28,9 @@ struct ServiceStatus: Equatable {
     // incidents. Пусто, если страница не сказала. Нужно сужению: инцидент
     // Console не должен зажигать тревогу у того, кто работает в Claude Code.
     var scopes: [[String]] = []
+    // Тяжесть каждого инцидента: 0 нет или плановые, 1 minor, 2 major,
+    // 3 critical. Нужна инцидентам без списка компонентов - см. scoped().
+    var impacts: [Int] = []
     let fetchedAt: Date
 
     var isCalm: Bool { return level == 0 }
@@ -54,18 +57,31 @@ struct ServiceStatus: Equatable {
     // У Anthropic инциденты есть, и каждый называет, что затронул. Их
     // оставляем только свои: сбой Console держал фиолетовую точку 57 часов,
     // а за 30 дней до 09.10.2026 чужие инциденты горели 158 часов против
-    // 14 своих (ревью 09.10.2026). Инцидент без списка компонентов - не
-    // свой: за те же 30 дней оба таких были про подписки Google Play и
-    // лимиты трат, то есть не про работу в Claude Code.
-    func scoped(_ mine: (String) -> Bool) -> ServiceStatus {
+    // 14 своих (ревью 09.10.2026).
+    //
+    // Инцидент БЕЗ списка компонентов решается по тяжести. За 75 дней до
+    // 09.10.2026 таких было 5 из 50: три мелких (impact none - подписки
+    // Google Play, лимиты трат, сама страница статуса) и два крупнейших
+    // сбоя всех моделей, major и critical. Мелкие - не свои, крупные - свои:
+    // ошибки всех моделей бьют и по Claude Code.
+    //
+    // Поэтому правило про крупные - флагом, только для Claude. У OpenAI
+    // в summary.json без списка компонентов приходят ВСЕ инциденты
+    // (проверено 09.10.2026), и сбой Sora снова зажигал бы Codex - ровно
+    // то, что закрыло ревью 1.20.0.
+    func scoped(_ mine: (String) -> Bool, unscopedMajor: Bool = false) -> ServiceStatus {
         let broken = components.filter(mine)
         var names: [String] = []
         var kept: [[String]] = []
+        var keptImpacts: [Int] = []
         for (i, name) in incidents.enumerated() {
             let scope = i < scopes.count ? scopes[i] : []
-            guard scope.contains(where: mine) else { continue }
+            let impact = i < impacts.count ? impacts[i] : 0
+            let ours = scope.isEmpty ? (unscopedMajor && impact >= 2) : scope.contains(where: mine)
+            guard ours else { continue }
             names.append(name)
             kept.append(scope)
+            keptImpacts.append(impact)
         }
         let calm = broken.isEmpty && names.isEmpty
         let lvl = calm ? 0 : Swift.max(1, level)
@@ -73,7 +89,7 @@ struct ServiceStatus: Equatable {
                              description: broken.isEmpty ? description
                                  : L("не работает: ", "affected: ") + broken.joined(separator: ", "),
                              incidents: names, components: broken, scopes: kept,
-                             fetchedAt: fetchedAt)
+                             impacts: keptImpacts, fetchedAt: fetchedAt)
     }
 
     // Что из страницы status.claude.com касается работы в Claude Code:
@@ -152,6 +168,7 @@ struct ServiceStatus: Equatable {
         if lvl == 0 && !names.isEmpty { lvl = 1 }
         return ServiceStatus(level: lvl, indicator: ind, description: desc,
                              incidents: names, components: broken,
-                             scopes: ordered.map { $0.scope }, fetchedAt: at)
+                             scopes: ordered.map { $0.scope },
+                             impacts: ordered.map { $0.rank }, fetchedAt: at)
     }
 }

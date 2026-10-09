@@ -72,10 +72,11 @@ enum SparkleState {
 // НЕ будет: отказы бывают разные, а угадывать их коды по памяти - то же
 // самое, что выдумывать ключи codesign. Он только называет причину.
 private final class BridgeDelegate: NSObject, SPUUpdaterDelegate {
-    // Текст, домен и код ошибки. Одного текста мало: по нему не отличить
+    // Текст и цепочка ошибки. Одного текста мало: по нему не отличить
     // «подпись не сошлась» от «сеть моргнула», а поступать с ними надо
-    // противоположно.
-    var onAbort: ((String, String, Int) -> Void)?
+    // противоположно. И одного верхнего кода мало: подпись Sparkle кладёт
+    // на два уровня вглубь (см. UpdateAbort.chain).
+    var onAbort: ((String, [UpdateAbort.Link]) -> Void)?
     var onNoUpdate: (() -> Void)?
 
     // «У тебя последняя версия» - это НОРМАЛЬНЫЙ ответ, а не отказ.
@@ -95,8 +96,7 @@ private final class BridgeDelegate: NSObject, SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-        let ns = error as NSError
-        onAbort?(error.localizedDescription, ns.domain, ns.code)
+        onAbort?(error.localizedDescription, UpdateAbort.chain(of: error))
     }
 }
 #endif
@@ -148,7 +148,7 @@ final class SparkleBridge {
             self?.sawNoUpdate = true
             self?.lastError = nil
         }
-        delegate.onAbort = { [weak self] text, domain, code in
+        delegate.onAbort = { [weak self] text, chain in
             guard let self = self else { return }
             // Отказ сразу после «версия последняя» - это конец той же
             // проверки, а не поломка. Запасной путь тут не нужен: ответ
@@ -158,7 +158,7 @@ final class SparkleBridge {
                 self.fallback = nil
                 return
             }
-            switch UpdateAbort.decide(domain: domain, code: code) {
+            switch UpdateAbort.decide(chain) {
             case .quiet:
                 // Человек сам отменил установку - например, окно пароля.
                 // Это не отказ: второй обновлятор поверх не открываем.

@@ -12,6 +12,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
     private var remoteField: NSComboBox!
+    // Список машин в момент, когда открыли выпадающий список. Выбор
+    // дописывается к НЕМУ, а не к тексту после прошлого шага: иначе проход
+    // стрелками mono -> vps8 -> vps9 оставлял в списке все три (ревью правки
+    // 09.10.2026). Сбрасывается правкой текста руками.
+    private var hostsBase: String?
     private var remoteResult: NSTextField!
 
     // Ноль - «частоту выбирает приложение»: 2 минуты, пока смотришь
@@ -670,6 +675,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         // заменял весь текст, и из «vps7, mono» выбор mono молча стирал
         // vps7 (ревью 09.10.2026).
         let before = (notification.object as? NSComboBox)?.stringValue ?? ""
+        let base = hostsBase
         // Через главную очередь: в момент уведомления stringValue у поля
         // ещё старый, и записалось бы предыдущее значение.
         DispatchQueue.main.async { [weak self] in
@@ -685,9 +691,9 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             if key == "remoteHosts" {
                 // Если поле уже успело показать выбранное, текста «до» нет -
                 // тогда дополняем сохранённый список, а не пустоту.
-                let base = before.trimmingCharacters(in: .whitespaces) == picked
-                    ? Prefs.remoteHosts : before
-                let merged = Prefs.addingHost(picked, to: base)
+                let start = base ?? (before.trimmingCharacters(in: .whitespaces) == picked
+                    ? Prefs.remoteHosts : before)
+                let merged = Prefs.addingHost(picked, to: start)
                 box.stringValue = merged
                 self.remoteResult.stringValue = ""
                 self.apply(key: key, value: merged)
@@ -799,9 +805,18 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         "remoteHosts", "extraRoots",
     ]
 
+    // Открыли выпадающий список машин - запоминаем, к чему дописывать.
+    func comboBoxWillPopUp(_ notification: Notification) {
+        guard let box = notification.object as? NSComboBox,
+              box.identifier?.rawValue == "remoteHosts" else { return }
+        hostsBase = box.stringValue
+    }
+
     func controlTextDidChange(_ obj: Notification) {
         guard let f = obj.object as? NSTextField else { return }
         let key = f.identifier?.rawValue ?? ""
+        // Текст правят руками - прежняя точка отсчёта для выбора устарела.
+        if key == "remoteHosts" { hostsBase = nil }
         if SettingsWindowController.deferredKeys.contains(key) { return }
         apply(key: key, value: f.stringValue)
     }
