@@ -887,8 +887,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         let head = NSStackView(views: [btn, label])
         head.orientation = .horizontal
         head.spacing = 4
-        content.isHidden = true
-        let v = NSStackView(views: [head, content])
+        let v = NSStackView(views: [head])
         v.orientation = .vertical
         v.alignment = .leading
         v.spacing = 8
@@ -896,15 +895,22 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         return v
     }
 
-    // Ширина ставится при КАЖДОМ раскрытии: скрытый вид стопка снимает с
-    // себя вместе с ограничениями, и ширина, поставленная один раз при
-    // сборке, к раскрытию уже не действовала бы (ревью 10.10.2026).
+    // Раскрытие ДОБАВЛЯЕТ содержимое в стопку, сворачивание - убирает, а не
+    // прячет. Скрытый вид стопка отцепляет от себя в свой проход вёрстки
+    // и снимает его ограничения, а возвращает тоже не сразу: ширина,
+    // поставленная после «показать», могла бы встать на вид без родителя
+    // (ревью правки 10.10.2026). Добавленный вид родителя имеет сразу, а
+    // убранный уносит свои ограничения с собой - копиться им негде.
     @objc private func toggleDisclosure(_ sender: NSButton) {
         guard sender.tag < disclosed.count else { return }
         let d = disclosed[sender.tag]
-        d.content.isHidden = sender.state != .on
-        if !d.content.isHidden {
+        if sender.state == .on {
+            guard d.content.superview == nil else { return }
+            d.holder.addArrangedSubview(d.content)
             d.content.widthAnchor.constraint(equalTo: d.holder.widthAnchor).isActive = true
+        } else {
+            d.holder.removeArrangedSubview(d.content)
+            d.content.removeFromSuperview()
         }
     }
 
