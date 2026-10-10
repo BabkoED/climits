@@ -1349,6 +1349,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                              NotifyRule(scope: .fiveHour, at: 95, on: false)]
         openSettings()
         settingsWindow?.selectTab(tab)
+        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_OPEN"] == "1" {
+            settingsWindow?.expandAllForShot()
+        }
         // Растянутое окно - отдельный случай, и именно в нём ломалась
         // вёрстка трижды подряд: ряды полей и таблицы раздают лишнюю
         // ширину между своими элементами, и на узком окне этого не видно

@@ -53,7 +53,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
 
-    private var disclosed: [(content: NSView, holder: NSView)] = []
+    private var disclosed: [(content: NSView, holder: NSView, button: NSButton)] = []
 
     // Ноль - «частоту выбирает приложение»: 2 минуты, пока смотришь
     // в меню, 5 - пока идёт работа, 15 - в простое.
@@ -88,6 +88,15 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         w.center()
         self.init(window: w)
         build()
+    }
+
+    // Раскрыть все свёрнутые разделы - для снимка в CI: свёрнутое не
+    // попадает в кадр, и его вёрстку иначе не видит никто.
+    func expandAllForShot() {
+        for d in disclosed {
+            d.button.state = .on
+            toggleDisclosure(d.button)
+        }
     }
 
     // Открыть вкладку по номеру - для снимка в CI.
@@ -787,8 +796,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
             stack.widthAnchor.constraint(lessThanOrEqualTo: doc.widthAnchor, constant: -40),
         ])
+        // Ниже 500 - приоритета, с которым окно держит свой размер: при 750
+        // это ограничение вместе с пределом 640 само сжимало окно до 680
+        // (снимок 1.22.0, растянутое окно).
         let fill = stack.widthAnchor.constraint(equalTo: doc.widthAnchor, constant: -40)
-        fill.priority = .defaultHigh
+        fill.priority = NSLayoutConstraint.Priority(490)
         fill.isActive = true
         for v in items {
             stack.addArrangedSubview(v)
@@ -880,7 +892,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         v.orientation = .vertical
         v.alignment = .leading
         v.spacing = 8
-        disclosed.append((content, v))
+        disclosed.append((content, v, btn))
         return v
     }
 

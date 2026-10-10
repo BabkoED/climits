@@ -44,9 +44,9 @@ jobs:
 
       - name: запустить и снять
         run: |
-          shoot() {   # $1 - имя файла, $2 - ширина окна или пусто, $3 - вкладка с нуля, $4 - 1 тёмная
+          shoot() {   # $1 - имя файла, $2 - ширина окна или пусто, $3 - вкладка с нуля, $4 - 1 тёмная, $5 - 1 раскрыть свёрнутое
             CLIMITS_UI_SHOT=1 CLIMITS_UI_SHOT_WIDTH="$2" CLIMITS_UI_SHOT_TAB="$3" \
-              CLIMITS_UI_SHOT_DARK="$4" \
+              CLIMITS_UI_SHOT_DARK="$4" CLIMITS_UI_SHOT_OPEN="$5" \
               build/climits.app/Contents/MacOS/climits &
             local pid=$!
             sleep 12
@@ -94,6 +94,10 @@ jobs:
           shoot settings-5.png "" 4
           shoot settings-wide.png 1400 0
           shoot settings-dark.png "" 0 1
+          # Свёрнутая «Тонкая настройка» в обычный кадр не попадает: раскрыта
+          # отдельно, на первой и второй вкладке.
+          shoot settings-open-1.png "" 0 "" 1
+          shoot settings-open-2.png "" 1 "" 1
           # Обе темы: подложка полоски - это цвет уровня с прозрачностью,
           # и то, что в светлой теме читается, в тёмной может слиться с
           # фоном меню. Одна тема из двух проверяет половину.
@@ -113,7 +117,7 @@ jobs:
           git config user.name "climits ui-shot"
           git config user.email "noreply@github.com"
           git add settings-1.png settings-2.png settings-3.png settings-4.png settings-5.png \
-            settings-wide.png settings-dark.png \
+            settings-wide.png settings-dark.png settings-open-1.png settings-open-2.png \
             menu-light.png menu-dark.png menu-private.png menu-rows.png
           git commit -q -m "снимок настроек и меню с ${GITHUB_REF_NAME}"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
