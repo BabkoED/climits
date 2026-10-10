@@ -53,7 +53,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
 
-    private var disclosed: [(content: NSView, holder: NSView, button: NSButton)] = []
+    private var disclosed: [(content: NSView, holder: NSStackView, button: NSButton)] = []
 
     // Ноль - «частоту выбирает приложение»: 2 минуты, пока смотришь
     // в меню, 5 - пока идёт работа, 15 - в простое.
