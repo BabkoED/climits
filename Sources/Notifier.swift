@@ -52,19 +52,21 @@ enum Notifier {
                 continue
             }
 
-            // Какой порог для какого окна уже сообщён - по ключу на порог.
-            var fired: [Int: String] = [:]
-            for t in thresholds {
-                if let v = d.string(forKey: key + "@\(t)") { fired[t] = v }
-            }
+            // Какой порог уже сообщён в этом окне - одной записью на лимит.
+            let topKey = key + ".top"
+            let rec = d.string(forKey: topKey)
+            var top = NotifyRules.top(from: rec, stamp: stamp)
             // Переход с 1.21: порогов там не помнили, только «сообщено в этом
             // окне». Прежний порог считаем сообщённым, иначе то же сообщение
             // пришло бы второй раз сразу после обновления.
-            let legacy = (fired.isEmpty && firedFor == stamp) ? Prefs.notifyAt : nil
-            let plan = NotifyRules.step(pct: b.pct, stamp: stamp, thresholds: thresholds,
-                                        fired: fired, legacyUpTo: legacy)
-            for t in plan.clear { d.removeObject(forKey: key + "@\(t)") }
-            for t in plan.mark { d.set(stamp, forKey: key + "@\(t)") }
+            if rec == nil && firedFor == stamp { top = Prefs.notifyAt }
+            let plan = NotifyRules.step(pct: b.pct, thresholds: thresholds, top: top)
+            if plan.top > 0 {
+                let r = NotifyRules.record(stamp: stamp, top: plan.top)
+                if r != rec { d.set(r, forKey: topKey) }
+            } else if rec != nil {
+                d.removeObject(forKey: topKey)
+            }
 
             if b.pct >= low {
                 if firedFor != stamp {

@@ -1143,7 +1143,12 @@ enum Sessions {
         // статуса не зависит вовсе. Поймано живым прогоном: на сервере
         // все сессии без статуса, и раздел молчал вместе с числами
         // памяти, ради которых его и расширяли.
-        if s.total > 0 && s.unknown == s.total && mem.rssMB == 0 { return out }
+        // С 1.22.0 смотрим и на нагрузку видимых машин: при скрытой памяти
+        // мака и моноблока раздел иначе молчал бы целиком, если сессии есть
+        // только у скрытых, - и вместе с ним пропадала бы нагрузка сервера,
+        // за которой и следят (ревью 10.10.2026).
+        let loadShown = machines.contains { !hideLoad.contains($0.key) && !$0.value.isEmpty }
+        if s.total > 0 && s.unknown == s.total && mem.rssMB == 0 && !loadShown { return out }
 
         let title = L("Сессии", "Sessions")
         var head = s.text.isEmpty ? title : title + " \u{00B7} " + s.text

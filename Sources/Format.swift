@@ -353,7 +353,13 @@ enum BarTitle {
                       sessions: SessionSummary? = nil,
                       iconGlyph: String? = nil,
                       stale: Bool? = nil) -> [String] {
-        let parts = template.components(separatedBy: lineBreak)
+        var parts = template.components(separatedBy: lineBreak)
+        // Строк в трее не больше двух: третья не влезла бы по высоте. Всё
+        // после второго переноса дописывается ко второй строке - иначе оно
+        // пропало бы молча, а с ним и «~» несвежести (ревью 10.10.2026).
+        if parts.count > 2 {
+            parts = [parts[0], parts[1...].joined(separator: " \u{00B7} ")]
+        }
         var out = parts.map {
             renderOne($0, usage: usage, money: money, tokens: tokens,
                       sessions: sessions, iconGlyph: iconGlyph)
@@ -553,7 +559,7 @@ enum TemplateEdit {
                 s = s.isEmpty ? m : m + " " + s
             } else if s.isEmpty {
                 s = m
-            } else if macros.count > 1, m.hasSuffix(".left}") {
+            } else if macros.count > 1, m.hasSuffix(".left}") || m.hasSuffix(".reset}") {
                 // Время идёт вплотную к своему проценту, без разделителя:
                 // «57% 5м · 92% 1д3ч» читается как два окна, а
                 // «57% · 5м · 92% · 1д3ч» - как четыре числа подряд.
@@ -578,20 +584,29 @@ enum TemplateEdit {
     // стоит в строке, время меняется на выбранное - отсчёт, часы или ничего.
     // Новых окон выбор не добавляет и порядок не трогает: строку собирал
     // человек, и переставлять её за него нельзя.
+    //
+    // Время меняется НА МЕСТЕ: отсчёт становится часами там же, где стоял.
+    // Первая версия убирала всё время и вставляла новое за процентом - и
+    // голый отсчёт окна без процента («{5h.left}») пропадал вместе с куском
+    // строки (ревью 10.10.2026).
     static func setResetStyle(_ style: Prefs.ResetStyle, in template: String) -> String {
         var s = template
         for b in timedBases {
-            s = s.replacingOccurrences(of: "{\(b).left}", with: "")
-                .replacingOccurrences(of: "{\(b).reset}", with: "")
-        }
-        s = BarTitle.tidy(s)
-        for b in timedBases where s.contains("{\(b)}") {
+            let base = "{\(b)}", left = "{\(b).left}", reset = "{\(b).reset}"
+            func swap(_ from: String, to: String) {
+                if s.contains(from) {
+                    s = s.replacingOccurrences(of: from, with: s.contains(to) ? "" : to)
+                } else if !s.contains(to) && s.contains(base) {
+                    s = s.replacingOccurrences(of: base, with: base + " " + to)
+                }
+            }
             switch style {
-            case .none: break
-            case .countdown: s = s.replacingOccurrences(of: "{\(b)}", with: "{\(b)} {\(b).left}")
-            case .clock: s = s.replacingOccurrences(of: "{\(b)}", with: "{\(b)} {\(b).reset}")
+            case .none:
+                s = s.replacingOccurrences(of: left, with: "").replacingOccurrences(of: reset, with: "")
+            case .countdown: swap(reset, to: left)
+            case .clock: swap(left, to: reset)
             }
         }
-        return s
+        return BarTitle.tidy(s)
     }
 }

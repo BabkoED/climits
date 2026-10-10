@@ -426,6 +426,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                    money: money ?? nil, tokens: tokens ?? nil,
                                    sessions: Sessions.summary(sessions),
                                    iconGlyph: "", stale: stale)
+        let trailing = template.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}")
         if lines.count > 1 {
             let pct = u.worst?.pct ?? 0
             let icon: BarImage.Icon = !template.contains("{icon}") ? .none
@@ -435,22 +436,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if alarm != nil && !ring { shown[0] = "\u{26A0} " + shown[0] }
             button.image = BarImage.image(lines: shown, color: color, icon: icon,
                                           height: NSStatusBar.system.thickness,
-                                          badge: ring ? badge : nil)
+                                          badge: ring ? badge : nil, trailing: trailing)
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
-            // Читалка экрана и наведение получают те же цифры словами.
-            button.toolTip = lines.joined(separator: " \u{00B7} ")
+            // Заголовка у кнопки нет - читалке экрана цифры отдаются словами,
+            // наведению - подсказкой.
+            let spoken = lines.joined(separator: " \u{00B7} ")
+            button.toolTip = spoken
+            button.setAccessibilityLabel(spoken)
             return
         }
         button.toolTip = nil
+        button.setAccessibilityLabel(nil)
+        // Одна строка - из того же разбора по строкам, что решал, одна она
+        // или две: решение и показ по разным спискам давали «◑\n62%» в
+        // однострочном заголовке, когда до {br} стоял один значок (ревью
+        // 10.10.2026). Здесь значок - знаком в тексте, если он не кольцо.
+        //
         // Несвежие - и когда ответ взят из кэша, и когда последний запрос
         // не прошёл: цифры тогда прежние, а сами они об этом не знают. До
         // 1.21.0 после 401 трей показывал их как живые (ревью 09.10.2026).
-        var text = BarTitle.render(template, usage: u,
-                                   money: money ?? nil, tokens: tokens ?? nil,
-                                   sessions: Sessions.summary(sessions),
-                                   iconGlyph: ring ? "" : nil,
-                                   stale: stale)
+        var text = BarTitle.lines(template, usage: u,
+                                  money: money ?? nil, tokens: tokens ?? nil,
+                                  sessions: Sessions.summary(sessions),
+                                  iconGlyph: ring ? "" : nil,
+                                  stale: stale).joined(separator: " ")
         // Без кольца точку рисовать не на чем - сбой говорит знак в тексте.
         // Два знака места, и только пока сбой идёт.
         if alarm != nil && !ring { text = "\u{26A0} " + text }
@@ -464,7 +474,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // кольцо. Шаблон по умолчанию начинается с {icon}, но свой
             // формат может кончаться им - и переносить кольцо молча
             // в начало значит переставить человеку его же строку.
-            let trailing = template.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}")
             button.image = RingBar.image(percent: u.worst?.pct ?? 0, color: color,
                                          font: Palette.barFont, trailing: trailing,
                                          badge: badge)
@@ -1330,7 +1339,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // по настройкам, поэтому они ставятся ДО того, как его открыть.
         Prefs.showSession = true
         Prefs.showWeekly = true
-        Prefs.remoteHosts = "vps7\nmono"
+        // Через запятую, как вписывают в окне: поле однострочное, и список
+        // по строкам показал бы в нём только первую машину.
+        Prefs.remoteHosts = "vps7, mono"
         Prefs.localLabel = L("мак", "mac")
         Prefs.hideLoadFor = "@this, mono"
         Prefs.notifyRules = [NotifyRule(scope: .any, at: 80, on: true),
@@ -1575,6 +1586,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let stacked = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_STACKED"] == "1"
         Prefs.showWeekly = stacked
         Prefs.hideLoadFor = stacked ? "@this, mono" : ""
+        // В этом кадре без Codex и разбивки по чатам: иначе меню выше экрана,
+        // и раздел сессий - ради которого память по машинам и заводилась -
+        // уходит за нижний край кадра.
+        if stacked {
+            Prefs.codexEnabled = false
+            Prefs.showSpendByChat = false
+        }
         // Строка трея собрана выше, до этих настроек, - перерисовать.
         updateTitle()
         // Прежний вид строками - своим кадром: он остаётся галочкой, и

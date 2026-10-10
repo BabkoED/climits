@@ -30,10 +30,13 @@ enum BarImage {
         return NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
     }
 
-    // Значок слева, по центру высоты; справа одна строка шрифтом трея или
-    // две строки мелким шрифтом, каждая в своей половине высоты.
+    // Значок по центру высоты; рядом одна строка шрифтом трея или две
+    // строки мелким шрифтом, каждая в своей половине высоты. trailing -
+    // значок справа: свой формат может кончаться {icon}, и переносить его
+    // молча в начало значит переставить человеку его же строку.
     static func image(lines: [String], color: NSColor, icon: Icon,
-                      height: CGFloat, badge: NSColor? = nil) -> NSImage {
+                      height: CGFloat, badge: NSColor? = nil,
+                      trailing: Bool = false) -> NSImage {
         let stacked = lines.count > 1
         let font = stacked ? stackFont(height: height) : Palette.barFont
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
@@ -47,11 +50,12 @@ enum BarImage {
             break
         case .ring(let pct):
             ringImage = RingBar.image(percent: pct, color: color, font: Palette.barFont,
-                                      trailing: false, badge: badge)
+                                      trailing: trailing, badge: badge)
         case .glyph(let g):
-            // Пробел после знака - тот же зазор, что даёт шаблон «{icon} ...».
-            let tail = texts.isEmpty ? "" : " "
-            glyphText = NSAttributedString(string: g + tail, attributes: [
+            // Пробел между знаком и текстом - тот же зазор, что даёт шаблон
+            // «{icon} ...».
+            let gap = texts.isEmpty ? "" : " "
+            glyphText = NSAttributedString(string: trailing ? gap + g : g + gap, attributes: [
                 .font: Palette.barFont, .foregroundColor: color])
         }
         let iconW = ringImage?.size.width ?? ceil(glyphText?.size().width ?? 0)
@@ -66,19 +70,21 @@ enum BarImage {
                 let baseline = bandY + (bandH - f.capHeight) / 2
                 t.draw(at: NSPoint(x: x, y: (baseline + f.descender).rounded()))
             }
+            let iconX: CGFloat = trailing ? textW : 0
+            let textX: CGFloat = trailing ? 0 : iconW
             if let r = ringImage {
                 let y = ((height - r.size.height) / 2).rounded()
-                r.draw(in: NSRect(x: 0, y: y, width: r.size.width, height: r.size.height))
+                r.draw(in: NSRect(x: iconX, y: y, width: r.size.width, height: r.size.height))
             } else if let g = glyphText {
-                draw(g, barFont, x: 0, bandY: 0, bandH: height)
+                draw(g, barFont, x: iconX, bandY: 0, bandH: height)
             }
             if stacked {
                 let half = height / 2
                 for (i, t) in texts.enumerated() {
-                    draw(t, font, x: iconW, bandY: i == 0 ? half : 0, bandH: half)
+                    draw(t, font, x: textX, bandY: i == 0 ? half : 0, bandH: half)
                 }
             } else if let t = texts.first {
-                draw(t, font, x: iconW, bandY: 0, bandH: height)
+                draw(t, font, x: textX, bandY: 0, bandH: height)
             }
             return true
         }

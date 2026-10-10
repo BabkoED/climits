@@ -2533,22 +2533,33 @@ check("модели: модельный лимит Codex - не модели Cla
 check("модели: неделя целиком - не модель",
       NotifyRules.thresholds(key: "seven_day", isModel: false, rules: models).isEmpty)
 
-let st1 = NotifyRules.step(pct: 95, stamp: "W1", thresholds: [75, 90], fired: [:])
-check("скачок через два порога - одно сообщение, о верхнем", st1.send == 90)
-check("и оба порога помечены", st1.mark == [75, 90])
-let st2 = NotifyRules.step(pct: 96, stamp: "W1", thresholds: [75, 90], fired: [75: "W1", 90: "W1"])
-check("в том же окне повтора нет", st2.send == nil && st2.mark.isEmpty)
-let st3 = NotifyRules.step(pct: 80, stamp: "W2", thresholds: [75, 90], fired: [75: "W1", 90: "W1"])
-check("новое окно - снова сообщаем", st3.send == 75 && st3.mark == [75])
-let st4 = NotifyRules.step(pct: 92, stamp: "W1", thresholds: [75, 90], fired: [90: "W1"])
-check("порог ниже уже сообщённого молчит", st4.send == nil && st4.mark == [75])
-let st5 = NotifyRules.step(pct: 50, stamp: "W1", thresholds: [75, 90], fired: [75: "W1"])
-check("ушли ниже порога в том же окне - взводим заново", st5.clear == [75] && st5.send == nil)
-let st6 = NotifyRules.step(pct: 85, stamp: "W1", thresholds: [80, 90], fired: [:], legacyUpTo: 80)
-check("переход с 1.21: прежний порог не сообщается второй раз", st6.send == nil)
-check("и записывается явно", st6.mark == [80])
-let st7 = NotifyRules.step(pct: 93, stamp: "W1", thresholds: [80, 90], fired: [:], legacyUpTo: 80)
-check("переход с 1.21: новый порог выше прежнего сообщается", st7.send == 90 && st7.mark == [80, 90])
+let st1 = NotifyRules.step(pct: 95, thresholds: [75, 90], top: 0)
+check("скачок через два порога - одно сообщение, о верхнем", st1 == NotifyRules.Step(send: 90, top: 90))
+check("в том же окне повтора нет",
+      NotifyRules.step(pct: 96, thresholds: [75, 90], top: 90) == NotifyRules.Step(send: nil, top: 90))
+check("порог ниже сообщённого молчит",
+      NotifyRules.step(pct: 92, thresholds: [75, 90], top: 90).send == nil)
+check("ушли ниже сообщённого в том же окне - взводим с пройденного",
+      NotifyRules.step(pct: 80, thresholds: [75, 90], top: 90) == NotifyRules.Step(send: nil, top: 75))
+check("и совсем ниже - взвод с нуля",
+      NotifyRules.step(pct: 50, thresholds: [75, 90], top: 75) == NotifyRules.Step(send: nil, top: 0))
+// Ревью 10.10.2026: правило 90 сработало на 92%, его опустили до 85 -
+// второго сообщения в том же окне быть не должно.
+check("опустили порог правкой - молчим",
+      NotifyRules.step(pct: 92, thresholds: [85], top: 90) == NotifyRules.Step(send: nil, top: 90))
+check("подняли выше сообщённого - сообщаем",
+      NotifyRules.step(pct: 96, thresholds: [85, 95], top: 90).send == 95)
+// Запись «окно|порог»: чужое окно читается нулём.
+let recW1 = NotifyRules.record(stamp: "1770000000", top: 90)
+check("запись своего окна читается", "\(NotifyRules.top(from: recW1, stamp: "1770000000"))", "90")
+check("запись чужого окна - ноль", NotifyRules.top(from: recW1, stamp: "1770018000") == 0)
+check("нет записи - ноль", NotifyRules.top(from: nil, stamp: "x") == 0)
+check("мусор - ноль", NotifyRules.top(from: "abc", stamp: "abc") == 0)
+// Переход с 1.21: прежний порог (notifyAt) считается сообщённым.
+check("переход с 1.21: прежний порог не сообщается второй раз",
+      NotifyRules.step(pct: 85, thresholds: [80, 90], top: 80).send == nil)
+check("переход с 1.21: порог выше прежнего сообщается",
+      NotifyRules.step(pct: 93, thresholds: [80, 90], top: 80).send == 90)
 
 Prefs.d.removeObject(forKey: "notifyRules")
 Prefs.notifyEnabled = true; Prefs.notifyAt = 85
@@ -2627,9 +2638,59 @@ check("видимая машина без сессий остаётся",
 var silent = hs
 for i in silent.indices { silent[i].state = .unknown }
 check("всё скрыто и статуса нет - раздела нет",
-      Sessions.lines(silent, machines: loads, hideLoad: ["", "vps7", "mono"]).rows.isEmpty)
+      Sessions.lines(silent, machines: loads, hideLoad: ["", "vps7", "mono", "idle-host"]).rows.isEmpty)
 check("а с видимой памятью - есть",
       !Sessions.lines(silent, machines: loads, hideLoad: ["", "mono"]).rows.isEmpty)
+
+
+// ---- 1.22.0: находки ревью 10.10.2026 ----------------------------------------
+print("\nнаходки ревью 1.22.0")
+Prefs.showIcon = true; Prefs.barRing = false
+Prefs.showWorst = false; Prefs.showActive = false; Prefs.showModels = false
+Prefs.showExtra = false; Prefs.showExtraPct = false
+// Только неделя при отсчёте: голый отсчёт окна - наследство прежних
+// галочек - остаётся в одной строке с неделей, стопки нет.
+Prefs.showSession = false; Prefs.showWeekly = true; Prefs.resetStyle = .countdown
+check("5ч выключено - стопки нет",
+      Prefs.defaultTemplateFromCheckboxes(), "{icon} {5h.left} \u{00B7} {7d} {7d.left}")
+Prefs.showSession = true
+// Обе старые галочки: часы, как в 1.21, только у окна и у «упрётся первым».
+Prefs.showLeft = true; Prefs.showResetClock = true; Prefs.showWorst = true
+check("обе старые галочки - строка как в 1.21",
+      Prefs.defaultTemplateFromCheckboxes(),
+      "{icon} {5h} {5h.left} {5h.reset}{br}{7d} {7d.left} \u{00B7} {worst} {worst.left}")
+Prefs.showWorst = false
+Prefs.resetStyle = .countdown
+// Свой формат: часы клеятся к окну пробелом, как отсчёт, а не точкой.
+check("часы добавляются вплотную к окну",
+      TemplateEdit.add(["{5h}", "{5h.reset}"], to: "{7d} {7d.reset}"),
+      "{7d} {7d.reset} \u{00B7} {5h} {5h.reset}")
+check("голый отсчёт окна меняется на часы, а не пропадает",
+      TemplateEdit.setResetStyle(.clock, in: "{icon} {5h.left}{br}{7d} {7d.left}"),
+      "{icon} {5h.reset}{br}{7d} {7d.reset}")
+check("и обратно",
+      TemplateEdit.setResetStyle(.countdown, in: "{icon} {5h.reset}{br}{7d} {7d.reset}"),
+      "{icon} {5h.left}{br}{7d} {7d.left}")
+// Больше двух строк трей не рисует: остальное - во вторую, с «~».
+check("третья строка уходит во вторую",
+      BarTitle.lines("{5h}{br}{7d}{br}{opus}", usage: a, stale: true).joined(separator: "|"),
+      "37%|62% \u{00B7} 81%~")
+// Значок до переноса один - строка одна, и перевода строки в ней нет.
+let iconOnly = BarTitle.lines("{icon} {br}{7d}", usage: a, iconGlyph: "")
+check("пустая первая часть со значком - одна строка", iconOnly.count, 1)
+check("а со знаком значок встаёт перед неделей",
+      BarTitle.lines("{icon} {br}{7d}", usage: a).joined(separator: " ").hasSuffix(" 62%"))
+// Раздел сессий при скрытой памяти мака и моноблока: сессии только на
+// моноблоке и без статуса, у сервера сессий нет - нагрузка сервера всё
+// равно видна, раздел не пропадает.
+var onlyMono = [hs[2]]
+onlyMono[0].state = .unknown
+let monoOnly = Sessions.lines(onlyMono, machines: loads, localName: "мак",
+                              hideLoad: ["", "mono", "idle-host"])
+check("нагрузка сервера видна и без его сессий",
+      monoOnly.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
+check("а без видимой нагрузки раздел по-прежнему молчит",
+      Sessions.lines(onlyMono, machines: [:], hideLoad: ["mono"]).rows.isEmpty)
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

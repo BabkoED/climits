@@ -75,42 +75,38 @@ enum NotifyRules {
 
     // Решение по одному лимиту на этом обновлении.
     //
-    // fired - для какого окна (stamp) какой порог уже сообщён. Сообщаем один
-    // раз на окно и порог, и только самый высокий из впервые пройденных:
-    // скачок с 70% на 95% через пороги 75 и 90 даёт одно сообщение, а не
-    // два подряд. Порог ниже уже сообщённого в этом окне тоже молчит -
-    // иначе правило «75%», добавленное на 92%, прислало бы «75%» после «90%».
-    //
-    // legacyUpTo - переход с 1.21: прежняя версия помнила одно «сообщено в
-    // этом окне» на лимит, без порога. Её порог (notifyAt) считается уже
-    // сообщённым, иначе сразу после обновления пришло бы то же сообщение
-    // второй раз.
+    // top - самый высокий порог, о котором уже сообщили в ЭТОМ окне лимита
+    // (0 - ни о каком). Одного числа хватает на всё:
+    //   * сообщаем, только когда пройден порог выше сообщённого: скачок
+    //     с 70% на 95% через пороги 75 и 90 даёт одно сообщение, о 90;
+    //   * порог не выше сообщённого молчит - в том числе добавленный или
+    //     опущенный правкой правила посреди окна. Первая версия помнила
+    //     пороги поштучно, и правка «90 -> 85» после сработавших 90 давала
+    //     второе сообщение в том же окне (ревью 10.10.2026);
+    //   * процент упал ниже сообщённого внутри окна - взводим заново с того
+    //     порога, что пройден сейчас. Правка правила при этом взвода не
+    //     даёт: смотрим на процент, а не на список порогов.
     struct Step: Equatable {
         var send: Int?
-        var mark: [Int]
-        var clear: [Int]
+        var top: Int
     }
 
-    static func step(pct: Int, stamp: String, thresholds: [Int],
-                     fired: [Int: String], legacyUpTo: Int? = nil) -> Step {
-        var known = fired
-        if let up = legacyUpTo {
-            for t in thresholds where t <= up && known[t] == nil { known[t] = stamp }
-        }
-        let crossed = thresholds.filter { pct >= $0 }
-        let fresh = crossed.filter { known[$0] != stamp }
-        let alreadyTop = crossed.filter { known[$0] == stamp }.max() ?? 0
-        let top = fresh.max()
-        let send = (top != nil && top! > alreadyTop) ? top : nil
-        // Ушли ниже порога внутри того же окна - взводим заново.
-        let clear = thresholds.filter { pct < $0 && fired[$0] == stamp }
-        var mark = fresh
-        // Порог из перехода записывается явно: иначе он «сообщён» только
-        // пока жива старая запись, а её снимет первый же сброс окна.
-        if let up = legacyUpTo {
-            for t in crossed where t <= up && fired[t] == nil && !mark.contains(t) { mark.append(t) }
-        }
-        return Step(send: send, mark: mark.sorted(), clear: clear)
+    static func step(pct: Int, thresholds: [Int], top: Int) -> Step {
+        let crossed = thresholds.filter { pct >= $0 }.max() ?? 0
+        if crossed > top { return Step(send: crossed, top: crossed) }
+        if pct < top { return Step(send: nil, top: crossed) }
+        return Step(send: nil, top: top)
+    }
+
+    // Запись «окно|порог» в настройках: какой порог сообщён и для какого
+    // окна. Запись чужого окна читается нулём - новое окно, новый счёт.
+    static func record(stamp: String, top: Int) -> String { return stamp + "|\(top)" }
+
+    static func top(from record: String?, stamp: String) -> Int {
+        guard let r = record, let bar = r.lastIndex(of: "|"),
+              String(r[r.startIndex..<bar]) == stamp,
+              let n = Int(r[r.index(after: bar)...]) else { return 0 }
+        return n
     }
 
     // Подпись лимита в строке правила.

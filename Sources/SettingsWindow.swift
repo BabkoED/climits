@@ -53,7 +53,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var intervalPopup: NSPopUpButton!
     private var loginToggle: NSButton!
 
-    private var disclosed: [NSView] = []
+    private var disclosed: [(content: NSView, holder: NSView)] = []
 
     // Ноль - «частоту выбирает приложение»: 2 минуты, пока смотришь
     // в меню, 5 - пока идёт работа, 15 - в простое.
@@ -302,7 +302,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private func iconTile(_ style: Prefs.IconStyle, _ title: String, _ image: NSImage) -> NSButton {
         let b = NSButton(title: title, image: image, target: self, action: #selector(iconPicked(_:)))
         b.imagePosition = .imageAbove
-        b.setButtonType(.pushOnPushOff)
+        // Нажатие без залипания: выбранную плитку отмечает рамка. Залипшая
+        // кнопка заливается цветом акцента, и значок цвета текста на ней
+        // пропадает - снимок 1.22.0 показал это на кольце.
+        b.setButtonType(.momentaryPushIn)
         b.bezelStyle = .regularSquare
         b.identifier = NSUserInterfaceItemIdentifier("icon:" + style.rawValue)
         b.translatesAutoresizingMaskIntoConstraints = false
@@ -317,7 +320,6 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         let current = "icon:" + Prefs.iconStyle.rawValue
         for b in iconTiles {
             let on = b.identifier?.rawValue == current
-            b.state = on ? .on : .off
             b.layer?.borderWidth = on ? 2 : 0
             b.layer?.borderColor = NSColor.controlAccentColor.cgColor
         }
@@ -425,10 +427,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // MARK: - Вкладка «Уведомления»
 
     private func notifyPage() -> NSView {
+        // Плашка не прячется, а пустеет: скрытый вид стопка снимает с себя
+        // вместе с ограничениями, и после показа он терял бы ширину.
         bannerHolder = NSStackView()
         bannerHolder.orientation = .vertical
         bannerHolder.alignment = .leading
-        bannerHolder.isHidden = true
 
         rulesStack = NSStackView()
         rulesStack.orientation = .vertical
@@ -566,7 +569,6 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             for v in self.bannerHolder.arrangedSubviews { v.removeFromSuperview() }
             switch p {
             case .allowed:
-                self.bannerHolder.isHidden = true
                 return
             case .denied:
                 self.showBanner(self.banner(
@@ -581,7 +583,6 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                       "macOS asks once. Without permission the rules below stay silent."),
                     L("Разрешить", "Allow"), #selector(self.askPermission)))
             }
-            self.bannerHolder.isHidden = false
         }
     }
 
@@ -645,6 +646,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         remoteResult.usesSingleLineMode = false
         remoteResult.maximumNumberOfLines = 0
         remoteResult.preferredMaxLayoutWidth = 470
+        // Пустая строка ответа занимала бы место до первой проверки.
+        remoteResult.isHidden = true
 
         let hostsCard = CardView([
             hostRow, remoteResult,
@@ -775,11 +778,18 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             // Ширина документа равна ширине видимой области: без этого текст
             // не переносится, а уезжает вправо.
             doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: doc.topAnchor, constant: 8),
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -16),
+            // Ширина содержимого - не больше 640 и по центру: на растянутом
+            // окне контрол уезжал к правому краю, за полэкрана от подписи
+            // (снимок 1.22.0 на ширине 1400).
+            stack.centerXAnchor.constraint(equalTo: doc.centerXAnchor),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: doc.widthAnchor, constant: -40),
         ])
+        let fill = stack.widthAnchor.constraint(equalTo: doc.widthAnchor, constant: -40)
+        fill.priority = .defaultHigh
+        fill.isActive = true
         for v in items {
             stack.addArrangedSubview(v)
             if v is CardView || v is NSStackView {
@@ -860,7 +870,6 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         btn.setButtonType(.onOff)
         btn.state = .off
         btn.tag = disclosed.count
-        disclosed.append(content)
         let label = NSTextField(labelWithString: title)
         label.font = NSFont.boldSystemFont(ofSize: 13)
         let head = NSStackView(views: [btn, label])
@@ -871,13 +880,20 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         v.orientation = .vertical
         v.alignment = .leading
         v.spacing = 8
-        content.widthAnchor.constraint(equalTo: v.widthAnchor).isActive = true
+        disclosed.append((content, v))
         return v
     }
 
+    // Ширина ставится при КАЖДОМ раскрытии: скрытый вид стопка снимает с
+    // себя вместе с ограничениями, и ширина, поставленная один раз при
+    // сборке, к раскрытию уже не действовала бы (ревью 10.10.2026).
     @objc private func toggleDisclosure(_ sender: NSButton) {
         guard sender.tag < disclosed.count else { return }
-        disclosed[sender.tag].isHidden = sender.state != .on
+        let d = disclosed[sender.tag]
+        d.content.isHidden = sender.state != .on
+        if !d.content.isHidden {
+            d.content.widthAnchor.constraint(equalTo: d.holder.widthAnchor).isActive = true
+        }
     }
 
     // Версия и адрес репозитория вместо поля User-Agent.
@@ -1097,6 +1113,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     @objc private func testRemote() {
         Prefs.remoteHosts = remoteField.stringValue
         buildLoadToggles()
+        remoteResult.isHidden = false
         let targets = Prefs.remoteTargets()
         guard !targets.isEmpty else {
             remoteResult.stringValue = L("список пуст - считаю только эту машину",
@@ -1290,7 +1307,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         let icon: BarImage.Icon = !t.contains("{icon}") ? .none
             : (Prefs.barRing ? .ring(pct) : .glyph(Fmt.icon(for: pct)))
         previewView.image = BarImage.image(lines: lines, color: .labelColor, icon: icon,
-                                           height: NSStatusBar.system.thickness)
+                                           height: NSStatusBar.system.thickness,
+                                           trailing: t.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}"))
     }
 
     static let sampleMoney = MoneyView.make(spent: 12.40, partial: true)
