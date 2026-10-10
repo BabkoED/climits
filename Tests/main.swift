@@ -396,7 +396,9 @@ Prefs.showIcon = false; Prefs.showSession = true; Prefs.showLeft = true
 Prefs.showWeekly = true; Prefs.showModels = false; Prefs.showTokens = false
 Prefs.showExtra = false; Prefs.showMoney = false
 let built = Prefs.defaultTemplateFromCheckboxes()
-check("процент и остаток идут одним куском", built, "{5h} {5h.left} \u{00B7} {7d} {7d.left}")
+// С 1.22.0 два окна - две строки, друг над другом: в одну строку они
+// раздвигали трей вдвое. Процент и остаток по-прежнему одним куском.
+check("процент и остаток идут одним куском", built, "{5h} {5h.left}{br}{7d} {7d.left}")
 // Проверяем по тому, что видно в трее, а не по тексту шаблона: «7d» есть
 // и в самом макросе {7d}, и такая проверка прошла бы, ничего не проверив.
 check("подписи «7д» перед процентом больше нет",
@@ -405,7 +407,7 @@ check("галочка остатка действует на оба окна",
       BarTitle.render(built, usage: a).contains("62%"))
 Prefs.showLeft = false
 check("без остатка остаются одни проценты",
-      Prefs.defaultTemplateFromCheckboxes(), "{5h} \u{00B7} {7d}")
+      Prefs.defaultTemplateFromCheckboxes(), "{5h}{br}{7d}")
 Prefs.showLeft = true
 
 // ---- две машины ------------------------------------------------------------
@@ -2420,6 +2422,214 @@ let oaiBig = ServiceStatus.parse(Data("""
  "components":[{"name":"Codex API","status":"operational"}]}
 """.utf8))
 check("крупный инцидент OpenAI без компонентов - Codex спокоен", oaiBig?.scoped(isCodex).isCalm ?? false)
+
+
+// ---- 1.22.0: строка в две строки --------------------------------------------
+//
+// Два окна стопкой (образец - Usage for Claude, Антон 10.10.2026). Трей
+// получает строки через перевод строки, а не макросом: {br} живёт только
+// в шаблоне.
+print("\nдве строки в трее")
+Prefs.showIcon = true; Prefs.barRing = true
+Prefs.showSession = true; Prefs.showWeekly = true
+Prefs.showLeft = true; Prefs.showResetClock = false
+Prefs.showWorst = false; Prefs.showActive = false; Prefs.showModels = false
+Prefs.showExtra = true; Prefs.showExtraPct = false
+let two = Prefs.defaultTemplateFromCheckboxes()
+check("оба окна - две строки, остальное второй строкой после недели",
+      two, "{icon} {5h} {5h.left}{br}{7d} {7d.left} \u{00B7} {extra}")
+let twoLines = BarTitle.lines(two, usage: a, iconGlyph: "")
+check("строк две", twoLines.count, 2)
+check("сверху окно", twoLines.first?.hasPrefix("37%") ?? false)
+check("снизу неделя и перерасход", twoLines.last?.hasPrefix("62%") ?? false
+      && (twoLines.last?.hasSuffix("$139.63") ?? false))
+check("render соединяет строки переводом строки",
+      BarTitle.render(two, usage: a, iconGlyph: "").contains("\n"))
+check("макрос переноса в трей не попадает",
+      !BarTitle.render(two, usage: a).contains("{br}"))
+// Пустая вторая строка выпадает, а не оставляет пустую полку.
+check("пустая вторая строка - одна строка",
+      BarTitle.lines("{5h}{br}{haiku}", usage: a).count, 1)
+// Висящий разделитель у переноса чистится в каждой строке отдельно.
+check("разделитель у переноса не висит",
+      BarTitle.lines("{5h} \u{00B7} {br}{7d}", usage: a).first ?? "", "37%")
+check("несвежие - один «~» в самом конце",
+      BarTitle.lines("{5h}{br}{7d}", usage: a, stale: true).joined(separator: "|"), "37%|62%~")
+// Одно окно - строка одна, как раньше.
+Prefs.showWeekly = false
+check("одно окно - одна строка", !Prefs.defaultTemplateFromCheckboxes().contains("{br}"))
+Prefs.showWeekly = true
+Prefs.showSession = false; Prefs.showLeft = false
+check("без процента окна и без времени - одна неделя",
+      Prefs.defaultTemplateFromCheckboxes(), "{icon} {7d} \u{00B7} {extra}")
+Prefs.showSession = true; Prefs.showLeft = true
+
+// ---- 1.22.0: значок и сброс - одним из трёх --------------------------------
+print("\nзначок и сброс одним из трёх")
+Prefs.showIcon = true; Prefs.barRing = true
+check("кольцо читается кольцом", Prefs.iconStyle == .ring)
+Prefs.barRing = false
+check("знак читается знаком", Prefs.iconStyle == .glyph)
+Prefs.iconStyle = .none
+check("«нет» выключает значок", !Prefs.showIcon)
+check("и кольцо не трогает", !Prefs.barRing)
+Prefs.barRing = true
+Prefs.iconStyle = .none
+Prefs.iconStyle = .ring
+check("вернул значок - вернулось кольцо", Prefs.showIcon && Prefs.barRing)
+Prefs.iconStyle = .glyph
+check("знак выключает кольцо", Prefs.showIcon && !Prefs.barRing)
+Prefs.iconStyle = .ring
+
+Prefs.showLeft = true; Prefs.showResetClock = true
+check("обе галочки сразу читаются как отсчёт", Prefs.resetStyle == .countdown)
+Prefs.resetStyle = .clock
+check("часы - только часы", !Prefs.showLeft && Prefs.showResetClock)
+check("часы у обоих окон",
+      Prefs.defaultTemplateFromCheckboxes(), "{icon} {5h} {5h.reset}{br}{7d} {7d.reset} \u{00B7} {extra}")
+Prefs.resetStyle = .none
+check("без сброса - одни проценты", !Prefs.showLeft && !Prefs.showResetClock)
+check("и в шаблоне ни отсчёта, ни часов",
+      Prefs.defaultTemplateFromCheckboxes(), "{icon} {5h}{br}{7d} \u{00B7} {extra}")
+Prefs.resetStyle = .countdown
+check("отсчёт возвращает время", Prefs.showLeft && !Prefs.showResetClock)
+
+// Свой формат: выбор сброса меняет время у тех окон, что уже стоят,
+// и не добавляет новых.
+let mine = "{icon} {5h} {5h.left} \u{00B7} {money}{br}{7d} {7d.left}"
+check("свой формат: часы вместо отсчёта",
+      TemplateEdit.setResetStyle(.clock, in: mine),
+      "{icon} {5h} {5h.reset} \u{00B7} {money}{br}{7d} {7d.reset}")
+check("свой формат: без времени",
+      TemplateEdit.setResetStyle(.none, in: mine),
+      "{icon} {5h} \u{00B7} {money}{br}{7d}")
+check("свой формат: отсчёт вернулся туда же",
+      TemplateEdit.setResetStyle(.countdown, in: TemplateEdit.setResetStyle(.none, in: mine)), mine)
+check("свой формат: окно, которого нет, не появляется",
+      !TemplateEdit.setResetStyle(.clock, in: "{5h}").contains("{7d"))
+check("часы недели в трее - день и время",
+      BarTitle.render("{7d.reset}", usage: a), Fmt.clock(a.bucket("seven_day")?.resetsAt))
+
+// ---- 1.22.0: правила уведомлений --------------------------------------------
+print("\nправила уведомлений")
+let rs = NotifyRules.parse("any:80:1;seven_day:90:0;five_hour:95:1;мусор;codex:70:1")
+check("правила разобраны, мусор пропущен", rs.count, 4)
+check("и записываются обратно тем же текстом",
+      NotifyRules.serialize(rs), "any:80:1;seven_day:90:0;five_hour:95:1;codex:70:1")
+check("порог зажат в 1...100", NotifyRules.parse("any:250:1").first?.at ?? 0, 100)
+check("правил не больше восьми",
+      NotifyRules.parse(Array(repeating: "any:50:1", count: 12).joined(separator: ";")).count, 8)
+check("неделя: выключенное правило не считается",
+      NotifyRules.thresholds(key: "seven_day", isModel: false, rules: rs) == [80])
+check("окно: любое и своё, по возрастанию",
+      NotifyRules.thresholds(key: "five_hour", isModel: false, rules: rs) == [80, 95])
+check("Codex: любое и своё",
+      NotifyRules.thresholds(key: "codex_primary", isModel: false, rules: rs) == [70, 80])
+let models = [NotifyRule(scope: .models, at: 60, on: true)]
+check("модели: Opus подходит",
+      NotifyRules.thresholds(key: "seven_day_opus", isModel: true, rules: models) == [60])
+check("модели: модельный лимит Codex - не модели Claude",
+      NotifyRules.thresholds(key: "codex_m1_p", isModel: true, rules: models).isEmpty)
+check("модели: неделя целиком - не модель",
+      NotifyRules.thresholds(key: "seven_day", isModel: false, rules: models).isEmpty)
+
+let st1 = NotifyRules.step(pct: 95, stamp: "W1", thresholds: [75, 90], fired: [:])
+check("скачок через два порога - одно сообщение, о верхнем", st1.send == 90)
+check("и оба порога помечены", st1.mark == [75, 90])
+let st2 = NotifyRules.step(pct: 96, stamp: "W1", thresholds: [75, 90], fired: [75: "W1", 90: "W1"])
+check("в том же окне повтора нет", st2.send == nil && st2.mark.isEmpty)
+let st3 = NotifyRules.step(pct: 80, stamp: "W2", thresholds: [75, 90], fired: [75: "W1", 90: "W1"])
+check("новое окно - снова сообщаем", st3.send == 75 && st3.mark == [75])
+let st4 = NotifyRules.step(pct: 92, stamp: "W1", thresholds: [75, 90], fired: [90: "W1"])
+check("порог ниже уже сообщённого молчит", st4.send == nil && st4.mark == [75])
+let st5 = NotifyRules.step(pct: 50, stamp: "W1", thresholds: [75, 90], fired: [75: "W1"])
+check("ушли ниже порога в том же окне - взводим заново", st5.clear == [75] && st5.send == nil)
+let st6 = NotifyRules.step(pct: 85, stamp: "W1", thresholds: [80, 90], fired: [:], legacyUpTo: 80)
+check("переход с 1.21: прежний порог не сообщается второй раз", st6.send == nil)
+check("и записывается явно", st6.mark == [80])
+let st7 = NotifyRules.step(pct: 93, stamp: "W1", thresholds: [80, 90], fired: [:], legacyUpTo: 80)
+check("переход с 1.21: новый порог выше прежнего сообщается", st7.send == 90 && st7.mark == [80, 90])
+
+Prefs.d.removeObject(forKey: "notifyRules")
+Prefs.notifyEnabled = true; Prefs.notifyAt = 85
+check("до первой правки действует прежний порог",
+      Prefs.notifyRules == [NotifyRule(scope: .any, at: 85, on: true)])
+Prefs.notifyEnabled = false
+check("и прежнее «выключено» тоже", Prefs.notifyRules.first?.on == false)
+Prefs.d.removeObject(forKey: "notifyLoops")
+check("сторож кручения наследует прежнюю галочку", Prefs.notifyLoops == false)
+Prefs.notifyRules = [NotifyRule(scope: .week, at: 90, on: true),
+                     NotifyRule(scope: .fiveHour, at: 80, on: false)]
+Prefs.notifyEnabled = true
+check("после правки прежние настройки не влияют",
+      NotifyRules.serialize(Prefs.notifyRules), "seven_day:90:1;five_hour:80:0")
+Prefs.d.removeObject(forKey: "notifyRules")
+Prefs.d.removeObject(forKey: "notifyEnabled")
+Prefs.d.removeObject(forKey: "notifyAt")
+
+// ---- 1.22.0: память и нагрузка - по машинам ---------------------------------
+//
+// Слово Антона 10.10.2026: «мак и моно особо не нуждаются в памяти, а сервер
+// нужно контролировать отдельно».
+print("\nпамять по машинам")
+Prefs.hideLoadFor = ""
+Prefs.setLoadHidden("", true)
+Prefs.setLoadHidden("mono", true)
+check("своя машина хранится особым именем", Prefs.hideLoadFor, "@this, mono")
+check("и читается пустым ключом", Prefs.hiddenLoad() == ["", "mono"])
+Prefs.setLoadHidden("mono", false)
+check("снятие убирает одну машину", Prefs.hiddenLoad() == [""])
+Prefs.hideLoadFor = " vps7 ,, @this\nmono "
+check("лишние пробелы и пустые куски не мешают", Prefs.hiddenLoad() == ["vps7", "", "mono"])
+Prefs.hideLoadFor = ""
+
+var hs = [
+    AgentSession(pid: 801, name: "local-chat", folder: "f", surface: "Terminal",
+                 state: .busy, waitingFor: nil, since: nil, machine: ""),
+    AgentSession(pid: 802, name: "srv-chat", folder: "f", surface: "Remote",
+                 state: .busy, waitingFor: nil, since: nil, machine: "vps7",
+                 rssMB: 300, swapMB: 100),
+    AgentSession(pid: 803, name: "mono-chat", folder: "f", surface: "Remote",
+                 state: .busy, waitingFor: nil, since: nil, machine: "mono",
+                 rssMB: 200, swapMB: 0),
+]
+hs[0].rssMB = 500
+let loads: [String: MachineMemory] = [
+    "": MachineMemory(totalMB: 16384, availableMB: 6000, swapTotalMB: 0, swapUsedMB: 0,
+                      load1: 1.0, cores: 8),
+    "vps7": MachineMemory(totalMB: 3915, availableMB: 1224, swapTotalMB: 7030,
+                          swapUsedMB: 1743, load1: 2.4, cores: 2),
+    "mono": MachineMemory(totalMB: 3457, availableMB: 1994, swapTotalMB: 8191,
+                          swapUsedMB: 686, load1: 0.1, cores: 4),
+    "idle-host": MachineMemory(totalMB: 2000, availableMB: 1000, swapTotalMB: 0,
+                               swapUsedMB: 0, load1: 0.1, cores: 1),
+]
+let all = Sessions.lines(hs, machines: loads, localName: "мак")
+check("без настройки нагрузка у всех трёх",
+      all.rows.filter { $0.hasPrefix("  мак \u{00B7}") || $0.hasPrefix("  vps7 \u{00B7}")
+                        || $0.hasPrefix("  mono \u{00B7}") }.count, 3)
+let some = Sessions.lines(hs, machines: loads, localName: "мак", hideLoad: ["", "mono", "idle-host"])
+check("у скрытых - только имя", some.rows.contains("  мак") && some.rows.contains("  mono"))
+check("у сервера нагрузка осталась", some.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
+check("память строк - только у сервера",
+      some.rows.filter { $0.contains(L("МБ", "MB")) }.count, 1)
+check("«прочее» - только у сервера",
+      some.rows.filter { $0.contains(L("прочее", "other")) }.count, 1)
+check("сумма наверху - только по серверу", some.header.contains("300 " + L("МБ", "MB")))
+check("и без скрытых гигабайтов", !some.header.contains(L("ГБ", "GB")))
+check("сессии скрытых машин на месте",
+      some.rows.contains { $0.contains("local-chat") } && some.rows.contains { $0.contains("mono-chat") })
+check("скрытая машина без сессий выпадает", !some.rows.contains { $0.contains("idle-host") })
+check("видимая машина без сессий остаётся",
+      all.rows.contains { $0.hasPrefix("  idle-host \u{00B7} ") })
+// Все без статуса и вся память скрыта: раздел отвечал бы «не знаю» на
+// оба вопроса - пусть молчит, как молчал без памяти.
+var silent = hs
+for i in silent.indices { silent[i].state = .unknown }
+check("всё скрыто и статуса нет - раздела нет",
+      Sessions.lines(silent, machines: loads, hideLoad: ["", "vps7", "mono"]).rows.isEmpty)
+check("а с видимой памятью - есть",
+      !Sessions.lines(silent, machines: loads, hideLoad: ["", "mono"]).rows.isEmpty)
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

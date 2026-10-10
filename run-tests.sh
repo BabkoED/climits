@@ -30,6 +30,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/L10n.swift \
   Sources/UsageModel.swift \
   Sources/Prefs.swift \
+  Sources/NotifyRules.swift \
   Sources/Format.swift \
   Sources/Keychain.swift \
   Sources/Presets.swift \

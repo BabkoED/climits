@@ -414,6 +414,35 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // {icon} отдаётся пустым, и он схлопывается вместе со своим
         // разделителем. Иначе в строке стояли бы оба - и картинка, и знак.
         let ring = Prefs.barRing && template.contains("{icon}")
+        let stale = u.isStale || lastError != nil
+        // Строка меню остаётся нейтральной, пока всё спокойно: цветом
+        // в строке меню стоит тревожить только по делу.
+        let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
+
+        // ДВЕ СТРОКИ (1.22.0): окно над неделей, мелким шрифтом, картинкой
+        // у кнопки - см. BarImage. Значок встаёт слева от обеих строк, а не
+        // в начало первой: так он читается как значок всей строки.
+        let lines = BarTitle.lines(template, usage: u,
+                                   money: money ?? nil, tokens: tokens ?? nil,
+                                   sessions: Sessions.summary(sessions),
+                                   iconGlyph: "", stale: stale)
+        if lines.count > 1 {
+            let pct = u.worst?.pct ?? 0
+            let icon: BarImage.Icon = !template.contains("{icon}") ? .none
+                : (Prefs.barRing ? .ring(pct) : .glyph(Fmt.icon(for: pct)))
+            var shown = lines
+            // Без кольца точку сбоя рисовать не на чем - говорит знак в тексте.
+            if alarm != nil && !ring { shown[0] = "\u{26A0} " + shown[0] }
+            button.image = BarImage.image(lines: shown, color: color, icon: icon,
+                                          height: NSStatusBar.system.thickness,
+                                          badge: ring ? badge : nil)
+            button.imagePosition = .imageOnly
+            button.attributedTitle = NSAttributedString(string: "")
+            // Читалка экрана и наведение получают те же цифры словами.
+            button.toolTip = lines.joined(separator: " \u{00B7} ")
+            return
+        }
+        button.toolTip = nil
         // Несвежие - и когда ответ взят из кэша, и когда последний запрос
         // не прошёл: цифры тогда прежние, а сами они об этом не знают. До
         // 1.21.0 после 401 трей показывал их как живые (ревью 09.10.2026).
@@ -421,13 +450,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                                    money: money ?? nil, tokens: tokens ?? nil,
                                    sessions: Sessions.summary(sessions),
                                    iconGlyph: ring ? "" : nil,
-                                   stale: u.isStale || lastError != nil)
+                                   stale: stale)
         // Без кольца точку рисовать не на чем - сбой говорит знак в тексте.
         // Два знака места, и только пока сбой идёт.
         if alarm != nil && !ring { text = "\u{26A0} " + text }
-        // Строка меню остаётся нейтральной, пока всё спокойно: цветом
-        // в строке меню стоит тревожить только по делу.
-        let color = u.worst.map { Palette.titleColor(for: $0) } ?? NSColor.labelColor
         button.attributedTitle = NSAttributedString(string: text, attributes: [
             .foregroundColor: color,
             .font: Palette.barFont,
@@ -1180,7 +1206,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if !localMemory.isEmpty { load[""] = localMemory }
         let list = Prefs.privacyMode ? Sessions.anonymized(sessions) : sessions
         let lines = Sessions.lines(list, remoteScanAt: lastScan,
-                                   machines: load, localName: Sessions.localName())
+                                   machines: load, localName: Sessions.localName(),
+                                   hideLoad: Prefs.hiddenLoad())
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]
@@ -1296,8 +1323,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // - и до сих пор единственным способом узнать, что получилось, был
     // человек со скриншотом. Это дорого и медленно: три версии подряд
     // правились вслепую.
-    func showSettingsForShot(width: CGFloat?) {
+    func showSettingsForShot(width: CGFloat?, tab: Int = 0) {
+        // Состав для кадра (1.22.0): две строки в предпросмотре, три машины
+        // во вкладке «Машины» и у двух из них скрытая память - ровно то, что
+        // Антон настроит у себя, - два правила уведомлений. Окно строится
+        // по настройкам, поэтому они ставятся ДО того, как его открыть.
+        Prefs.showSession = true
+        Prefs.showWeekly = true
+        Prefs.remoteHosts = "vps7\nmono"
+        Prefs.localLabel = L("мак", "mac")
+        Prefs.hideLoadFor = "@this, mono"
+        Prefs.notifyRules = [NotifyRule(scope: .any, at: 80, on: true),
+                             NotifyRule(scope: .week, at: 90, on: true),
+                             NotifyRule(scope: .fiveHour, at: 95, on: false)]
         openSettings()
+        settingsWindow?.selectTab(tab)
         // Растянутое окно - отдельный случай, и именно в нём ломалась
         // вёрстка трижды подряд: ряды полей и таблицы раздают лишнюю
         // ширину между своими элементами, и на узком окне этого не видно
@@ -1529,6 +1569,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // обязаны уйти из ВСЕГО меню, а не из одного раздела. Проверяется
         // только глазами на полном меню.
         Prefs.privacyMode = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_PRIVATE"] == "1"
+        // Вид Антона (1.22.0): трей в две строки и память только у сервера.
+        // Своим кадром, а остальные кадры - в одну строку и со всей
+        // памятью: сломать можно и то и другое, и видно должно быть оба.
+        let stacked = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_STACKED"] == "1"
+        Prefs.showWeekly = stacked
+        Prefs.hideLoadFor = stacked ? "@this, mono" : ""
+        // Строка трея собрана выше, до этих настроек, - перерисовать.
+        updateTitle()
         // Прежний вид строками - своим кадром: он остаётся галочкой, и
         // сломать его, перестраивая меню под карточки, проще всего.
         Prefs.menuCards = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_ROWS"] != "1"

@@ -102,6 +102,35 @@ struct Prefs {
     static var showHistory: Bool {
         get { bool("showHistory", false) } set { d.set(newValue, forKey: "showHistory") } }
 
+    // --- выбор картинкой (1.22.0) ---
+    //
+    // Значок и сброс в окне настроек выбираются одним из трёх, а не
+    // галочками. Это НЕ новые настройки, а другой вход в прежние: значок -
+    // это showIcon и barRing, сброс - showLeft и showResetClock. Так у
+    // человека после обновления всё остаётся как было, а «свой формат» и
+    // `defaults write` продолжают работать с теми же ключами.
+    enum IconStyle: String, CaseIterable { case none, glyph, ring }
+    static var iconStyle: IconStyle {
+        get { return !showIcon ? .none : (barRing ? .ring : .glyph) }
+        set {
+            showIcon = newValue != .none
+            // «Нет» кольцо не трогает: вернув значок, человек получит тот
+            // вид, что был до выключения.
+            if newValue != .none { barRing = newValue == .ring }
+        }
+    }
+
+    // Обе галочки сразу - наследство версий, где они были независимы.
+    // Читается как отсчёт; выбор в окне сводит их к одной.
+    enum ResetStyle: String, CaseIterable { case none, countdown, clock }
+    static var resetStyle: ResetStyle {
+        get { return showLeft ? .countdown : (showResetClock ? .clock : .none) }
+        set {
+            showLeft = newValue == .countdown
+            showResetClock = newValue == .clock
+        }
+    }
+
     // --- свой формат ---
     static var useCustomTemplate: Bool {
         get { bool("useCustomTemplate", false) } set { d.set(newValue, forKey: "useCustomTemplate") } }
@@ -276,6 +305,39 @@ struct Prefs {
     static var extraRoots: String {
         get { str("extraRoots", "") } set { d.set(newValue, forKey: "extraRoots") } }
 
+    // Память и нагрузка - по машинам (1.22.0).
+    //
+    // Слово Антона 10.10.2026: «мак и моно особо не нуждаются в памяти, а
+    // сервер нужно контролировать отдельно». Раздел сессий показывал память
+    // и нагрузку у всех машин сразу, и строки машин, за которыми следить
+    // не нужно, занимали место рядом с той, за которой нужно.
+    //
+    // Храним, у кого СКРЫТО, а не у кого показано: умолчание - показывать
+    // всё, как до 1.22.0, и новая машина в списке без памяти не останется.
+    // Имя - то же, что в заголовке группы: ярлык или хост. Своя машина -
+    // «@this»: имени у неё в списке машин нет, а с хостом ssh такая
+    // запись не совпадёт никогда.
+    static let thisMachineKey = "@this"
+    static var hideLoadFor: String {
+        get { str("hideLoadFor", "") } set { d.set(newValue, forKey: "hideLoadFor") } }
+
+    // Ключи - как у Sessions.lines: "" - своя машина.
+    static func hiddenLoad() -> Set<String> {
+        var out = Set<String>()
+        for raw in hideLoadFor.split(whereSeparator: { $0 == "," || $0 == "\n" }) {
+            let s = raw.trimmingCharacters(in: .whitespaces)
+            guard !s.isEmpty else { continue }
+            out.insert(s == thisMachineKey ? "" : s)
+        }
+        return out
+    }
+
+    static func setLoadHidden(_ machine: String, _ hidden: Bool) {
+        var set = hiddenLoad()
+        if hidden { set.insert(machine) } else { set.remove(machine) }
+        hideLoadFor = set.map { $0.isEmpty ? thisMachineKey : $0 }.sorted().joined(separator: ", ")
+    }
+
     // --- деньги, уведомления, вид строк ---
     //
     // Деньги выключены по умолчанию намеренно: это счёт по прайсу API и
@@ -289,10 +351,30 @@ struct Prefs {
     // и им место в выпадающем меню, а не в строке.
     static var showMoney: Bool {
         get { bool("showMoney", false) } set { d.set(newValue, forKey: "showMoney") } }
+    // notifyEnabled и notifyAt - настройки до 1.22.0: один порог на все
+    // лимиты. Читаются только переходом ниже и в notifyLoops; окно настроек
+    // их больше не показывает.
     static var notifyEnabled: Bool {
         get { bool("notifyEnabled", false) } set { d.set(newValue, forKey: "notifyEnabled") } }
     static var notifyAt: Int {
         get { max(1, min(100, int("notifyAt", 80))) } set { d.set(newValue, forKey: "notifyAt") } }
+
+    // Правила уведомлений (1.22.0), см. NotifyRules. Пока человек правил
+    // не трогал, действует прежний порог - тем же правилом на любой лимит
+    // и с тем же «включено»: молча потерять настроенное уведомление нельзя.
+    static var notifyRules: [NotifyRule] {
+        get {
+            if let s = d.string(forKey: "notifyRules") { return NotifyRules.parse(s) }
+            return [NotifyRule(scope: .any, at: notifyAt, on: notifyEnabled)]
+        }
+        set { d.set(NotifyRules.serialize(newValue), forKey: "notifyRules") }
+    }
+
+    // Уведомление о сессии, которая крутится на месте. До 1.22.0 шло
+    // вместе с порогом лимита, под общей галочкой «уведомлять»; теперь
+    // своя галочка, а умолчание - то, что было у человека.
+    static var notifyLoops: Bool {
+        get { bool("notifyLoops", notifyEnabled) } set { d.set(newValue, forKey: "notifyLoops") } }
 
     // Сказать, когда лимит, в который упирался, сбросился. Ставится вместе
     // с предупреждением о пороге и без него не приходит: сообщать о сбросе
@@ -478,7 +560,6 @@ struct Prefs {
     }
 
     static func defaultTemplateFromCheckboxes() -> String {
-        var parts: [String] = []
         // Процент и остаток времени идут одним куском, без разделителя между
         // ними: «57% 5м · 92% 1д3ч» читается как два окна, а «57% · 5м · 92%
         // · 1д3ч» - как четыре числа подряд.
@@ -486,23 +567,39 @@ struct Prefs {
         // Подпись «7д» убрана намеренно: то, что недельный лимит недельный,
         // человек знает и без неё, а место она занимает. Какое окно где,
         // говорит время до сброса - минуты у одного, дни у другого.
-        if showSession { parts.append(showLeft ? "{5h} {5h.left}" : "{5h}") }
+        //
+        // Часы сброса идут сразу за своим окном: «37% пн 03:00» - это одно
+        // место, а не два разных числа. С 1.22.0 они есть у каждого окна со
+        // временем, а не только у пятичасового: выбор «сброс: часы» в окне
+        // настроек отвечает за всю строку.
+        func timed(_ name: String) -> String {
+            var s = "{\(name)}"
+            if showLeft { s += " {\(name).left}" }
+            if showResetClock { s += " {\(name).reset}" }
+            return s
+        }
         // Процент выключили, а время до сброса нужно всё равно - иначе
         // строка вообще перестаёт отвечать на «когда отпустит».
-        else if showLeft { parts.append("{5h.left}") }
-        // Часы сброса идут сразу за своим окном: «37% 2ч 13м пн 03:00» -
-        // это одно место, а не два разных числа.
-        if showSession && showResetClock { parts[parts.count - 1] += " {5h.reset}" }
-        if showWeekly  { parts.append(showLeft ? "{7d} {7d.left}" : "{7d}") }
-        if showWorst   { parts.append(showLeft ? "{worst} {worst.left}" : "{worst}") }
-        if showActive {
-            var piece = showLeft ? "{active} {active.left}" : "{active}"
-            if showResetClock { piece += " {active.reset}" }
-            parts.append(piece)
+        let five: String? = showSession ? timed("5h") : (showLeft ? "{5h.left}" : nil)
+        let week: String? = showWeekly ? timed("7d") : nil
+        var rest: [String] = []
+        if showWorst   { rest.append(timed("worst")) }
+        if showActive  { rest.append(timed("active")) }
+        if showModels  { rest.append("{models}") }
+        if showExtra   { rest.append("{extra}") }
+        if showExtraPct { rest.append("{extra.pct}") }
+
+        // ОБА ОКНА - ДВЕ СТРОКИ, друг над другом (1.22.0). Образец - Usage
+        // for Claude, который Антон прислал 10.10.2026, выбрав в нём именно
+        // такой вид: «25% 2ч 30м» над «62% 3д». В одну строку два окна
+        // раздвигали трей вдвое; стопкой мелким шрифтом они занимают
+        // ширину одного. Остальное, что включено, идёт второй строкой
+        // после недели: сверху остаётся одно окно, которое меняется быстрее.
+        if let f = five, let w = week {
+            let body = f + "{br}" + ([w] + rest).joined(separator: " \u{00B7} ")
+            return showIcon ? "{icon} " + body : body
         }
-        if showModels  { parts.append("{models}") }
-        if showExtra   { parts.append("{extra}") }
-        if showExtraPct { parts.append("{extra.pct}") }
+        let parts = [five, week].compactMap { $0 } + rest
         // Деньги, токены и история сюда НЕ попадают, даже когда галочки
         // включены. У остальных галочек одно значение на обе поверхности,
         // у этих - только на выпадающее меню: в трее три-четыре знака

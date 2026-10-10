@@ -17,13 +17,15 @@ enum Notifier {
     private static func firedKey(_ key: String) -> String { return "notified." + key }
 
     static func check(_ usage: Usage) {
-        guard Prefs.notifyEnabled else { return }
+        // Правила (1.22.0): у каждого лимита свои пороги. Ни одного
+        // включённого - молчим, как молчали при снятой галочке «уведомлять».
+        let rules = Prefs.notifyRules.filter { $0.on }
+        guard !rules.isEmpty else { return }
         // По несвежим цифрам не оповещаем. Иначе после суток без сети
         // приходит сообщение о пороге, пройденном двадцать часов назад,
         // и выглядит это как срабатывание сейчас.
         guard !usage.isStale else { return }
 
-        let threshold = Prefs.notifyAt
         let d = UserDefaults.standard
         let windows = usage.buckets.map {
             ResetNotice.Window(key: $0.key, pct: $0.pct, resetsAt: $0.resetsAt, isModel: $0.isModel)
@@ -37,14 +39,42 @@ enum Notifier {
             // окно оставалось без предупреждения вовсе.
             let stamp = b.resetsAt.map { String(Int($0.timeIntervalSince1970)) } ?? "no-reset"
             let firedFor = d.string(forKey: key)
+            let thresholds = NotifyRules.thresholds(key: b.key, isModel: b.isModel, rules: rules)
 
-            if b.pct >= threshold {
+            guard let low = thresholds.first else {
+                // На этот лимит правил нет - убрали или выключили. Прежнее
+                // «предупреждали в этом окне» снимаем вместе с «лимит снова
+                // есть»: иначе оно пришло бы по правилу, которого больше нет.
+                if firedFor != nil {
+                    d.removeObject(forKey: key)
+                    cancelReset(b.key)
+                }
+                continue
+            }
+
+            // Какой порог для какого окна уже сообщён - по ключу на порог.
+            var fired: [Int: String] = [:]
+            for t in thresholds {
+                if let v = d.string(forKey: key + "@\(t)") { fired[t] = v }
+            }
+            // Переход с 1.21: порогов там не помнили, только «сообщено в этом
+            // окне». Прежний порог считаем сообщённым, иначе то же сообщение
+            // пришло бы второй раз сразу после обновления.
+            let legacy = (fired.isEmpty && firedFor == stamp) ? Prefs.notifyAt : nil
+            let plan = NotifyRules.step(pct: b.pct, stamp: stamp, thresholds: thresholds,
+                                        fired: fired, legacyUpTo: legacy)
+            for t in plan.clear { d.removeObject(forKey: key + "@\(t)") }
+            for t in plan.mark { d.set(stamp, forKey: key + "@\(t)") }
+
+            if b.pct >= low {
                 if firedFor != stamp {
                     // Окно сменилось с прошлого предупреждения. Если старое
                     // кончилось досрочно, его «лимит снова есть» стоит на
                     // время, которого больше нет, - снимаем.
                     if ResetNotice.stale(oldStamp: firedFor) { cancelReset(b.key) }
                     d.set(stamp, forKey: key)
+                }
+                if plan.send != nil {
                     send(title: L("Лимит на исходе", "Limit running out"),
                          // В уведомлении «через» уместно: оно приходит само,
                          // без шкалы рядом, и «1д 3ч» без предлога читается
@@ -71,6 +101,42 @@ enum Notifier {
             if d.string(forKey: key) == stamp {
                 planReset(b, among: windows)
             }
+        }
+    }
+
+    // Разрешение macOS на уведомления (1.22.0) - для плашки в настройках.
+    // Без неё правило «включено», а уведомление не приходит никогда, и
+    // отличить это от «порог не пройден» человеку нечем.
+    enum Permission { case allowed, denied, unknown }
+
+    static func permission(_ done: @escaping (Permission) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            let p: Permission
+            switch s.authorizationStatus {
+            case .denied: p = .denied
+            case .notDetermined: p = .unknown
+            default: p = .allowed
+            }
+            DispatchQueue.main.async { done(p) }
+        }
+    }
+
+    static func askPermission(_ done: @escaping (Bool) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            DispatchQueue.main.async { done(granted) }
+        }
+    }
+
+    // Уведомления climits в системных настройках. Первый адрес ведёт прямо
+    // к приложению (macOS 13 и новее), второй - к общему списку: если
+    // система первый не поймёт, человек хотя бы окажется рядом.
+    static func openSystemSettings() {
+        let urls = [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=" + Prefs.bundleID,
+            "x-apple.systempreferences:com.apple.preference.notifications",
+        ]
+        for s in urls {
+            if let u = URL(string: s), NSWorkspace.shared.open(u) { return }
         }
     }
 
@@ -123,7 +189,7 @@ enum Notifier {
     private static let loopKeys = "notified.loop.keys"
 
     static func checkLoops(_ all: [AgentSession]) {
-        guard Prefs.notifyEnabled, Prefs.watchLoops else { return }
+        guard Prefs.notifyLoops, Prefs.watchLoops else { return }
         // «Скрыть личное» касается и уведомлений: баннер на демонстрации
         // экрана виден так же, как меню (ревью 24.09.2026 - имя из
         // `/rename` уходило в баннер). Ключ тревоги - машина и pid, они

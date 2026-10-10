@@ -320,6 +320,7 @@ enum BarTitle {
         ("{5h.reset}",   L("когда сброс: пн 03:00", "reset clock: Mon 03:00")),
         ("{7d}",         L("недельный кап, процент", "weekly cap percent")),
         ("{7d.left}",    L("сколько до конца недели", "time left this week")),
+        ("{7d.reset}",   L("когда сброс недели: чт 03:00", "week reset clock: Thu 03:00")),
         ("{opus}",       L("Opus за неделю", "Opus this week")),
         ("{sonnet}",     L("Sonnet за неделю", "Sonnet this week")),
         ("{fable}",      L("Fable за неделю", "Fable this week")),
@@ -328,6 +329,7 @@ enum BarTitle {
         ("{tokens}",     L("токены за окно", "tokens this window")),
         ("{worst}",      L("самый нагруженный лимит", "the busiest limit")),
         ("{worst.left}", L("до сброса у него", "time left on it")),
+        ("{worst.reset}",L("когда он сбросится: пн 03:00", "when it resets: Mon 03:00")),
         ("{active}",     L("лимит, который упрётся первым", "the limit that hits first")),
         ("{active.left}",L("до сброса у него", "time left on it")),
         ("{active.reset}",L("когда он сбросится: пн 03:00", "when it resets: Mon 03:00")),
@@ -335,18 +337,60 @@ enum BarTitle {
         ("{extra.pct}",  L("сверх лимита, процент", "extra usage percent")),
         ("{money}",      L("во сколько обошлось окно", "what this window cost")),
         ("{sessions}",   L("кто работает и кто ждёт меня", "who is working and who waits")),
+        ("{br}",         L("перенос: дальше - вторая строка", "line break: the rest goes below")),
     ]
+
+    // Перенос строки в шаблоне. Макросом, а не «\n»: поле шаблона в окне
+    // настроек однострочное, и перевод строки в нём не набрать.
+    static let lineBreak = "{br}"
+
+    // Строки трея: одна или две. Шаблон режется по {br}, каждая часть
+    // собирается и чистится сама по себе - иначе висящий « · » в конце
+    // первой строки чистка не увидела бы: для неё это середина текста.
+    // Пустая часть выпадает, и тогда строка снова одна.
+    static func lines(_ template: String, usage: Usage,
+                      money: MoneyView? = nil, tokens: TokensView? = nil,
+                      sessions: SessionSummary? = nil,
+                      iconGlyph: String? = nil,
+                      stale: Bool? = nil) -> [String] {
+        let parts = template.components(separatedBy: lineBreak)
+        var out = parts.map {
+            renderOne($0, usage: usage, money: money, tokens: tokens,
+                      sessions: sessions, iconGlyph: iconGlyph)
+        }.filter { !$0.isEmpty }
+        if out.isEmpty { out = ["\(usage.worst?.short ?? "") \(usage.worst?.pct ?? 0)%"] }
+        // Честный признак несвежих цифр. stale задаёт трей: после ошибки
+        // запроса цифры остаются прежними, а сами они про это не знают -
+        // до 1.21.0 трей показывал их как живые (ревью 09.10.2026).
+        // Один знак на всю строку, в самом конце.
+        if stale ?? usage.isStale { out[out.count - 1] += "~" }
+        return out
+    }
 
     // iconGlyph - чем нарисовать {icon}. Пусто означает «не знаком»: в
     // режиме кольца кружок рисуется картинкой рядом со строкой, а из самой
     // строки макрос должен исчезнуть вместе со своим разделителем. Отдавать
     // сюда картинку нельзя - здесь строка, и её же показывает предпросмотр
     // настроек и `--doctor`.
+    //
+    // Строки соединяются переводом строки: одна строка - как раньше, две -
+    // «37% 2ч 13м\n62% 3д». Рисовать их стопкой - дело трея.
     static func render(_ template: String, usage: Usage,
                        money: MoneyView? = nil, tokens: TokensView? = nil,
                        sessions: SessionSummary? = nil,
                        iconGlyph: String? = nil,
                        stale: Bool? = nil) -> String {
+        return lines(template, usage: usage, money: money, tokens: tokens,
+                     sessions: sessions, iconGlyph: iconGlyph, stale: stale)
+            .joined(separator: "\n")
+    }
+
+    // Одна строка шаблона, без переносов. Пусто - если все её макросы
+    // оказались пустыми.
+    private static func renderOne(_ template: String, usage: Usage,
+                                  money: MoneyView?, tokens: TokensView?,
+                                  sessions: SessionSummary?,
+                                  iconGlyph: String?) -> String {
         var s = template
 
         func put(_ macro: String, _ value: String) {
@@ -371,6 +415,7 @@ enum BarTitle {
         put("{5h.reset}", Fmt.clock(session?.resetsAt))
         put("{7d}", pctText(weekly))
         put("{7d.left}", weekly?.resetsAt != nil ? Fmt.left(weekly?.resetsAt) : "")
+        put("{7d.reset}", Fmt.clock(weekly?.resetsAt))
 
         for name in ["opus", "sonnet", "haiku", "fable"] {
             let key = name == "fable" ? UsageParser.fableKey : "seven_day_" + name
@@ -399,9 +444,11 @@ enum BarTitle {
         if let w = usage.worst {
             put("{worst}", "\(w.short) \(w.pct)%")
             put("{worst.left}", w.resetsAt != nil ? Fmt.left(w.resetsAt) : "")
+            put("{worst.reset}", Fmt.clock(w.resetsAt))
         } else {
             put("{worst}", "")
             put("{worst.left}", "")
+            put("{worst.reset}", "")
         }
         if let a = usage.active {
             put("{active}", "\(a.short) \(a.pct)%")
@@ -433,13 +480,9 @@ enum BarTitle {
                                             withTemplate: "")
         }
 
-        s = tidy(s)
-        if s.isEmpty { s = "\(usage.worst?.short ?? "") \(usage.worst?.pct ?? 0)%" }
-        // Честный признак несвежих цифр. stale задаёт трей: после ошибки
-        // запроса цифры остаются прежними, а сами они про это не знают -
-        // до 1.21.0 трей показывал их как живые (ревью 09.10.2026).
-        if stale ?? usage.isStale { s = s.isEmpty ? "~" : s + "~" }
-        return s
+        // Запасная строка и «~» - в lines(): они про всю строку трея, а не
+        // про одну из двух.
+        return tidy(s)
     }
 
     // Схлопываем разделители, оставшиеся от пустых макросов: « ·  · », « · »
@@ -526,5 +569,29 @@ enum TemplateEdit {
         var s = template
         for m in macros { s = s.replacingOccurrences(of: m, with: "") }
         return BarTitle.tidy(s)
+    }
+
+    // Окна, у которых бывает время до сброса.
+    static let timedBases = ["5h", "7d", "worst", "active"]
+
+    // Выбор «сброс» при своём формате (1.22.0): у каждого окна, что уже
+    // стоит в строке, время меняется на выбранное - отсчёт, часы или ничего.
+    // Новых окон выбор не добавляет и порядок не трогает: строку собирал
+    // человек, и переставлять её за него нельзя.
+    static func setResetStyle(_ style: Prefs.ResetStyle, in template: String) -> String {
+        var s = template
+        for b in timedBases {
+            s = s.replacingOccurrences(of: "{\(b).left}", with: "")
+                .replacingOccurrences(of: "{\(b).reset}", with: "")
+        }
+        s = BarTitle.tidy(s)
+        for b in timedBases where s.contains("{\(b)}") {
+            switch style {
+            case .none: break
+            case .countdown: s = s.replacingOccurrences(of: "{\(b)}", with: "{\(b)} {\(b).left}")
+            case .clock: s = s.replacingOccurrences(of: "{\(b)}", with: "{\(b)} {\(b).reset}")
+            }
+        }
+        return s
     }
 }

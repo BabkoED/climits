@@ -42,7 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let wide = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_WIDTH"]
                 .flatMap { Double($0) }
                 .map { CGFloat($0) }
-            controller?.showSettingsForShot(width: wide)
+            // Вкладка окна - номером с нуля (1.22.0, окно с вкладками).
+            let tab = ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_TAB"]
+                .flatMap { Int($0) } ?? 0
+            controller?.showSettingsForShot(width: wide, tab: tab)
         } else if shot == "menu" {
             // Через очередь, а не прямо здесь: открытие меню крутит свой
             // цикл событий и не возвращается, пока меню открыто. Вызови мы
