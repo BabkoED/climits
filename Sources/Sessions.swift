@@ -1105,24 +1105,28 @@ enum Sessions {
         return max(0, used - mine)
     }
 
-    // hideLoad - машины, у которых память и нагрузку НЕ показывать (1.22.0,
-    // слово Антона 10.10.2026: «мак и моно особо не нуждаются в памяти, а
-    // сервер нужно контролировать отдельно»). Ключи - как у machine: ""
-    // своя машина. Сессии таких машин остаются - кто работает и кто ждёт,
-    // - уходят только числа: нагрузка в заголовке группы, память у строк,
-    // «прочее» и их доля в общей сумме наверху.
+    // hidden - машины, которых в разделе НЕТ (1.22.1). Ключи - как у
+    // machine: "" своя машина. В 1.22.0 у них пропадали только числа памяти,
+    // а сессии оставались; Антон, сняв галочку у моноблока, ждал, что уйдёт
+    // машина целиком: «убрал одну машину из списка отображения, но всё так
+    // и продолжило показываться» (10.10.2026). Деньги и токены этих машин
+    // считаются как прежде - здесь только показ.
     static func lines(_ list: [AgentSession], nameLimit: Int = nameLimit,
                       remoteScanAt: Date? = nil,
                       machines: [String: MachineMemory] = [:],
                       localName: String = "",
-                      hideLoad: Set<String> = []) -> SessionLines {
+                      hidden: Set<String> = []) -> SessionLines {
+        let list = hidden.isEmpty ? list : list.filter { !hidden.contains($0.machine) }
+        let machines = hidden.isEmpty ? machines : machines.filter { !hidden.contains($0.key) }
         var out = SessionLines()
-        guard !list.isEmpty else { return out }
+        // Машины выбраны руками - значит за ними следят, и их нагрузка видна
+        // и без сессий: ради сервера выбор и заводили («сервер нужно
+        // контролировать отдельно»). Без выбора - как раньше: нет сессий,
+        // нет и раздела.
+        let loadShown = machines.contains { !$0.value.isEmpty }
+        guard !list.isEmpty || (!hidden.isEmpty && loadShown) else { return out }
 
         let s = summary(list)
-        // Сумма памяти - только по тем машинам, где её показывают: иначе
-        // наверху стояли бы гигабайты, которых ни в одной строке ниже нет.
-        let mem = hideLoad.isEmpty ? s : summary(list.filter { !hideLoad.contains($0.machine) })
 
         // Если статуса нет НИ У ОДНОЙ - раздел молчит целиком.
         //
@@ -1143,18 +1147,15 @@ enum Sessions {
         // статуса не зависит вовсе. Поймано живым прогоном: на сервере
         // все сессии без статуса, и раздел молчал вместе с числами
         // памяти, ради которых его и расширяли.
-        // С 1.22.0 смотрим и на нагрузку видимых машин: при скрытой памяти
-        // мака и моноблока раздел иначе молчал бы целиком, если сессии есть
-        // только у скрытых, - и вместе с ним пропадала бы нагрузка сервера,
-        // за которой и следят (ревью 10.10.2026).
-        let loadShown = machines.contains { !hideLoad.contains($0.key) && !$0.value.isEmpty }
-        if s.total > 0 && s.unknown == s.total && mem.rssMB == 0 && !loadShown { return out }
+        // С 1.22.0 смотрим и на нагрузку показанных машин: сессии могут быть
+        // все без статуса, а нагрузка сервера - ровно то, за чем следят.
+        if s.total > 0 && s.unknown == s.total && s.rssMB == 0 && !loadShown { return out }
 
         let title = L("Сессии", "Sessions")
         var head = s.text.isEmpty ? title : title + " \u{00B7} " + s.text
         // Общая память - в заголовок: он и так подписью, ширина там есть,
         // а вопрос «влезет ли ещё одна сессия» именно про сумму.
-        if !mem.memoryText.isEmpty { head += " \u{00B7} " + mem.memoryText }
+        if !s.memoryText.isEmpty { head += " \u{00B7} " + s.memoryText }
         out.header = head
 
         // СПИСОК СГРУППИРОВАН ПО МАШИНАМ (слово Антона 17.09.2026).
@@ -1178,9 +1179,7 @@ enum Sessions {
 
         // Машина без единой сессии всё равно показывается: её нагрузка -
         // ответ на «а там сейчас пусто или я просто не вижу».
-        // Машина со скрытой нагрузкой и без сессий выпадает: от неё в группе
-        // осталось бы одно имя без единой строки под ним.
-        let names = Set(groups.keys).union(machines.keys.filter { !hideLoad.contains($0) })
+        let names = Set(groups.keys).union(machines.keys)
         // Своя машина первой - на ней человек сидит. Остальные по имени,
         // иначе группы прыгали бы между открытиями меню.
         let orderedNames = names.sorted { a, b in
@@ -1192,8 +1191,7 @@ enum Sessions {
         var skipped = 0
         for host in orderedNames {
             let mine = sorted(groups[host] ?? [])
-            let hidden = hideLoad.contains(host)
-            let load = hidden ? MachineMemory() : (machines[host] ?? MachineMemory())
+            let load = machines[host] ?? MachineMemory()
 
             // Заголовок группы. Имя своей машины берётся у системы: слова
             // «эта» тут мало - в списке из трёх машин человеку нужно имя,
@@ -1231,7 +1229,7 @@ enum Sessions {
                     state: x.state == .unknown ? "" : x.state.word,
                     waitingFor: x.state == .waiting ? x.waitingFor : nil,
                     age: x.since.map { Fmt.ago($0) } ?? "",
-                    memory: hidden ? "" : x.memoryText,
+                    memory: x.memoryText,
                     activity: x.activity,
                     loop: x.loop))
                 out.picks.append(x)
@@ -1246,7 +1244,7 @@ enum Sessions {
             // 10 ГБ» - правда, которая ничего не решает: он их и так
             // открыл сам. На сервере то же число означает другое -
             // сторонние службы, которых там быть не должно.
-            if !host.isEmpty, !hidden, let other = otherLoadMB(load: load, sessions: mine) {
+            if !host.isEmpty, let other = otherLoadMB(load: load, sessions: mine) {
                 out.rows.append("    " + L("прочее", "other") + " \u{00B7} " + Fmt.gb(other))
                 out.picks.append(nil)
             }

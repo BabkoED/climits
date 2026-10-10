@@ -29,6 +29,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     private var resetSeg: NSSegmentedControl!
     private var templateField: NSTextField!
     private var customToggle: NSButton!
+    private var customNote: NSTextField!
 
     // Меню
     private var cardsSeg: NSSegmentedControl!
@@ -161,6 +162,11 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         buildRules()
         buildLoadToggles()
         updatePreview()
+        // Свой формат включён - его раздел открыт сразу, а не спрятан.
+        if Prefs.useCustomTemplate, let first = disclosed.first {
+            first.button.state = .on
+            toggleDisclosure(first.button)
+        }
     }
 
     @objc private func switchTab(_ sender: NSSegmentedControl) {
@@ -212,8 +218,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                                       target: self, action: #selector(linesPicked(_:)))
         linesSeg.setSelected(Prefs.showSession, forSegment: 0)
         linesSeg.setSelected(Prefs.showWeekly, forSegment: 1)
-        linesSeg.toolTip = L("Оба окна - две строки мелким шрифтом, друг над другом: ширина как у одной.",
-                             "Both windows - two small lines stacked: the width of one.")
+        linesSeg.toolTip = L("Одно окно со временем - процент крупно, время мельче под ним. Оба окна - две строки друг над другом. В строку - через свой формат.",
+                             "One window with time - big percent, smaller time below. Both windows - two stacked lines. One line - via a custom format.")
         resetSeg = NSSegmentedControl(labels: [L("Нет", "Off"), L("Отсчёт", "Countdown"), L("Часы", "Clock")],
                                       trackingMode: .selectOne,
                                       target: self, action: #selector(resetPicked(_:)))
@@ -222,7 +228,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                              "The countdown answers \"how long is left\", the clock - \"will the reset land on a working day\".")
         let showCard = CardView([
             line(L("Строки", "Lines"), linesSeg,
-                 note: L("Оба - друг над другом", "Both - stacked")),
+                 note: L("Одно - процент над временем, оба - друг над другом",
+                         "One - percent over time; both - stacked")),
             separator(),
             line(L("Сброс", "Reset"), resetSeg),
         ])
@@ -235,8 +242,16 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             check("showExtraPct", L("Сверх лимита, процентом", "Extra usage, percent"), Prefs.showExtraPct),
         ])
 
+        // Свой формат живёт в свёрнутой «Тонкой настройке», а строку задаёт
+        // он: без этой строки человек жмёт выбор и не понимает, почему трей
+        // не меняется так, как в предпросмотре ждал (Антон, 10.10.2026).
+        customNote = note(L("Строку сейчас задаёт свой формат - он в «Тонкой настройке» ниже. Выбор правит его строку.",
+                            "The line is set by a custom format - see Fine-tuning below. The choices edit that line."))
+        customNote.isHidden = !Prefs.useCustomTemplate
+
         return page([
             previewCard,
+            customNote,
             sectionTitle(L("Значок", "Icon")), iconCard,
             sectionTitle(L("Что показывать", "What to show")), showCard,
             sectionTitle(L("Ещё в строке", "Also in the line")), extraCard,
@@ -670,8 +685,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         loadStack.spacing = 4
         let loadCard = CardView([
             loadStack,
-            note(L("Сессии видны у всех машин; память, нагрузка и «прочее» - только у отмеченных.",
-                   "Sessions show for every machine; memory, load and \"other\" - only for the ticked ones.")),
+            note(L("Снятая машина уходит из раздела сессий целиком. Деньги и токены по ней считаются, как раньше.",
+                   "An unticked machine leaves the sessions section entirely. Its money and tokens still count.")),
         ])
 
         let roots = field(L("пути", "paths"), "extraRoots",
@@ -681,7 +696,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
         return page([
             sectionTitle(L("Другие машины по ssh", "Other machines over ssh")), hostsCard,
-            sectionTitle(L("Память и нагрузка в меню", "Memory and load in the menu")), loadCard,
+            sectionTitle(L("Машины в разделе сессий", "Machines in the sessions section")), loadCard,
             sectionTitle(L("Ещё каталоги на этой машине", "More folders on this machine")), CardView([roots]),
         ])
     }
@@ -690,7 +705,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
     // машина под своим именем, удалённые - ярлыком или хостом.
     private func buildLoadToggles() {
         for v in loadStack.arrangedSubviews { v.removeFromSuperview() }
-        let hidden = Prefs.hiddenLoad()
+        let hidden = Prefs.hiddenMachines()
         let own = Sessions.localName()
         var items: [(key: String, title: String)] = [
             ("", own.isEmpty ? L("эта машина", "this machine") : own + L(" - эта машина", " - this machine")),
@@ -709,7 +724,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
 
     @objc private func loadToggled(_ sender: NSButton) {
         let key = String((sender.identifier?.rawValue ?? "load:").dropFirst(5))
-        Prefs.setLoadHidden(key, sender.state != .on)
+        Prefs.setMachineHidden(key, sender.state != .on)
         applied()
     }
 
@@ -1055,6 +1070,10 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             var t = templateField.stringValue
             let macros = timedMacros(for: key, on: on)
             t = on ? TemplateEdit.add(macros, to: t) : TemplateEdit.remove(macros, from: t)
+            // Окна и в своём формате встают друг над другом, как без него.
+            if key == "showSession" || key == "showWeekly" {
+                t = on ? TemplateEdit.stackWindows(t) : TemplateEdit.dropEmptyBreak(t)
+            }
             templateField.stringValue = t
             Prefs.customTemplate = t
             applied()
@@ -1186,6 +1205,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         let on = customToggle.state == .on
         Prefs.useCustomTemplate = on
         templateField.isEnabled = on
+        customNote.isHidden = !on
         // При первом включении подставляем то, что собрано выбором: человек
         // видит рабочий образец и правит его, а не пустое поле.
         if on && templateField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -1326,7 +1346,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             : (Prefs.barRing ? .ring(pct) : .glyph(Fmt.icon(for: pct)))
         previewView.image = BarImage.image(lines: lines, color: .labelColor, icon: icon,
                                            height: NSStatusBar.system.thickness,
-                                           trailing: t.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}"))
+                                           trailing: t.trimmingCharacters(in: .whitespaces).hasSuffix("{icon}"),
+                                           titled: BarTitle.isTitled(t))
     }
 
     static let sampleMoney = MoneyView.make(spent: 12.40, partial: true)

@@ -436,7 +436,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if alarm != nil && !ring { shown[0] = "\u{26A0} " + shown[0] }
             button.image = BarImage.image(lines: shown, color: color, icon: icon,
                                           height: NSStatusBar.system.thickness,
-                                          badge: ring ? badge : nil, trailing: trailing)
+                                          badge: ring ? badge : nil, trailing: trailing,
+                                          titled: BarTitle.isTitled(template))
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
             // Заголовка у кнопки нет - читалке экрана цифры отдаются словами,
@@ -1216,7 +1217,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let list = Prefs.privacyMode ? Sessions.anonymized(sessions) : sessions
         let lines = Sessions.lines(list, remoteScanAt: lastScan,
                                    machines: load, localName: Sessions.localName(),
-                                   hideLoad: Prefs.hiddenLoad())
+                                   hidden: Prefs.hiddenMachines())
         guard !lines.rows.isEmpty else { return [] }
 
         var out: [NSMenuItem] = [.separator(), dim(lines.header)]

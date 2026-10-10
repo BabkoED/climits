@@ -305,15 +305,16 @@ struct Prefs {
     static var extraRoots: String {
         get { str("extraRoots", "") } set { d.set(newValue, forKey: "extraRoots") } }
 
-    // Память и нагрузка - по машинам (1.22.0).
+    // Машины в разделе сессий (1.22.0, смысл уточнён в 1.22.1).
     //
     // Слово Антона 10.10.2026: «мак и моно особо не нуждаются в памяти, а
-    // сервер нужно контролировать отдельно». Раздел сессий показывал память
-    // и нагрузку у всех машин сразу, и строки машин, за которыми следить
-    // не нужно, занимали место рядом с той, за которой нужно.
+    // сервер нужно контролировать отдельно». В 1.22.0 снятая галочка убирала
+    // у машины только память и нагрузку; проверив, Антон ждал, что машина
+    // уйдёт из раздела целиком, - так с 1.22.1 и сделано. Ключ прежний:
+    // в нём уже лежит его выбор.
     //
     // Храним, у кого СКРЫТО, а не у кого показано: умолчание - показывать
-    // всё, как до 1.22.0, и новая машина в списке без памяти не останется.
+    // всё, как до 1.22.0, и новая машина в списке не пропадёт сама.
     // Имя - то же, что в заголовке группы: ярлык или хост. Своя машина -
     // «@this»: имени у неё в списке машин нет, а с хостом ssh такая
     // запись не совпадёт никогда.
@@ -322,7 +323,7 @@ struct Prefs {
         get { str("hideLoadFor", "") } set { d.set(newValue, forKey: "hideLoadFor") } }
 
     // Ключи - как у Sessions.lines: "" - своя машина.
-    static func hiddenLoad() -> Set<String> {
+    static func hiddenMachines() -> Set<String> {
         var out = Set<String>()
         for raw in hideLoadFor.split(whereSeparator: { $0 == "," || $0 == "\n" }) {
             let s = raw.trimmingCharacters(in: .whitespaces)
@@ -332,8 +333,8 @@ struct Prefs {
         return out
     }
 
-    static func setLoadHidden(_ machine: String, _ hidden: Bool) {
-        var set = hiddenLoad()
+    static func setMachineHidden(_ machine: String, _ hidden: Bool) {
+        var set = hiddenMachines()
         if hidden { set.insert(machine) } else { set.remove(machine) }
         hideLoadFor = set.map { $0.isEmpty ? thisMachineKey : $0 }.sorted().joined(separator: ", ")
     }
@@ -606,6 +607,23 @@ struct Prefs {
         if showSession, let f = five, let w = week {
             let body = f + "{br}" + ([w] + rest).joined(separator: " \u{00B7} ")
             return showIcon ? "{icon} " + body : body
+        }
+        // ОДНО ОКНО СО ВРЕМЕНЕМ - тоже две строки (1.22.1, Антон 10.10.2026:
+        // «если выбран один нужный лимит, то тоже в две строки, но цифры
+        // больше шрифтом, а время поменьше»). Процент крупно сверху, время
+        // мельче под ним - перенос «{sub}». Так уже, чем «37% 2ч 13м» в
+        // строку. Остальное - второй строкой после времени. Голого отсчёта
+        // окна при выбранной одной неделе здесь нет: «Строки: Неделя» значит
+        // неделю, а не неделю и чужой отсчёт.
+        if showSession != showWeekly {
+            let w = showSession ? "5h" : "7d"
+            var time: [String] = []
+            if showLeft { time.append("{\(w).left}") }
+            if showResetClock && (!showLeft || w == "5h") { time.append("{\(w).reset}") }
+            if !time.isEmpty {
+                let body = "{\(w)}{sub}" + ([time.joined(separator: " ")] + rest).joined(separator: " \u{00B7} ")
+                return showIcon ? "{icon} " + body : body
+            }
         }
         let parts = [five, week].compactMap { $0 } + rest
         // Деньги, токены и история сюда НЕ попадают, даже когда галочки

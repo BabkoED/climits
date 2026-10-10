@@ -30,17 +30,34 @@ enum BarImage {
         return NSFont.monospacedDigitSystemFont(ofSize: size, weight: .medium)
     }
 
+    // «Крупно - мелко» (1.22.1): процент одного окна сверху крупно, время
+    // под ним мельче. Верхняя строка берёт больше высоты.
+    static func titleFonts(height: CGFloat) -> [NSFont] {
+        let big = max(9, min(14, (height * 0.5).rounded(.down)))
+        let small = max(7.5, min(10, (height * 0.38 * 2).rounded(.down) / 2))
+        func font(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+            if !Prefs.fontName.isEmpty, let f = NSFont(name: Prefs.fontName, size: size) { return f }
+            return NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+        }
+        return [font(big, .semibold), font(small, .regular)]
+    }
+
     // Значок по центру высоты; рядом одна строка шрифтом трея или две
-    // строки мелким шрифтом, каждая в своей половине высоты. trailing -
+    // строки мелким шрифтом, каждая в своей половине высоты. titled - две
+    // строки «крупно - мелко» вместо двух равных. trailing -
     // значок справа: свой формат может кончаться {icon}, и переносить его
     // молча в начало значит переставить человеку его же строку.
     static func image(lines: [String], color: NSColor, icon: Icon,
                       height: CGFloat, badge: NSColor? = nil,
-                      trailing: Bool = false) -> NSImage {
+                      trailing: Bool = false, titled: Bool = false) -> NSImage {
         let stacked = lines.count > 1
-        let font = stacked ? stackFont(height: height) : Palette.barFont
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        let texts = lines.prefix(2).map { NSAttributedString(string: $0, attributes: attrs) }
+        let even = stackFont(height: height)
+        let fonts: [NSFont] = !stacked ? [Palette.barFont]
+            : (titled ? titleFonts(height: height) : [even, even])
+        let texts = lines.prefix(2).enumerated().map { i, s in
+            NSAttributedString(string: s, attributes: [.font: fonts[min(i, fonts.count - 1)],
+                                                       .foregroundColor: color])
+        }
         let textW = ceil(texts.map { $0.size().width }.max() ?? 0)
 
         var ringImage: NSImage? = nil
@@ -79,12 +96,15 @@ enum BarImage {
                 draw(g, barFont, x: iconX, bandY: 0, bandH: height)
             }
             if stacked {
-                let half = height / 2
+                // Полосы высоты: поровну, а у «крупно - мелко» верхней больше.
+                let top = titled ? (height * 0.56).rounded() : height / 2
+                let bottom = height - top
                 for (i, t) in texts.enumerated() {
-                    draw(t, font, x: textX, bandY: i == 0 ? half : 0, bandH: half)
+                    let f = fonts[min(i, fonts.count - 1)]
+                    draw(t, f, x: textX, bandY: i == 0 ? bottom : 0, bandH: i == 0 ? top : bottom)
                 }
             } else if let t = texts.first {
-                draw(t, font, x: textX, bandY: 0, bandH: height)
+                draw(t, fonts[0], x: textX, bandY: 0, bandH: height)
             }
             return true
         }

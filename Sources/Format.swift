@@ -338,7 +338,14 @@ enum BarTitle {
         ("{money}",      L("во сколько обошлось окно", "what this window cost")),
         ("{sessions}",   L("кто работает и кто ждёт меня", "who is working and who waits")),
         ("{br}",         L("перенос: дальше - вторая строка", "line break: the rest goes below")),
+        ("{sub}",        L("перенос мельче: сверху крупно, дальше мелко", "small break: big on top, the rest small below")),
     ]
+
+    // Перенос «крупно - мелко»: первая строка крупным шрифтом, вторая мелким
+    // (1.22.1, одно окно: процент над временем). Режется как {br}, а рисует
+    // разницу трей.
+    static let subBreak = "{sub}"
+    static func isTitled(_ template: String) -> Bool { return template.contains(subBreak) }
 
     // Перенос строки в шаблоне. Макросом, а не «\n»: поле шаблона в окне
     // настроек однострочное, и перевод строки в нём не набрать.
@@ -353,7 +360,8 @@ enum BarTitle {
                       sessions: SessionSummary? = nil,
                       iconGlyph: String? = nil,
                       stale: Bool? = nil) -> [String] {
-        var parts = template.components(separatedBy: lineBreak)
+        var parts = template.replacingOccurrences(of: subBreak, with: lineBreak)
+            .components(separatedBy: lineBreak)
         // Строк в трее не больше двух: третья не влезла бы по высоте. Всё
         // после второго переноса дописывается ко второй строке - иначе оно
         // пропало бы молча, а с ним и «~» несвежести (ревью 10.10.2026).
@@ -579,6 +587,40 @@ enum TemplateEdit {
 
     // Окна, у которых бывает время до сброса.
     static let timedBases = ["5h", "7d", "worst", "active"]
+
+    // Оба окна в своём формате - тоже две строки (1.22.1). Выбор «Строки:
+    // 5ч и Неделя» при включённом своём формате дописывал неделю в ту же
+    // строку через точку, и стопки было не получить вовсе - так и вышло у
+    // Антона 10.10.2026. Кусок недели («{7d}» со своим временем) уходит
+    // во вторую строку; остальное человек расставил сам и остаётся на месте.
+    static func stackWindows(_ template: String) -> String {
+        // «Крупно - мелко» одного окна сначала собирается обратно в строку.
+        let template = template.replacingOccurrences(of: BarTitle.subBreak, with: " ")
+        guard !template.contains(BarTitle.lineBreak) else { return template }
+        let five = ["{5h}", "{5h.left}", "{5h.reset}"].contains { template.contains($0) }
+        guard five, template.contains("{7d}") else { return template }
+        var week = "{7d}"
+        for tail in [" {7d.left}", " {7d.reset}"] where template.contains("{7d}" + tail) {
+            week += tail
+            break
+        }
+        let rest = BarTitle.tidy(template.replacingOccurrences(of: week, with: ""))
+        return rest + BarTitle.lineBreak + week
+    }
+
+    // Перенос, после которого не осталось ни одного окна, убирается вместе с
+    // пустой строкой. Значок не считается: «{icon}» один на строке - не
+    // строка, и он переезжает к оставшейся.
+    static func dropEmptyBreak(_ template: String) -> String {
+        let parts = template.components(separatedBy: BarTitle.lineBreak)
+        guard parts.count > 1 else { return template }
+        func content(_ p: String) -> Bool { return p.replacingOccurrences(of: "{icon}", with: "").contains("{") }
+        var kept = parts.filter(content).map { BarTitle.tidy($0) }
+        guard !kept.isEmpty else { return BarTitle.tidy(parts.joined(separator: " ")) }
+        let iconLost = parts.contains { $0.contains("{icon}") } && !kept.contains { $0.contains("{icon}") }
+        if iconLost { kept[0] = "{icon} " + kept[0] }
+        return kept.joined(separator: BarTitle.lineBreak)
+    }
 
     // Выбор «сброс» при своём формате (1.22.0): у каждого окна, что уже
     // стоит в строке, время меняется на выбранное - отсчёт, часы или ничего.

@@ -910,7 +910,12 @@ check("галочка «Токены» не добавляет {tokens} в тр�
 Prefs.showSession = false
 Prefs.showLeft = true
 let noPct = Prefs.defaultTemplateFromCheckboxes()
-check("без процента остаётся время до сброса", noPct.contains("{5h.left}"))
+// С 1.22.1 при выбранной неделе «без процента окна» - это одна неделя со
+// своим временем: «Строки: Неделя» значит неделю, а не чужой отсчёт.
+check("без процента окна при неделе - время недели", noPct.contains("{7d.left}"))
+Prefs.showWeekly = false
+check("без процента остаётся время до сброса", Prefs.defaultTemplateFromCheckboxes().contains("{5h.left}"))
+Prefs.showWeekly = true
 check("а самого процента в строке нет", !noPct.contains("{5h}"))
 Prefs.showSession = true
 Prefs.showHistory = false
@@ -936,27 +941,28 @@ Prefs.showActive = false
 Prefs.showResetClock = false
 Prefs.showExtraPct = false
 
-check("окно и время", Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left}")
+// С 1.22.1 одно окно со временем - две строки: процент над временем.
+check("окно и время", Prefs.defaultTemplateFromCheckboxes(), "{5h}{sub}{5h.left}")
 // Часы сброса цепляются к своему окну, а не встают отдельным куском:
 // «пн 03:00» в отрыве от процента не говорит, чей это сброс.
 Prefs.showResetClock = true
 check("часы сброса прижаты к окну",
-      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} {5h.reset}")
+      Prefs.defaultTemplateFromCheckboxes(), "{5h}{sub}{5h.left} {5h.reset}")
 Prefs.showResetClock = false
 
 Prefs.showActive = true
 check("«что упрётся первым» со своим временем",
-      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {active} {active.left}")
+      Prefs.defaultTemplateFromCheckboxes(), "{5h}{sub}{5h.left} \u{00B7} {active} {active.left}")
 Prefs.showResetClock = true
 check("и со своими часами",
       Prefs.defaultTemplateFromCheckboxes(),
-      "{5h} {5h.left} {5h.reset} \u{00B7} {active} {active.left} {active.reset}")
+      "{5h}{sub}{5h.left} {5h.reset} \u{00B7} {active} {active.left} {active.reset}")
 Prefs.showActive = false
 Prefs.showResetClock = false
 
 Prefs.showWorst = true
 check("самый нагруженный - тоже со временем",
-      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {worst} {worst.left}")
+      Prefs.defaultTemplateFromCheckboxes(), "{5h}{sub}{5h.left} \u{00B7} {worst} {worst.left}")
 Prefs.showLeft = false
 check("без времени - только он сам",
       Prefs.defaultTemplateFromCheckboxes(), "{5h} \u{00B7} {worst}")
@@ -966,7 +972,7 @@ Prefs.showWorst = false
 Prefs.showExtra = true
 Prefs.showExtraPct = true
 check("процент перерасхода идёт после самой суммы",
-      Prefs.defaultTemplateFromCheckboxes(), "{5h} {5h.left} \u{00B7} {extra} \u{00B7} {extra.pct}")
+      Prefs.defaultTemplateFromCheckboxes(), "{5h}{sub}{5h.left} \u{00B7} {extra} \u{00B7} {extra.pct}")
 Prefs.showExtra = false
 Prefs.showExtraPct = false
 
@@ -2584,14 +2590,14 @@ Prefs.d.removeObject(forKey: "notifyAt")
 // нужно контролировать отдельно».
 print("\nпамять по машинам")
 Prefs.hideLoadFor = ""
-Prefs.setLoadHidden("", true)
-Prefs.setLoadHidden("mono", true)
+Prefs.setMachineHidden("", true)
+Prefs.setMachineHidden("mono", true)
 check("своя машина хранится особым именем", Prefs.hideLoadFor, "@this, mono")
-check("и читается пустым ключом", Prefs.hiddenLoad() == ["", "mono"])
-Prefs.setLoadHidden("mono", false)
-check("снятие убирает одну машину", Prefs.hiddenLoad() == [""])
+check("и читается пустым ключом", Prefs.hiddenMachines() == ["", "mono"])
+Prefs.setMachineHidden("mono", false)
+check("снятие убирает одну машину", Prefs.hiddenMachines() == [""])
 Prefs.hideLoadFor = " vps7 ,, @this\nmono "
-check("лишние пробелы и пустые куски не мешают", Prefs.hiddenLoad() == ["vps7", "", "mono"])
+check("лишние пробелы и пустые куски не мешают", Prefs.hiddenMachines() == ["vps7", "", "mono"])
 Prefs.hideLoadFor = ""
 
 var hs = [
@@ -2619,28 +2625,33 @@ let all = Sessions.lines(hs, machines: loads, localName: "мак")
 check("без настройки нагрузка у всех трёх",
       all.rows.filter { $0.hasPrefix("  мак \u{00B7}") || $0.hasPrefix("  vps7 \u{00B7}")
                         || $0.hasPrefix("  mono \u{00B7}") }.count, 3)
-let some = Sessions.lines(hs, machines: loads, localName: "мак", hideLoad: ["", "mono", "idle-host"])
-check("у скрытых - только имя", some.rows.contains("  мак") && some.rows.contains("  mono"))
-check("у сервера нагрузка осталась", some.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
-check("память строк - только у сервера",
-      some.rows.filter { $0.contains(L("МБ", "MB")) }.count, 1)
-check("«прочее» - только у сервера",
-      some.rows.filter { $0.contains(L("прочее", "other")) }.count, 1)
-check("сумма наверху - только по серверу", some.header.contains("300 " + L("МБ", "MB")))
-check("и без скрытых гигабайтов", !some.header.contains(L("ГБ", "GB")))
-check("сессии скрытых машин на месте",
-      some.rows.contains { $0.contains("local-chat") } && some.rows.contains { $0.contains("mono-chat") })
-check("скрытая машина без сессий выпадает", !some.rows.contains { $0.contains("idle-host") })
+// С 1.22.1 снятая машина уходит из раздела ЦЕЛИКОМ: Антон снял галочку у
+// моноблока и ждал, что пропадут и его сессии (10.10.2026).
+let some = Sessions.lines(hs, machines: loads, localName: "мак", hidden: ["", "mono", "idle-host"])
+check("скрытых машин в разделе нет", !some.rows.contains { $0.hasPrefix("  мак") || $0.hasPrefix("  mono") })
+check("и их сессий тоже", !some.rows.contains { $0.contains("local-chat") || $0.contains("mono-chat") })
+check("сервер на месте, с нагрузкой", some.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
+check("и с памятью своих сессий", some.rows.contains { $0.contains("srv-chat") && $0.contains(L("МБ", "MB")) })
+check("«прочее» - у сервера", some.rows.contains { $0.contains(L("прочее", "other")) })
+check("сводка наверху - только по показанным", some.header.contains(L("работает 1", "working 1")))
+check("и память наверху - только сервера", some.header.contains("300 " + L("МБ", "MB")) && !some.header.contains(L("ГБ", "GB")))
 check("видимая машина без сессий остаётся",
       all.rows.contains { $0.hasPrefix("  idle-host \u{00B7} ") })
-// Все без статуса и вся память скрыта: раздел отвечал бы «не знаю» на
-// оба вопроса - пусть молчит, как молчал без памяти.
+// Выбрал машины - значит следит за ними: нагрузка сервера видна и тогда,
+// когда сессий на нём нет.
+let serverOnly = Sessions.lines([hs[0], hs[2]], machines: loads, localName: "мак",
+                                hidden: ["", "mono", "idle-host"])
+check("сессий на сервере нет - нагрузка сервера всё равно видна",
+      serverOnly.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
+check("а без выбора и без сессий раздела нет, как раньше",
+      Sessions.lines([], machines: loads).rows.isEmpty)
+// Все без статуса и всё скрыто: раздел молчит.
 var silent = hs
 for i in silent.indices { silent[i].state = .unknown }
 check("всё скрыто и статуса нет - раздела нет",
-      Sessions.lines(silent, machines: loads, hideLoad: ["", "vps7", "mono", "idle-host"]).rows.isEmpty)
-check("а с видимой памятью - есть",
-      !Sessions.lines(silent, machines: loads, hideLoad: ["", "mono"]).rows.isEmpty)
+      Sessions.lines(silent, machines: [:], hidden: ["", "vps7", "mono"]).rows.isEmpty)
+check("а с показанной памятью - есть",
+      !Sessions.lines(silent, machines: loads, hidden: ["", "mono"]).rows.isEmpty)
 
 
 // ---- 1.22.0: находки ревью 10.10.2026 ----------------------------------------
@@ -2651,8 +2662,9 @@ Prefs.showExtra = false; Prefs.showExtraPct = false
 // Только неделя при отсчёте: голый отсчёт окна - наследство прежних
 // галочек - остаётся в одной строке с неделей, стопки нет.
 Prefs.showSession = false; Prefs.showWeekly = true; Prefs.resetStyle = .countdown
-check("5ч выключено - стопки нет",
-      Prefs.defaultTemplateFromCheckboxes(), "{icon} {5h.left} \u{00B7} {7d} {7d.left}")
+// С 1.22.1 одна неделя - процент над своим временем, без чужого отсчёта.
+check("только неделя - процент недели над её временем",
+      Prefs.defaultTemplateFromCheckboxes(), "{icon} {7d}{sub}{7d.left}")
 Prefs.showSession = true
 // Обе старые галочки: часы, как в 1.21, только у окна и у «упрётся первым».
 Prefs.showLeft = true; Prefs.showResetClock = true; Prefs.showWorst = true
@@ -2680,17 +2692,45 @@ let iconOnly = BarTitle.lines("{icon} {br}{7d}", usage: a, iconGlyph: "")
 check("пустая первая часть со значком - одна строка", iconOnly.count, 1)
 check("а со знаком значок встаёт перед неделей",
       BarTitle.lines("{icon} {br}{7d}", usage: a).joined(separator: " ").hasSuffix(" 62%"))
-// Раздел сессий при скрытой памяти мака и моноблока: сессии только на
-// моноблоке и без статуса, у сервера сессий нет - нагрузка сервера всё
-// равно видна, раздел не пропадает.
-var onlyMono = [hs[2]]
-onlyMono[0].state = .unknown
-let monoOnly = Sessions.lines(onlyMono, machines: loads, localName: "мак",
-                              hideLoad: ["", "mono", "idle-host"])
-check("нагрузка сервера видна и без его сессий",
-      monoOnly.rows.contains { $0.hasPrefix("  vps7 \u{00B7} ") })
-check("а без видимой нагрузки раздел по-прежнему молчит",
-      Sessions.lines(onlyMono, machines: [:], hideLoad: ["mono"]).rows.isEmpty)
+// Своего формата касается и стопка (1.22.1): выбор «5ч и Неделя» при нём
+// ставил неделю в ту же строку через точку, и двух строк было не получить.
+check("свой формат: неделя уходит второй строкой",
+      TemplateEdit.stackWindows("{5h} {5h.left} \u{00B7} {7d} {7d.left}"), "{5h} {5h.left}{br}{7d} {7d.left}")
+check("свой формат: прочее остаётся там, где человек его поставил",
+      TemplateEdit.stackWindows("{icon} {5h} {5h.left} \u{00B7} {7d} {7d.reset} \u{00B7} {money}"),
+      "{icon} {5h} {5h.left} \u{00B7} {money}{br}{7d} {7d.reset}")
+check("уже со стопкой - не трогаем", TemplateEdit.stackWindows("{5h}{br}{7d}"), "{5h}{br}{7d}")
+check("одно окно - стопки нет", TemplateEdit.stackWindows("{icon} {7d} {7d.left}"), "{icon} {7d} {7d.left}")
+check("убрали окно - пустая строка уходит вместе с переносом",
+      TemplateEdit.dropEmptyBreak("{icon} {br}{7d} {7d.left}"), "{icon} {7d} {7d.left}")
+check("значок переезжает к оставшейся строке",
+      TemplateEdit.dropEmptyBreak("{icon} {5h} {5h.left}{br} \u{00B7} "), "{icon} {5h} {5h.left}")
+check("обе строки с окнами - перенос остаётся",
+      TemplateEdit.dropEmptyBreak("{5h}{br}{7d}"), "{5h}{br}{7d}")
+
+
+// ---- 1.22.1: одно окно - крупно процент, мельче время -----------------------
+print("\nодно окно в две строки")
+Prefs.showIcon = true; Prefs.showSession = true; Prefs.showWeekly = false
+Prefs.showWorst = false; Prefs.showActive = false; Prefs.showModels = false
+Prefs.showExtra = true; Prefs.showExtraPct = false
+Prefs.resetStyle = .countdown
+let one5h = Prefs.defaultTemplateFromCheckboxes()
+check("окно: процент над временем, перерасход после времени", one5h, "{icon} {5h}{sub}{5h.left} \u{00B7} {extra}")
+check("это «крупно - мелко»", BarTitle.isTitled(one5h))
+check("и строк две", BarTitle.lines(one5h, usage: a, iconGlyph: "").count, 2)
+check("сверху один процент", BarTitle.lines(one5h, usage: a, iconGlyph: "").first ?? "", "37%")
+Prefs.resetStyle = .clock
+Prefs.showSession = false; Prefs.showWeekly = true
+check("неделя с часами", Prefs.defaultTemplateFromCheckboxes(), "{icon} {7d}{sub}{7d.reset} \u{00B7} {extra}")
+Prefs.resetStyle = .none
+check("без времени - одна строка", Prefs.defaultTemplateFromCheckboxes(), "{icon} {7d} \u{00B7} {extra}")
+Prefs.showSession = true; Prefs.resetStyle = .countdown
+check("оба окна - не «крупно - мелко»", !BarTitle.isTitled(Prefs.defaultTemplateFromCheckboxes()))
+Prefs.showWeekly = false
+check("свой формат: из «крупно - мелко» стопка двух окон собирается верно",
+      TemplateEdit.stackWindows("{5h}{sub}{5h.left} \u{00B7} {7d} {7d.left}"), "{5h} {5h.left}{br}{7d} {7d.left}")
+Prefs.showExtra = false
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)
