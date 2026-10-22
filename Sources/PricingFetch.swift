@@ -30,22 +30,37 @@ enum PricingFetch {
         return now.timeIntervalSince(s) > interval
     }
 
+    // Проверка и запись попытки - одним шагом: разойдись они при правке,
+    // пункт 13 вернулся бы молча (ревью правки 22.10.2026). Только с
+    // главного потока, как и end().
+    static func begin(now: Date, stamp: Date?) -> Bool {
+        guard due(now: now, stamp: stamp, lastTry: lastTry), !inFlight else { return false }
+        inFlight = true
+        lastTry = now
+        return true
+    }
+
+    // Сервер не ответил вовсе - сети нет, ничего не скачано, и пауза не
+    // нужна: иначе после сна мака без Wi-Fi прайс ждал бы целый час.
+    static func end(answered: Bool) {
+        inFlight = false
+        if !answered { lastTry = nil }
+    }
+
     // Молчаливая по замыслу: не вышло - остаёмся на прежнем прайсе, а то,
     // что он прежний, видно по дате в меню. Ронять на человека уведомление
     // «не скачался прайс» значит требовать действия там, где действия нет.
     static func refreshIfStale(_ done: (() -> Void)? = nil) {
         _ = Pricing.table()          // подтягивает remoteStamp с диска
-        guard due(now: Date(), stamp: Pricing.remoteStamp, lastTry: lastTry), !inFlight else { return }
-        guard let url = URL(string: PricingFeed.sourceURL) else { return }
-        inFlight = true
-        lastTry = Date()
+        guard let url = URL(string: PricingFeed.sourceURL),
+              begin(now: Date(), stamp: Pricing.remoteStamp) else { return }
 
         var req = URLRequest(url: url)
         req.timeoutInterval = 20
         req.setValue(Prefs.userAgent, forHTTPHeaderField: "User-Agent")
 
         URLSession.shared.dataTask(with: req) { data, response, _ in
-            defer { inFlight = false }
+            defer { DispatchQueue.main.async { end(answered: response != nil) } }
             guard let data = data, data.count <= maxBytes,
                   let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
             let table = PricingFeed.parse(data)

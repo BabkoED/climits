@@ -2743,5 +2743,22 @@ check("прайс старше суток - качать", PricingFetch.due(now:
 check("минуту назад не вышло - ждать", !PricingFetch.due(now: prNow, stamp: nil, lastTry: prNow.addingTimeInterval(-60)))
 check("пауза прошла - снова качать", PricingFetch.due(now: prNow, stamp: nil, lastTry: prNow.addingTimeInterval(-PricingFetch.retryGap - 1)))
 
+// Сама запись попытки (ревью правки 22.10): проверка одного предиката
+// не ловила пропажу строки, которая её ставит, - без неё пункт 13 вернулся
+// бы молча. Пауза - только когда сервер ответил: после сна мака без Wi-Fi
+// ждать час незачем, запрос без сети ничего не качает.
+print("\nпрайс: попытка записывается, пауза только после ответа")
+let bt = Date()
+check("первая попытка идёт", PricingFetch.begin(now: bt, stamp: nil))
+check("пока идёт - вторая нет", !PricingFetch.begin(now: bt, stamp: nil))
+PricingFetch.end(answered: true)
+check("сервер ответил - через минуту не повторяем",
+      !PricingFetch.begin(now: bt.addingTimeInterval(60), stamp: nil))
+check("через час - снова", PricingFetch.begin(now: bt.addingTimeInterval(PricingFetch.retryGap + 1), stamp: nil))
+PricingFetch.end(answered: false)
+check("сети не было - повтор на следующем опросе",
+      PricingFetch.begin(now: bt.addingTimeInterval(PricingFetch.retryGap + 61), stamp: nil))
+PricingFetch.end(answered: true)
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)
