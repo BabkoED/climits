@@ -89,6 +89,15 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         w.center()
         self.init(window: w)
         build()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(prefsChanged), name: .climitsPrefsChanged, object: nil)
+    }
+
+    // «Скрыть личное» переключается и из меню. Окно живёт всё время работы
+    // приложения, и без этого галочка показывала прежнее состояние, а
+    // нажатие на неё ничего не меняло (ревью 09.10.2026, пункт 14).
+    @objc private func prefsChanged() {
+        checkboxes["privacyMode"]?.state = Prefs.privacyMode ? .on : .off
     }
 
     // Раскрыть все свёрнутые разделы - для снимка в CI: свёрнутое не

@@ -2732,5 +2732,16 @@ check("свой формат: из «крупно - мелко» стопка д
       TemplateEdit.stackWindows("{5h}{sub}{5h.left} \u{00B7} {7d} {7d.left}"), "{5h} {5h.left}{br}{7d} {7d.left}")
 Prefs.showExtra = false
 
+// ---- 1.22.2: прайс после сбоя не качается на каждом опросе -------------------
+// Ревью 09.10, пункт 13: сбой загрузки не ставил паузы, и 2,9 МБ уходили
+// заново на каждом опросе и открытии меню.
+print("\nпрайс: пауза после попытки")
+let prNow = Date()
+check("прайса нет, попыток не было - качать", PricingFetch.due(now: prNow, stamp: nil, lastTry: nil))
+check("прайс свежий - не качать", !PricingFetch.due(now: prNow, stamp: prNow.addingTimeInterval(-3600), lastTry: nil))
+check("прайс старше суток - качать", PricingFetch.due(now: prNow, stamp: prNow.addingTimeInterval(-25 * 3600), lastTry: nil))
+check("минуту назад не вышло - ждать", !PricingFetch.due(now: prNow, stamp: nil, lastTry: prNow.addingTimeInterval(-60)))
+check("пауза прошла - снова качать", PricingFetch.due(now: prNow, stamp: nil, lastTry: prNow.addingTimeInterval(-PricingFetch.retryGap - 1)))
+
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

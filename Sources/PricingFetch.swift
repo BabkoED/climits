@@ -15,11 +15,19 @@ enum PricingFetch {
     // по адресу лежит уже не прайс, и разбирать это в памяти незачем.
     private static let maxBytes = 32 * 1024 * 1024
 
-    private static var inFlight = false
+    // Пауза между попытками. Без неё неудачная загрузка - чужой сервер
+    // лёг, ответил 429 или сменил формат - повторялась на каждом опросе и
+    // открытии меню, по 2,9 МБ за раз (ревью 09.10.2026, пункт 13).
+    static let retryGap: TimeInterval = 3600
 
-    static func isStale() -> Bool {
-        guard let stamp = Pricing.remoteStamp else { return true }
-        return Date().timeIntervalSince(stamp) > interval
+    private static var inFlight = false
+    private static var lastTry: Date?
+
+    // Пора ли качать: прайс устарел, и с прошлой попытки прошла пауза.
+    static func due(now: Date, stamp: Date?, lastTry: Date?) -> Bool {
+        if let t = lastTry, now.timeIntervalSince(t) < retryGap { return false }
+        guard let s = stamp else { return true }
+        return now.timeIntervalSince(s) > interval
     }
 
     // Молчаливая по замыслу: не вышло - остаёмся на прежнем прайсе, а то,
@@ -27,9 +35,10 @@ enum PricingFetch {
     // «не скачался прайс» значит требовать действия там, где действия нет.
     static func refreshIfStale(_ done: (() -> Void)? = nil) {
         _ = Pricing.table()          // подтягивает remoteStamp с диска
-        guard isStale(), !inFlight else { return }
+        guard due(now: Date(), stamp: Pricing.remoteStamp, lastTry: lastTry), !inFlight else { return }
         guard let url = URL(string: PricingFeed.sourceURL) else { return }
         inFlight = true
+        lastTry = Date()
 
         var req = URLRequest(url: url)
         req.timeoutInterval = 20

@@ -36,6 +36,7 @@ swiftc -swift-version 5 -o "$OUT" \
   Sources/Presets.swift \
   Sources/Pricing.swift \
   Sources/PricingFeed.swift \
+  Sources/PricingFetch.swift \
   Sources/Transcripts.swift \
   Sources/Sessions.swift \
   Sources/SessionWatch.swift \
