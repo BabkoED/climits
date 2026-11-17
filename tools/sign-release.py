@@ -61,7 +61,22 @@ def sign(data: bytes) -> str:
     seed = base64.b64decode(KEY.read_text().strip())
     if len(seed) != 32:
         die(f"ключ не 32 байта, а {len(seed)} - это не зерно ed25519")
-    return base64.b64encode(Ed25519PrivateKey.from_private_bytes(seed).sign(data)).decode()
+    priv = Ed25519PrivateKey.from_private_bytes(seed)
+    # Сверка с SUPublicEDKey приложения (17.11.2026, ключ переехал с vps7
+    # на моно копией). Подпись не тем ключом Sparkle отвергнет уже на
+    # машине человека, и выглядеть это будет как «обновление сломалось».
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    import plistlib
+    plist = plistlib.load(open(
+        pathlib.Path(__file__).resolve().parent.parent / "Resources/Info.plist", "rb"))
+    want = plist.get("SUPublicEDKey", "")
+    pub = priv.public_key()
+    have = base64.b64encode(pub.public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+    if have != want:
+        die(f"ключ не от этого приложения: его открытая часть {have}, в Info.plist {want}")
+    sig = priv.sign(data)
+    pub.verify(sig, data)
+    return base64.b64encode(sig).decode()
 
 
 def main():
