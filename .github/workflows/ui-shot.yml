@@ -121,7 +121,7 @@ jobs:
           git config user.email "noreply@github.com"
           git add settings-1.png settings-2.png settings-3.png settings-4.png settings-5.png \
             settings-wide.png settings-dark.png settings-open-1.png settings-open-2.png \
-            menu-light.png menu-dark.png menu-private.png menu-rows.png
+            menu-light.png menu-dark.png menu-private.png menu-rows.png menu-login.png
           git commit -q -m "снимок настроек и меню с ${GITHUB_REF_NAME}"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" shots
         env:
