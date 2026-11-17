@@ -549,7 +549,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ])
             menu.addItem(head)
             if let e = lastError { menu.addItem(dim(Fmt.clip(e, 60))) }
-            menu.addItem(action(L("Войти в терминале\u{2026}", "Log in in Terminal\u{2026}"),
+            menu.addItem(action(L("Войти в терминале\u{2026}", "Log in via Terminal\u{2026}"),
                                 #selector(openLoginTerminal), key: ""))
             menu.addItem(action(L("Скопировать команду: \(LoginHelp.command)",
                                   "Copy command: \(LoginHelp.command)"),
