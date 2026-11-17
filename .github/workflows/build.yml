@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   macos:
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 снят GitHub, 17.11.2026: «configuration macos-14-arm64-us-default is not supported»
     # Сумма считается здесь, а публикуется в другой работе - без выхода
     # работы подстановка в тексте релиза оказалась бы пустой.
     outputs:
