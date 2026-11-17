@@ -7,6 +7,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var timer: Timer?
     private var usage: Usage?
     private var lastError: String?
+    // Последняя ошибка лечится входом в Claude Code (1.23.0): тогда вверху
+    // меню красная строка и кнопки «Войти в терминале» / «Скопировать
+    // команду», а в трее - ключ перед цифрами. Строкой lastError этого не
+    // различить: вид ошибки там уже потерян.
+    private var needsLogin = false
+    // После нажатия «Войти» - частая проверка, пока вход не подхватится:
+    // в простое обычный опрос ходит раз в 15 минут, и цифры после входа
+    // выглядели бы так же мёртво, как до него.
+    private var loginWatch: Timer?
+    private var loginWatchUntil: Date?
     private var settingsWindow: SettingsWindowController?
     // Один запрос в полёте. Без этого совпавшие поводы обновиться - таймер,
     // открытие меню и ⌘R одновременно - дают три параллельных запроса
@@ -184,6 +194,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             case .success(let u):
                 self.usage = u
                 self.lastError = nil
+                self.needsLogin = false
+                self.stopLoginWatch()
                 self.localEstimate = nil
                 // Замер процентов кладём ВСЕГДА, даже когда история выключена:
                 // включить её и увидеть пустоту - значит ждать ещё час, пока
@@ -198,6 +210,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 // Прежние цифры не выбрасываем: если сеть моргнула, честнее
                 // оставить их на экране и приписать причину в меню.
                 self.lastError = e.errorDescription
+                self.needsLogin = e.needsLogin
                 // Ни ответа, ни кэша - остаётся посчитать по расшифровкам.
                 // Это оценка расхода, а не остаток лимита, и подписана так же.
                 if self.usage == nil { self.rescanLocalOnly() }
@@ -391,7 +404,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // --- строка в трее ------------------------------------------------------
     private func updateTitle() {
         guard let button = statusItem.button else { return }
-        let alarm = Prefs.showServiceStatus ? ServiceStatusFetch.claude.alarm : nil
+        // Знак сбоя в трее - по своему, более узкому правилу, чем строка
+        // в меню (1.23.0): только Claude Code и API. Сбои одного claude.ai
+        // держали его днями при рабочем Claude Code.
+        let alarm = Prefs.showServiceStatus ? ServiceStatusFetch.claude.barAlarm : nil
+        // Нет входа - ключ перед цифрами. Не ⚠: тот уже значит «сбой у
+        // Anthropic», а здесь чинить надо у себя.
+        let key = needsLogin ? "\u{1F511} " : ""
         // Цвет сбоя - СВОЙ, фиолетовый, вне светофора лимитов. Проверено
         // снимком: красная точка на красном кольце читалась как часть
         // кольца, и сигнал «это у них, а не у тебя» пропадал ровно тогда,
@@ -401,7 +420,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             button.image = nil
             button.imagePosition = .noImage
             button.attributedTitle = NSAttributedString(
-                string: (alarm != nil ? "\u{26A0} " : "")
+                string: key + (alarm != nil ? "\u{26A0} " : "")
                     + (lastError == nil ? "Claude \u{2026}" : "Claude ?"),
                 attributes: [.foregroundColor: badge ?? NSColor.secondaryLabelColor])
             return
@@ -434,6 +453,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             var shown = lines
             // Без кольца точку сбоя рисовать не на чем - говорит знак в тексте.
             if alarm != nil && !ring { shown[0] = "\u{26A0} " + shown[0] }
+            if needsLogin { shown[0] = key + shown[0] }
             button.image = BarImage.image(lines: shown, color: color, icon: icon,
                                           height: NSStatusBar.system.thickness,
                                           badge: ring ? badge : nil, trailing: trailing,
@@ -465,6 +485,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Без кольца точку рисовать не на чем - сбой говорит знак в тексте.
         // Два знака места, и только пока сбой идёт.
         if alarm != nil && !ring { text = "\u{26A0} " + text }
+        text = key + text
         button.attributedTitle = NSAttributedString(string: text, attributes: [
             .foregroundColor: color,
             .font: Palette.barFont,
@@ -512,6 +533,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshLocalSessions()
         menu.removeAllItems()
 
+        // Нет входа - первой строкой, выше даже сбоя: это чинится здесь и
+        // сейчас, одной командой, и объясняет замершие цифры ниже.
+        if needsLogin {
+            let what = usage.map {
+                L("Нет входа в Claude - цифры от \(Fmt.hhmm($0.fetchedAt)) не обновляются",
+                  "Not logged in to Claude - numbers from \(Fmt.hhmm($0.fetchedAt)) are frozen")
+            } ?? L("Нет входа в Claude - лимиты не загружаются",
+                   "Not logged in to Claude - limits can't load")
+            let head = NSMenuItem(title: what, action: nil, keyEquivalent: "")
+            head.isEnabled = true
+            head.attributedTitle = NSAttributedString(string: "\u{1F511} " + what, attributes: [
+                .foregroundColor: NSColor.systemRed,
+                .font: NSFont.systemFont(ofSize: CGFloat(Prefs.menuFontSize)),
+            ])
+            menu.addItem(head)
+            if let e = lastError { menu.addItem(dim(Fmt.clip(e, 60))) }
+            menu.addItem(action(L("Войти в терминале\u{2026}", "Log in in Terminal\u{2026}"),
+                                #selector(openLoginTerminal), key: ""))
+            menu.addItem(action(L("Скопировать команду: \(LoginHelp.command)",
+                                  "Copy command: \(LoginHelp.command)"),
+                                #selector(copyLoginCommand), key: ""))
+            menu.addItem(.separator())
+        }
+
         // Сбой у Anthropic - первой строкой, выше любых цифр: он объясняет
         // всё, что ниже может выглядеть странно. Клик открывает страницу.
         if Prefs.showServiceStatus, let st = ServiceStatusFetch.claude.alarm {
@@ -526,8 +571,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ])
             menu.addItem(i)
             if !st.components.isEmpty {
-                menu.addItem(dim(L("не работает: ", "affected: ")
-                                 + Fmt.clip(st.components.joined(separator: ", "), 48)))
+                // Слово по состоянию компонента, а не «не работает» на всё:
+                // «claude.ai - с перебоями» (1.23.0).
+                menu.addItem(dim(Fmt.clip(st.affectedLine, 52)))
             }
             menu.addItem(.separator())
         }
@@ -558,7 +604,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             for item in chatRows() { menu.addItem(item) }
             for item in sessionRows() { menu.addItem(item) }
         } else if let u = usage {
-            if u.isStale || lastError != nil {
+            // Нет входа - причина уже наверху меню, своим блоком.
+            if (u.isStale || lastError != nil) && !needsLogin {
                 menu.addItem(dim(staleNote(u)))
                 if let next = UsageAPI.shared.nextAttemptAt {
                     menu.addItem(dim(L("пробую снова в \(Fmt.hhmm(next))",
@@ -590,11 +637,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             for item in sessionRows() { menu.addItem(item) }
         } else if let err = lastError {
             defer { for item in codexSection(cards: Prefs.menuCards, cols: nil) { menu.addItem(item) } }
-            let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
-            i.isEnabled = true
-            i.attributedTitle = NSAttributedString(string: err,
-                attributes: [.foregroundColor: NSColor.systemRed])
-            menu.addItem(i)
+            if !needsLogin {
+                let i = NSMenuItem(title: err, action: nil, keyEquivalent: "")
+                i.isEnabled = true
+                i.attributedTitle = NSAttributedString(string: err,
+                    attributes: [.foregroundColor: NSColor.systemRed])
+                menu.addItem(i)
+            }
             if let next = UsageAPI.shared.nextAttemptAt {
                 menu.addItem(dim(L("пробую снова в \(Fmt.hhmm(next))",
                                    "next attempt at \(Fmt.hhmm(next))")))
@@ -1308,6 +1357,48 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func openOpenAIStatus() {
         if let u = URL(string: CodexAPI.status.page) { NSWorkspace.shared.open(u) }
     }
+    // Вход в Claude Code (1.23.0). Скрипт - .command в Application Support:
+    // Finder отдаёт такой файл Терминалу без разрешений на управление им.
+    // Не вышло открыть - команда всё равно уходит в буфер обмена.
+    @objc private func openLoginTerminal() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first!.appendingPathComponent("climits", isDirectory: true)
+        let file = dir.appendingPathComponent("login.command")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: file)
+            try LoginHelp.script().write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            if !NSWorkspace.shared.open(file) { copyLoginCommand() }
+        } catch {
+            copyLoginCommand()
+        }
+        startLoginWatch()
+    }
+    @objc private func copyLoginCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(LoginHelp.command, forType: .string)
+        startLoginWatch()
+    }
+    // Каждые 15 секунд до 10 минут - и стоп, как только ответ пришёл.
+    private func startLoginWatch() {
+        loginWatchUntil = Date().addingTimeInterval(600)
+        if loginWatch != nil { return }
+        let t = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if !self.needsLogin || (self.loginWatchUntil ?? Date()) < Date() {
+                self.stopLoginWatch(); return
+            }
+            self.refresh(force: true)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        loginWatch = t
+    }
+    private func stopLoginWatch() {
+        loginWatch?.invalidate()
+        loginWatch = nil
+        loginWatchUntil = nil
+    }
     @objc private func openStatus() {
         if let u = URL(string: ServiceStatusFetch.claude.page) { NSWorkspace.shared.open(u) }
     }
@@ -1413,6 +1504,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             level: 2, indicator: "major", description: "Partial System Outage",
             incidents: ["Elevated errors on Claude Code and claude.ai for some users"],
             components: ["Claude Code"], fetchedAt: Date()))
+        // Кадр «нет входа» (1.23.0): ключ в трее, красный блок с кнопками
+        // наверху меню, и сбой одного claude.ai - строкой в меню, БЕЗ ⚠ в
+        // трее. Состав - как на странице статуса 17.11.2026.
+        if ProcessInfo.processInfo.environment["CLIMITS_UI_SHOT_LOGIN"] == "1" {
+            if let u = usage {
+                usage = UsageParser.parse(body: body, fetchedAt: u.fetchedAt.addingTimeInterval(-3 * 3600),
+                                          isStale: true)
+            }
+            lastError = UsageError.auth(401).errorDescription
+            needsLogin = true
+            ServiceStatusFetch.claude.injectForShot(ServiceStatus(
+                level: 1, indicator: "minor", description: "Partially Degraded Service",
+                incidents: ["Claude unable to join meetings"], components: ["claude.ai"],
+                scopes: [["claude.ai"]], impacts: [2],
+                componentStates: ["degraded_performance"], fetchedAt: Date()))
+        }
         updateTitle()
 
         // Деньги и токены в CI взять неоткуда: расшифровок на машине нет.

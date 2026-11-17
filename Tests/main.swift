@@ -2260,7 +2260,7 @@ let oai2 = ServiceStatus.parse(Data("""
  "components":[{"name":"Codex API","status":"major_outage"},{"name":"CLI","status":"operational"}]}
 """.utf8))
 check("сбой в Codex API - тревога", !(oai2?.scoped(isCodex).isCalm ?? true))
-check("сбой в Codex API - назван", oai2?.scoped(isCodex).line, L("не работает: Codex API", "affected: Codex API"))
+check("сбой в Codex API - назван", oai2?.scoped(isCodex).line, L("Codex API - не работает", "Codex API - down"))
 let gpt5 = CodexUsageParser.parse(Data(#"{"additional_rate_limits":[{"limit_name":"GPT-5","rate_limit":{"primary_window":{"used_percent":1,"limit_window_seconds":18000}}}]}"#.utf8))
 check("модель «GPT-5» - не «5»", gpt5?.usage.buckets.first?.short, "GPT-5")
 
@@ -2308,7 +2308,7 @@ let compOnly = ServiceStatus.parse(Data("""
  "components":[{"name":"Claude Code","status":"partial_outage"}]}
 """.utf8))
 check("сломан Claude Code без инцидента - тревога",
-      compOnly.map { ServiceStatusFetch.claude.narrow($0) }?.line, L("не работает: Claude Code", "affected: Claude Code"))
+      compOnly.map { ServiceStatusFetch.claude.narrow($0) }?.line, L("Claude Code - частично не работает", "Claude Code - partial outage"))
 // Инцидент без списка компонентов: за 30 дней до 09.10.2026 оба таких были
 // не про Claude Code (подписки Google Play, лимиты трат). Не тревожим.
 let noScope = ServiceStatus.parse(Data("""
@@ -2759,6 +2759,74 @@ PricingFetch.end(answered: false)
 check("сети не было - повтор на следующем опросе",
       PricingFetch.begin(now: bt.addingTimeInterval(PricingFetch.retryGap + 61), stamp: nil))
 PricingFetch.end(answered: true)
+
+// ---- 1.23.0: знак сбоя в трее - только Claude Code и API ---------------------
+// Антон 17.11.2026: «треугольник светится всегда, хотя всё работает». Горел
+// инцидент «Claude unable to join meetings» (claude.ai, major) - больше
+// суток. По incidents.json за 30 дней: прежнее правило - 132 ч знака,
+// новое - 17. Строка в меню остаётся, знак в трее - нет.
+print("\nстатус: знак в трее уже строки в меню")
+let meetings = ServiceStatus.parse(Data("""
+{"status":{"indicator":"minor","description":"Partially Degraded Service"},
+ "components":[{"name":"claude.ai","status":"degraded_performance"},
+               {"name":"Claude Code","status":"operational"},
+               {"name":"Claude Cowork","status":"operational"}],
+ "incidents":[{"name":"Claude unable to join meetings","status":"identified","impact":"major",
+               "components":[{"name":"claude.ai"}]}],
+ "scheduled_maintenances":[]}
+""".utf8)).map { ServiceStatusFetch.claude.narrow($0) }
+check("встречи claude.ai - строка в меню есть", !(meetings?.isCalm ?? true))
+check("встречи claude.ai - знака в трее нет", !(meetings?.lightsBar() ?? true))
+check("перебои - не «не работает»", meetings?.affectedLine, L("claude.ai - с перебоями", "claude.ai - degraded"))
+check("описание тоже без «не работает»", meetings?.description, L("claude.ai - с перебоями", "claude.ai - degraded"))
+
+let codeErr = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial System Outage"},
+ "components":[{"name":"Claude Code","status":"partial_outage"}],
+ "incidents":[{"name":"Elevated errors on Claude Code","status":"investigating","impact":"major",
+               "components":[{"name":"Claude Code"}]}]}
+""".utf8)).map { ServiceStatusFetch.claude.narrow($0) }
+check("сбой Claude Code - знак в трее", codeErr?.lightsBar() ?? false)
+check("частичный отказ - своим словом", codeErr?.affectedLine,
+      L("Claude Code - частично не работает", "Claude Code - partial outage"))
+
+let aiDown = ServiceStatus.parse(Data("""
+{"status":{"indicator":"critical","description":"Major System Outage"},
+ "components":[{"name":"claude.ai","status":"major_outage"}],
+ "incidents":[{"name":"claude.ai is down","status":"investigating","impact":"critical",
+               "components":[{"name":"claude.ai"}]}]}
+""".utf8)).map { ServiceStatusFetch.claude.narrow($0) }
+check("полный отказ claude.ai - знак в трее", aiDown?.lightsBar() ?? false)
+
+let allModels = ServiceStatus.parse(Data("""
+{"status":{"indicator":"major","description":"Partial System Outage"},
+ "incidents":[{"name":"Elevated errors on all models","status":"investigating","impact":"major","components":[]}]}
+""".utf8)).map { ServiceStatusFetch.claude.narrow($0) }
+check("крупный сбой без компонентов - знак в трее", allModels?.lightsBar() ?? false)
+
+let consoleCrit = ServiceStatus.parse(Data("""
+{"status":{"indicator":"critical","description":"Major System Outage"},
+ "components":[{"name":"Claude Console (platform.claude.com)","status":"major_outage"}],
+ "incidents":[{"name":"Console down","status":"investigating","impact":"critical",
+               "components":[{"name":"Claude Console (platform.claude.com)"}]}]}
+""".utf8)).map { ServiceStatusFetch.claude.narrow($0) }
+check("отказ Console - ни строки, ни знака", consoleCrit?.isCalm ?? false)
+
+// ---- 1.23.0: нет входа - кнопка и команда ------------------------------------
+print("\nвход: какие ошибки лечатся входом")
+check("нет токена - нужен вход", LoginHelp.needsLogin(KeychainError.notFound))
+check("истёк - нужен вход", LoginHelp.needsLogin(KeychainError.expired(nil)))
+check("не читается - нужен вход", LoginHelp.needsLogin(KeychainError.unparsable(reason: "")))
+check("чужая ошибка - не вход", !LoginHelp.needsLogin(NSError(domain: "x", code: 1)))
+check("команда входа", LoginHelp.command, "claude auth login")
+let sc = LoginHelp.script()
+check("скрипт - login-shell zsh", sc.hasPrefix("#!/bin/zsh -l\n"))
+check("скрипт зовёт команду", sc.contains("elif claude auth login; then"))
+check("скрипт видит ~/.local/bin", sc.contains("$HOME/.local/bin"))
+check("скрипт без отступов слева", !sc.contains("\n  #") && !sc.hasPrefix(" "))
+for e in [KeychainError.notFound, .expired(nil), .unparsable(reason: "")] {
+    check("текст ошибки ведёт к команде", e.errorDescription?.contains("claude auth login") ?? false)
+}
 
 print("\nпроверок: \(checks), провалов: \(failures)\n")
 exit(failures == 0 ? 0 : 1)

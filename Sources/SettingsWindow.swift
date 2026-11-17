@@ -757,11 +757,17 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         loginToggle.state = LaunchAtLogin.isEnabled ? .on : .off
 
         let status = check("showServiceStatus",
-                           L("Статус Anthropic: точка на значке во время сбоя",
-                             "Anthropic status: a dot on the icon during an incident"),
+                           L("Статус Anthropic: строка в меню во время сбоя",
+                             "Anthropic status: a line in the menu during an incident"),
                            Prefs.showServiceStatus)
-        status.toolTip = L("Фиолетовая точка - «это у них, а не у тебя». Только по claude.ai, Claude Code и API.",
-                           "A purple dot - \"it's them, not you\". Only for claude.ai, Claude Code and the API.")
+        status.toolTip = L("Фиолетовая строка - «это у них, а не у тебя». Только по claude.ai, Claude Code и API.",
+                           "A purple line - \"it's them, not you\". Only for claude.ai, Claude Code and the API.")
+        let statusBar = check("serviceStatusInBar",
+                              L("Знак сбоя в строке меню - только Claude Code и API",
+                                "Incident mark in the menu bar - Claude Code and API only"),
+                              Prefs.serviceStatusInBar)
+        statusBar.toolTip = L("Сбои одного claude.ai (встречи, коннекторы, вход в iOS) знак не зажигают - они видны строкой в меню.",
+                              "claude.ai-only incidents (meetings, connectors, iOS sign-in) don't light the mark - they show as a line in the menu.")
         let privacy = check("privacyMode",
                             L("Скрыть личное: чаты номерами, без запросов", "Hide personal info: chats as numbers, no prompts"),
                             Prefs.privacyMode)
@@ -775,7 +781,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
         return page([
             sectionTitle(L("Поведение", "Behaviour")),
             CardView([line(L("Обновлять", "Refresh"), intervalPopup), separator(),
-                      loginToggle, status, privacy]),
+                      loginToggle, status, statusBar, privacy]),
             sectionTitle(L("Обновления", "Updates")), CardView([sparkle]),
         ])
     }
@@ -1063,6 +1069,7 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
             applied(); return
         case "notifyLoops": Prefs.notifyLoops = on; applied(); return
         case "showServiceStatus": Prefs.showServiceStatus = on; applied(); return
+        case "serviceStatusInBar": Prefs.serviceStatusInBar = on; applied(); return
         case "privacyMode": Prefs.privacyMode = on; applied(); return
         // Вид шкалы в меню - не кусок строки трея, макроса за ним нет.
         case "menuCapsule": Prefs.menuCapsule = on; applied(); return

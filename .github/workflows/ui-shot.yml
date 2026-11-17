@@ -61,9 +61,9 @@ jobs:
           # Меню снимается отдельной функцией: открытие меню - не окно,
           # ему нужны свои две секунды на выход из didFinishLaunching и
           # цифры, которых в CI взять негде (см. showMenuForShot).
-          shoot_menu() {   # $1 - файл, $2 - 1 тёмная, $3 - 1 «скрыть личное», $4 - 1 вид строками, $5 - 1 вид Антона
+          shoot_menu() {   # $1 - файл, $2 - 1 тёмная, $3 - 1 «скрыть личное», $4 - 1 вид строками, $5 - 1 вид Антона, $6 - 1 нет входа
             CLIMITS_UI_SHOT=menu CLIMITS_UI_SHOT_DARK="$2" CLIMITS_UI_SHOT_PRIVATE="$3" \
-              CLIMITS_UI_SHOT_ROWS="$4" CLIMITS_UI_SHOT_STACKED="$5" \
+              CLIMITS_UI_SHOT_ROWS="$4" CLIMITS_UI_SHOT_STACKED="$5" CLIMITS_UI_SHOT_LOGIN="$6" \
               build/climits.app/Contents/MacOS/climits &
             local pid=$!
             sleep 14
@@ -107,6 +107,9 @@ jobs:
           shoot_menu menu-dark.png 1
           shoot_menu menu-private.png "" 1
           shoot_menu menu-rows.png "" "" 1
+          # Нет входа (1.23.0): ключ в трее, кнопки входа наверху меню, сбой
+          # одного claude.ai строкой в меню без знака в трее.
+          shoot_menu menu-login.png "" "" "" 1 1
           ls -la shot/
 
       - name: выложить в ветку shots

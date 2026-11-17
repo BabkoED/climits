@@ -31,9 +31,66 @@ struct ServiceStatus: Equatable {
     // Тяжесть каждого инцидента: 0 нет или плановые, 1 minor, 2 major,
     // 3 critical. Нужна инцидентам без списка компонентов - см. scoped().
     var impacts: [Int] = []
+    // Состояние каждого компонента из components, в том же порядке:
+    // degraded_performance, partial_outage, major_outage, under_maintenance.
+    // До 1.23.0 его выбрасывали и писали «не работает» про всё подряд -
+    // «не работает: claude.ai» при «работает с перебоями» (Антон 17.11.2026:
+    // «треугольник светится всегда, хотя всё работает»).
+    var componentStates: [String] = []
     let fetchedAt: Date
 
     var isCalm: Bool { return level == 0 }
+
+    // Слово для состояния компонента. Незнакомое - «сбой», а не молчание.
+    static func stateWord(_ s: String) -> String {
+        switch s.lowercased() {
+        case "degraded_performance": return L("с перебоями", "degraded")
+        case "partial_outage": return L("частично не работает", "partial outage")
+        case "major_outage": return L("не работает", "down")
+        case "under_maintenance": return L("плановые работы", "maintenance")
+        default: return L("сбой", "issue")
+        }
+    }
+
+    // «claude.ai - с перебоями». Компоненты с одинаковым состоянием - через
+    // запятую под одним словом, чтобы строка не росла от повторов.
+    var affectedLine: String {
+        var order: [String] = []
+        var byState: [String: [String]] = [:]
+        for (i, name) in components.enumerated() {
+            let w = ServiceStatus.stateWord(i < componentStates.count ? componentStates[i] : "")
+            if byState[w] == nil { order.append(w) }
+            byState[w, default: []].append(name)
+        }
+        return order.map { byState[$0]!.joined(separator: ", ") + " - " + $0 }
+                    .joined(separator: "; ")
+    }
+
+    // Зажигать ли знак в СТРОКЕ МЕНЮ (1.23.0). Строка в выпадающем меню
+    // показывает всё своё (claude.ai, Claude Code, API), а знак в трее -
+    // только то, что бьёт по работе в Claude Code: сам Claude Code и API,
+    // или полный отказ claude.ai (вход, Remote Control). Прогон по
+    // incidents.json 17.11.2026, 30 дней: прежнее правило держало знак
+    // 132 часа, из них 115 - инциденты одного claude.ai вроде «Claude
+    // unable to join meetings» и «вход через Apple в iOS»; новое - 17 часов.
+    // Зовётся на уже суженном статусе (scoped), где инциденты без списка
+    // компонентов остались только крупные - они свои и здесь.
+    func lightsBar(_ core: (String) -> Bool = ServiceStatus.claudeCore) -> Bool {
+        if isCalm { return false }
+        for (i, scope) in scopes.enumerated() where i < incidents.count {
+            let impact = i < impacts.count ? impacts[i] : 0
+            if scope.isEmpty || scope.contains(where: core) { return true }
+            if impact >= 3 { return true }
+        }
+        for (i, name) in components.enumerated() {
+            let st = i < componentStates.count ? componentStates[i].lowercased() : ""
+            if core(name) && st != "under_maintenance" { return true }
+            if st == "major_outage" { return true }
+        }
+        // Инцидентов больше, чем областей (страница не дала списка) -
+        // судить не по чему, тревогу не гасим.
+        return incidents.count > scopes.count
+    }
 
     // Одна строка для меню. Название инцидента важнее общего описания:
     // «Partial Outage» не говорит, что сломалось, а «Elevated errors on
@@ -70,7 +127,12 @@ struct ServiceStatus: Equatable {
     // (проверено 09.10.2026), и сбой Sora снова зажигал бы Codex - ровно
     // то, что закрыло ревью 1.20.0.
     func scoped(_ mine: (String) -> Bool, unscopedMajor: Bool = false) -> ServiceStatus {
-        let broken = components.filter(mine)
+        var broken: [String] = []
+        var brokenStates: [String] = []
+        for (i, c) in components.enumerated() where mine(c) {
+            broken.append(c)
+            brokenStates.append(i < componentStates.count ? componentStates[i] : "")
+        }
         var names: [String] = []
         var kept: [[String]] = []
         var keptImpacts: [Int] = []
@@ -85,11 +147,18 @@ struct ServiceStatus: Equatable {
         }
         let calm = broken.isEmpty && names.isEmpty
         let lvl = calm ? 0 : Swift.max(1, level)
-        return ServiceStatus(level: lvl, indicator: calm ? "none" : indicator,
-                             description: broken.isEmpty ? description
-                                 : L("не работает: ", "affected: ") + broken.joined(separator: ", "),
-                             incidents: names, components: broken, scopes: kept,
-                             impacts: keptImpacts, fetchedAt: fetchedAt)
+        var out = ServiceStatus(level: lvl, indicator: calm ? "none" : indicator,
+                                description: description,
+                                incidents: names, components: broken, scopes: kept,
+                                impacts: keptImpacts, componentStates: brokenStates,
+                                fetchedAt: fetchedAt)
+        if !broken.isEmpty {
+            out = ServiceStatus(level: lvl, indicator: out.indicator,
+                                description: out.affectedLine, incidents: names,
+                                components: broken, scopes: kept, impacts: keptImpacts,
+                                componentStates: brokenStates, fetchedAt: fetchedAt)
+        }
+        return out
     }
 
     // Что из страницы status.claude.com касается работы в Claude Code:
@@ -100,6 +169,13 @@ struct ServiceStatus: Equatable {
     static func claudeRelevant(_ name: String) -> Bool {
         let n = name.lowercased()
         return n == "claude.ai" || n.contains("claude code")
+            || n.contains("api.anthropic.com") || n.hasPrefix("claude api")
+    }
+
+    // Ядро для знака в трее: без claude.ai. См. lightsBar.
+    static func claudeCore(_ name: String) -> Bool {
+        let n = name.lowercased()
+        return n.contains("claude code")
             || n.contains("api.anthropic.com") || n.hasPrefix("claude api")
     }
 
@@ -158,9 +234,14 @@ struct ServiceStatus: Equatable {
             .map { $0.element }
         let names = ordered.map { $0.name }
 
-        let broken = ((root["components"] as? [[String: Any]]) ?? [])
-            .filter { (($0["status"] as? String) ?? "operational") != "operational" }
-            .compactMap { $0["name"] as? String }
+        var broken: [String] = []
+        var states: [String] = []
+        for c in (root["components"] as? [[String: Any]]) ?? [] {
+            let st = (c["status"] as? String) ?? "operational"
+            guard st != "operational", let name = c["name"] as? String else { continue }
+            broken.append(name)
+            states.append(st)
+        }
 
         var lvl = level(for: ind)
         // Инцидент открыт, а общий уровень ещё «none» - так бывает первые
@@ -169,6 +250,7 @@ struct ServiceStatus: Equatable {
         return ServiceStatus(level: lvl, indicator: ind, description: desc,
                              incidents: names, components: broken,
                              scopes: ordered.map { $0.scope },
-                             impacts: ordered.map { $0.rank }, fetchedAt: at)
+                             impacts: ordered.map { $0.rank }, componentStates: states,
+                             fetchedAt: at)
     }
 }

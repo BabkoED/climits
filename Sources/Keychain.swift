@@ -37,16 +37,16 @@ enum KeychainError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notFound:
-            return L("не нашёл токен в связке ключей. Залогинься один раз: claude",
-                     "no token in the keychain. Log in once: claude")
+            return L("не нашёл токен в связке ключей. Войди: \(LoginHelp.command)",
+                     "no token in the keychain. Log in: \(LoginHelp.command)")
         case .unparsable(let reason):
             // Причина в самом сообщении, а не только в --doctor: строка
             // «токен не читается» одинаково выглядела и при пустом поле
             // (лечится повторным логином), и при смене формата записи
             // (лечится правкой приложения). Разные починки - разные слова.
             let why = reason.isEmpty ? "" : " (" + reason + ")"
-            return L("токен из записи не читается\(why). Залогинься заново: claude, потом /login",
-                     "cannot read the token from the entry\(why). Log in again: claude, then /login")
+            return L("токен из записи не читается\(why). Войди заново: \(LoginHelp.command)",
+                     "cannot read the token from the entry\(why). Log in again: \(LoginHelp.command)")
         case .expired(let when):
             let tail: String
             if let w = when {
@@ -56,9 +56,53 @@ enum KeychainError: Error, LocalizedError {
             } else {
                 tail = ""
             }
-            return L("токен истёк\(tail). Запусти 'claude' в терминале - он обновит токен сам",
-                     "token expired\(tail). Run 'claude' in a terminal to refresh it")
+            return L("токен истёк\(tail). Войди заново: \(LoginHelp.command)",
+                     "token expired\(tail). Log in again: \(LoginHelp.command)")
         }
+    }
+}
+
+// Вход в Claude Code, когда climits потерял токен (1.23.0).
+//
+// ЗАЧЕМ. Разлогиненный climits выглядел почти как рабочий: прежние цифры
+// с «~» и серая строка в глубине меню. Антон 17.11.2026: «не сразу
+// понимаю, почему лимиты не обновляются - пусть появится кнопка, нажать
+// и в терминале залогиниться, или хотя бы скопировать команду».
+//
+// Терминал открывается .command-файлом через NSWorkspace, а не
+// AppleScript: тот спрашивает разрешение на управление Terminal, и первый
+// же клик упирался бы в системный диалог. Путь к claude из launchd не
+// виден (PATH там /usr/bin:/bin), поэтому скрипт идёт login-shell'ом и
+// дописывает обычные места установки.
+enum LoginHelp {
+    static let command = "claude auth login"
+
+    // Какие ошибки лечатся входом. Остальные (сеть, 429, разбор) - нет,
+    // и кнопка «Войти» при них только сбила бы с толку.
+    static func needsLogin(_ e: Error) -> Bool {
+        return e is KeychainError
+    }
+
+    static func script() -> String {
+        return """
+        #!/bin/zsh -l
+        # climits: вход в Claude Code. Файл пересоздаётся при каждом нажатии.
+        export PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        clear
+        echo "climits: вход в Claude Code - \(command)"
+        echo
+        if ! command -v claude >/dev/null 2>&1; then
+          echo "Команда claude не найдена. Поставь Claude Code и повтори: \(command)"
+        elif \(command); then
+          echo
+          echo "Готово. climits подхватит вход сам в течение минуты."
+        else
+          echo
+          echo "Вход не прошёл. Повтори вручную: \(command)"
+        fi
+        echo
+        read -k 1 "?Нажми любую клавишу, чтобы закрыть окно."
+        """
     }
 }
 

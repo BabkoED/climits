@@ -64,6 +64,13 @@ final class ServiceStatusFetch {
         return s
     }
 
+    // Знак в трее - уже, чем строка в меню: только по Claude Code и API
+    // или полному отказу claude.ai (ServiceStatus.lightsBar).
+    var barAlarm: ServiceStatus? {
+        guard Prefs.serviceStatusInBar, let s = alarm, s.lightsBar() else { return nil }
+        return s
+    }
+
     // Только для снимка в CI: сети там нет, а строку сбоя и точку на
     // кольце нужно увидеть глазами - тестами вёрстку не проверить.
     func injectForShot(_ s: ServiceStatus) {

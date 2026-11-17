@@ -402,6 +402,12 @@ struct Prefs {
     static var showServiceStatus: Bool {
         get { bool("showServiceStatus", true) } set { d.set(newValue, forKey: "showServiceStatus") } }
 
+    // Знак сбоя в САМОЙ строке меню (1.23.0) - отдельно от строки в
+    // выпадающем меню. Горит только при сбое Claude Code или API, см.
+    // ServiceStatus.lightsBar; галочкой снимается совсем.
+    static var serviceStatusInBar: Bool {
+        get { bool("serviceStatusInBar", true) } set { d.set(newValue, forKey: "serviceStatusInBar") } }
+
     // «Скрыть личное» - для показа экрана: имена чатов номерами, без
     // запросов и команд. Переключается и из самого меню - на демонстрации
     // лезть в настройки некогда.

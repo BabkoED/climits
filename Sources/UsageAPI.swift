@@ -20,8 +20,8 @@ enum UsageError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .auth(let c):
-            return L("токен отвергнут (HTTP \(c)). Перелогинься: claude",
-                     "token rejected (HTTP \(c)). Log in again: claude")
+            return L("токен отвергнут (HTTP \(c)). Войди заново: \(LoginHelp.command)",
+                     "token rejected (HTTP \(c)). Log in again: \(LoginHelp.command)")
         case .rateLimited:
             return L("слишком часто запрашиваем (HTTP 429), сохранённых данных нет",
                      "rate limited (HTTP 429) and no cached data")
@@ -41,6 +41,17 @@ enum UsageError: Error, LocalizedError {
                      "the response carries non-numeric values - nothing to show")
         case .keychain(let e):
             return (e as? LocalizedError)?.errorDescription ?? "\(e)"
+        }
+    }
+}
+
+extension UsageError {
+    // Лечится ли входом - для кнопки «Войти в терминале» (1.23.0).
+    var needsLogin: Bool {
+        switch self {
+        case .auth: return true
+        case .keychain(let e): return LoginHelp.needsLogin(e)
+        default: return false
         }
     }
 }
