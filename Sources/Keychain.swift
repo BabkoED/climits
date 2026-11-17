@@ -83,6 +83,12 @@ enum LoginHelp {
         return e is KeychainError
     }
 
+    // 401 - токен отвергнут, лечится входом. 403 так же отвечают без VPN
+    // из закрытой страны - кнопка «Войти» там была бы ложной тревогой.
+    static func needsLogin(http code: Int) -> Bool {
+        return code == 401
+    }
+
     static func script() -> String {
         return """
         #!/bin/zsh -l

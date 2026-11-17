@@ -2824,6 +2824,8 @@ check("скрипт - login-shell zsh", sc.hasPrefix("#!/bin/zsh -l\n"))
 check("скрипт зовёт команду", sc.contains("elif claude auth login; then"))
 check("скрипт видит ~/.local/bin", sc.contains("$HOME/.local/bin"))
 check("скрипт без отступов слева", !sc.contains("\n  #") && !sc.hasPrefix(" "))
+check("401 - нужен вход", LoginHelp.needsLogin(http: 401))
+check("403 - не обязательно вход (может быть VPN)", !LoginHelp.needsLogin(http: 403))
 for e in [KeychainError.notFound, .expired(nil), .unparsable(reason: "")] {
     check("текст ошибки ведёт к команде", e.errorDescription?.contains("claude auth login") ?? false)
 }

@@ -1380,11 +1380,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSPasteboard.general.setString(LoginHelp.command, forType: .string)
         startLoginWatch()
     }
-    // Каждые 15 секунд до 10 минут - и стоп, как только ответ пришёл.
+    // Раз в минуту до 10 минут - и стоп, как только ответ пришёл. Чаще
+    // нельзя: эндпоинт отвечает 429 на запросы чаще раза в минуту, а 429
+    // включает паузу от 5 минут - вход тогда подхватился бы позже, а не раньше.
     private func startLoginWatch() {
         loginWatchUntil = Date().addingTimeInterval(600)
         if loginWatch != nil { return }
-        let t = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        let t = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             if !self.needsLogin || (self.loginWatchUntil ?? Date()) < Date() {
                 self.stopLoginWatch(); return

@@ -19,6 +19,11 @@ enum UsageError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .auth(403):
+            // 403 - не обязательно вход: так же отвечают без VPN из закрытой
+            // страны. Кнопку входа не показываем, называем обе причины.
+            return L("доступ запрещён (HTTP 403) - проверь VPN; если он в порядке, войди заново: \(LoginHelp.command)",
+                     "access denied (HTTP 403) - check the VPN; if it's fine, log in again: \(LoginHelp.command)")
         case .auth(let c):
             return L("токен отвергнут (HTTP \(c)). Войди заново: \(LoginHelp.command)",
                      "token rejected (HTTP \(c)). Log in again: \(LoginHelp.command)")
@@ -49,7 +54,7 @@ extension UsageError {
     // Лечится ли входом - для кнопки «Войти в терминале» (1.23.0).
     var needsLogin: Bool {
         switch self {
-        case .auth: return true
+        case .auth(let c): return LoginHelp.needsLogin(http: c)
         case .keychain(let e): return LoginHelp.needsLogin(e)
         default: return false
         }

@@ -766,8 +766,8 @@ final class SettingsWindowController: NSWindowController, NSComboBoxDelegate {
                               L("Знак сбоя в строке меню - только Claude Code и API",
                                 "Incident mark in the menu bar - Claude Code and API only"),
                               Prefs.serviceStatusInBar)
-        statusBar.toolTip = L("Сбои одного claude.ai (встречи, коннекторы, вход в iOS) знак не зажигают - они видны строкой в меню.",
-                              "claude.ai-only incidents (meetings, connectors, iOS sign-in) don't light the mark - they show as a line in the menu.")
+        statusBar.toolTip = L("Сбои одного claude.ai (встречи, коннекторы, вход в iOS) знак не зажигают - они видны строкой в меню. Работает, пока включена галочка выше.",
+                              "claude.ai-only incidents (meetings, connectors, iOS sign-in) don't light the mark - they show as a line in the menu. Works while the box above is on.")
         let privacy = check("privacyMode",
                             L("Скрыть личное: чаты номерами, без запросов", "Hide personal info: chats as numbers, no prompts"),
                             Prefs.privacyMode)
